@@ -1,15 +1,18 @@
+import * as path from "node:path";
 import { truncateToWidth } from "@oh-my-pi/pi-tui";
 import chalk from "chalk";
 import type {
 	SidebarLspServer,
 	SidebarMcpServer,
 	SidebarModel,
+	SidebarModifiedFile,
 	SidebarSubagent,
 	SidebarTodoItem,
 	SidebarTokenSection,
 } from "./model";
 
 const TOKEN_BAR_WIDTH = 10;
+const MODIFIED_FILES_PREVIEW_LIMIT = 10;
 
 type SidebarSection = {
 	header: string;
@@ -88,6 +91,40 @@ function renderSubagentLine(subagent: SidebarSubagent): string {
 	return chalk.gray(`${chalk.green("✓")} ${context}`);
 }
 
+function getModifiedFileIcon(status: SidebarModifiedFile["status"]): string {
+	switch (status) {
+		case "A":
+			return chalk.green("+");
+		case "D":
+			return chalk.red("-");
+		case "R":
+			return chalk.blue(">");
+		case "?":
+			return chalk.gray("?");
+		default:
+			return chalk.yellow("✎");
+	}
+}
+
+function renderModifiedFileLine(file: SidebarModifiedFile): string {
+	const icon = getModifiedFileIcon(file.status);
+	const shortName = path.basename(file.path) || file.path;
+	return `${icon} ${shortName}`;
+}
+
+function buildModifiedFilesSection(modifiedFiles: SidebarModel["modifiedFiles"]): SidebarSection | undefined {
+	if (!modifiedFiles) return undefined;
+	if (modifiedFiles.length === 0) {
+		return { header: "Modified Files", lines: [chalk.gray("(clean)")] };
+	}
+
+	const lines = modifiedFiles.slice(0, MODIFIED_FILES_PREVIEW_LIMIT).map(renderModifiedFileLine);
+	if (modifiedFiles.length > MODIFIED_FILES_PREVIEW_LIMIT) {
+		lines.push(chalk.gray(`...and ${modifiedFiles.length - MODIFIED_FILES_PREVIEW_LIMIT} more`));
+	}
+
+	return { header: "Modified Files", lines };
+}
 export function renderSidebar(model: SidebarModel): string[] {
 	const width = Math.max(1, Math.floor(model.width || 0));
 	const sections: SidebarSection[] = [];
@@ -110,6 +147,11 @@ export function renderSidebar(model: SidebarModel): string[] {
 
 	if (model.subagents && model.subagents.length > 0) {
 		sections.push({ header: "Subagents", lines: model.subagents.map(renderSubagentLine) });
+	}
+
+	const modifiedFilesSection = buildModifiedFilesSection(model.modifiedFiles);
+	if (modifiedFilesSection) {
+		sections.push(modifiedFilesSection);
 	}
 
 	if (sections.length === 0) {
