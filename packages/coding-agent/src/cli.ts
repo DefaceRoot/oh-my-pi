@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils";
+import { OMP_FORK_BUILD_ID } from "./build-info";
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
@@ -88,7 +89,7 @@ export function runCli(argv: string[]): Promise<void> {
 			: isSubcommand(first)
 				? argv
 				: ["launch", ...argv];
-	return run({ bin: APP_NAME, version: VERSION, argv: runArgv, commands, help: showHelp });
+	return run({ bin: APP_NAME, version: `${VERSION}+${OMP_FORK_BUILD_ID}`, argv: runArgv, commands, help: showHelp });
 }
 
 await runCli(process.argv.slice(2));
