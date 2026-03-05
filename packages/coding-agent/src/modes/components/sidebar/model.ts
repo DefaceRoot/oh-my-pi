@@ -28,11 +28,17 @@ export interface SidebarSubagent {
 	description?: string;
 }
 
+export interface SidebarModifiedFile {
+	path: string;
+	status: "M" | "A" | "D" | "R" | "?";
+}
+
 export interface SidebarModel {
 	tokens?: SidebarTokenSection;
 	mcpServers?: SidebarMcpServer[];
 	lspServers?: SidebarLspServer[];
 	todos?: SidebarTodoItem[];
 	subagents?: SidebarSubagent[];
+	modifiedFiles?: SidebarModifiedFile[];
 	width: number;
 }
