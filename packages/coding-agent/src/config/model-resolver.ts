@@ -336,7 +336,10 @@ export function expandRoleAlias(value: string, settings?: Settings): string {
 	if (!normalized.startsWith(PREFIX_MODEL_ROLE)) return value;
 	const role = normalized.slice(PREFIX_MODEL_ROLE.length) as ModelRole;
 	if (!MODEL_ROLE_IDS.includes(role)) return value;
-	return settings?.getModelRole(role) ?? value;
+	const resolvedRole = settings?.getModelRole(role);
+	if (resolvedRole) return resolvedRole;
+	if (role === "ask") return settings?.getModelRole("default") ?? value;
+	return value;
 }
 
 /**
@@ -435,7 +438,7 @@ export function resolveModelFromSettings(options: {
 	const { settings, availableModels, matchPreferences, roleOrder } = options;
 	const roles = roleOrder ?? MODEL_ROLE_IDS;
 	for (const role of roles) {
-		const configured = settings.getModelRole(role);
+		const configured = settings.getModelRole(role) ?? (role === "ask" ? settings.getModelRole("default") : undefined);
 		if (!configured) continue;
 		const resolved = resolveModelFromString(expandRoleAlias(configured, settings), availableModels, matchPreferences);
 		if (resolved) return resolved;
