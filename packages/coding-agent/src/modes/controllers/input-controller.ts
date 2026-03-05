@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { SettingPath, SettingValue } from "../../config/settings";
@@ -21,6 +22,8 @@ function isExpandable(obj: unknown): obj is Expandable {
 }
 
 export class InputController {
+	#askModePreviousRole: "default" | "orchestrator" | "plan" | "custom" | undefined;
+	#askModePreviousModel: Model | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -44,6 +47,8 @@ export class InputController {
 				this.ctx.editor.setText("");
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
+			} else if (this.#isAskModeActive()) {
+				void this.#restoreAskMode();
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-escape with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
@@ -106,6 +111,10 @@ export class InputController {
 		const planModeKeys = this.ctx.keybindings.getKeys("togglePlanMode");
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
+		}
+
+		for (const key of this.ctx.keybindings.getKeys("toggleAskMode")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.#toggleAskMode());
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("newSession")) {
@@ -227,7 +236,7 @@ export class InputController {
 					await this.cycleAgentMode();
 					return;
 				}
-				if (arg === "default" || arg === "orchestrator") {
+				if (arg === "default" || arg === "orchestrator" || arg === "ask") {
 					await this.switchAgentMode(arg);
 					return;
 				}
@@ -235,7 +244,7 @@ export class InputController {
 					this.showAgentModeStatus();
 					return;
 				}
-				this.ctx.showStatus("Usage: /agent [toggle|default|orchestrator|status]");
+				this.ctx.showStatus("Usage: /agent [toggle|default|orchestrator|ask|status]");
 				return;
 			}
 			if (text.startsWith("/export")) {
@@ -792,6 +801,10 @@ export class InputController {
 			return;
 		}
 		const currentRole = this.resolveCurrentAgentRole();
+		if (currentRole === "ask") {
+			await this.#restoreAskMode();
+			return;
+		}
 		let nextRole: "default" | "orchestrator" | "plan";
 		if (currentRole === "default") nextRole = "orchestrator";
 		else if (currentRole === "orchestrator") nextRole = "plan";
@@ -799,13 +812,14 @@ export class InputController {
 		await this.switchAgentMode(nextRole);
 	}
 
-	private resolveCurrentAgentRole(): "default" | "orchestrator" | "plan" | "custom" {
+	private resolveCurrentAgentRole(): "default" | "ask" | "orchestrator" | "plan" | "custom" {
 		const defaultModel = this.ctx.session.resolveRoleModel("default");
+		const askModel = this.ctx.session.resolveRoleModel("ask");
 		const orchestratorModel = this.ctx.session.resolveRoleModel("orchestrator");
 		const planModel = this.ctx.session.resolveRoleModel("plan");
 
 		const lastRole = this.ctx.sessionManager.getLastModelChangeRole();
-		if (lastRole === "default" || lastRole === "orchestrator" || lastRole === "plan") {
+		if (lastRole === "default" || lastRole === "ask" || lastRole === "orchestrator" || lastRole === "plan") {
 			return lastRole;
 		}
 
@@ -813,7 +827,14 @@ export class InputController {
 		if (defaultModel && currentModel?.provider === defaultModel.provider && currentModel?.id === defaultModel.id) {
 			return "default";
 		}
-		if (orchestratorModel && currentModel?.provider === orchestratorModel.provider && currentModel?.id === orchestratorModel.id) {
+		if (askModel && currentModel?.provider === askModel.provider && currentModel?.id === askModel.id) {
+			return "ask";
+		}
+		if (
+			orchestratorModel &&
+			currentModel?.provider === orchestratorModel.provider &&
+			currentModel?.id === orchestratorModel.id
+		) {
 			return "orchestrator";
 		}
 		if (planModel && currentModel?.provider === planModel.provider && currentModel?.id === planModel.id) {
@@ -829,11 +850,20 @@ export class InputController {
 		this.ctx.showStatus(`Agent mode: ${theme.bold(theme.fg("accent", role))} (${modelLabel})`, { dim: false });
 	}
 
-	private async switchAgentMode(targetRole: "default" | "orchestrator" | "plan"): Promise<void> {
+	private async switchAgentMode(
+		targetRole: "default" | "ask" | "orchestrator" | "plan",
+		options?: { bypassAskRestore?: boolean },
+	): Promise<void> {
+		if (!options?.bypassAskRestore && targetRole !== "ask" && this.#isAskModeActive()) {
+			await this.#restoreAskMode();
+			return;
+		}
+
 		const configuredDefaultRole = settings.getModelRole("default");
+		const configuredAskRole = settings.getModelRole("ask");
 		const configuredOrchestratorRole = settings.getModelRole("orchestrator");
 		const configuredPlanRole = settings.getModelRole("plan");
-		if (!configuredDefaultRole || !configuredOrchestratorRole) {
+		if (targetRole !== "ask" && (!configuredDefaultRole || !configuredOrchestratorRole)) {
 			this.ctx.showWarning("Configure both default and orchestrator role models first (use /model).");
 			return;
 		}
@@ -841,11 +871,16 @@ export class InputController {
 			this.ctx.showWarning("Configure the plan role model first (use /model -> Set as Plan).");
 			return;
 		}
+		if (targetRole === "ask" && !configuredAskRole && !configuredDefaultRole) {
+			this.ctx.showWarning("Configure an ask role model (or set a default model) first via /model.");
+			return;
+		}
 
 		const defaultModel = this.ctx.session.resolveRoleModel("default");
+		const askModel = this.ctx.session.resolveRoleModel("ask") ?? defaultModel;
 		const orchestratorModel = this.ctx.session.resolveRoleModel("orchestrator");
 		const planModel = this.ctx.session.resolveRoleModel("plan");
-		if (!defaultModel || !orchestratorModel) {
+		if (targetRole !== "ask" && (!defaultModel || !orchestratorModel)) {
 			this.ctx.showWarning(
 				"Configured default/orchestrator model is unavailable (check API keys and /model assignments).",
 			);
@@ -855,16 +890,27 @@ export class InputController {
 			this.ctx.showWarning("Plan role model is unavailable (check API keys and /model assignments).");
 			return;
 		}
+		if (targetRole === "ask" && !askModel) {
+			this.ctx.showWarning("Ask role model is unavailable (check API keys and /model assignments).");
+			return;
+		}
 
 		const nextModel =
-			targetRole === "orchestrator" ? orchestratorModel! :
-			targetRole === "plan" ? planModel! :
-			defaultModel;
+			targetRole === "orchestrator"
+				? orchestratorModel!
+				: targetRole === "plan"
+					? planModel!
+					: targetRole === "ask"
+						? askModel
+						: defaultModel!;
 		const nextModelRef = `${nextModel.provider}/${nextModel.id}`;
 
 		try {
 			await this.ctx.session.setModelTemporary(nextModel);
 			this.ctx.sessionManager.appendModelChange(nextModelRef, targetRole);
+			if (targetRole !== "ask") {
+				this.#clearAskModeState();
+			}
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			const modelLabel = nextModel.name || nextModel.id;
@@ -875,6 +921,59 @@ export class InputController {
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	async #toggleAskMode(): Promise<void> {
+		if (this.ctx.session.isStreaming) {
+			this.ctx.showWarning("Wait for the current response to finish before switching agent mode.");
+			return;
+		}
+		if (this.#isAskModeActive()) {
+			await this.#restoreAskMode();
+			return;
+		}
+		this.#askModePreviousRole = this.resolveCurrentAgentRole();
+		this.#askModePreviousModel = this.ctx.session.model;
+		await this.switchAgentMode("ask", { bypassAskRestore: true });
+	}
+
+	async #restoreAskMode(): Promise<void> {
+		const previousRole = this.#askModePreviousRole;
+		const previousModel = this.#askModePreviousModel;
+		this.#clearAskModeState();
+
+		if (previousRole === "default" || previousRole === "orchestrator" || previousRole === "plan") {
+			await this.switchAgentMode(previousRole, { bypassAskRestore: true });
+			return;
+		}
+
+		if (!previousModel) {
+			await this.switchAgentMode("default", { bypassAskRestore: true });
+			return;
+		}
+
+		try {
+			await this.ctx.session.setModelTemporary(previousModel);
+			this.ctx.sessionManager.appendModelChange(`${previousModel.provider}/${previousModel.id}`, "custom");
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+			const modelLabel = previousModel.name || previousModel.id;
+			this.ctx.showStatus(
+				`Agent mode: ${theme.bold(theme.fg("accent", "custom"))} (${modelLabel}) · session only (/model controls defaults)`,
+				{ dim: false },
+			);
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	#isAskModeActive(): boolean {
+		return this.resolveCurrentAgentRole() === "ask";
+	}
+
+	#clearAskModeState(): void {
+		this.#askModePreviousRole = undefined;
+		this.#askModePreviousModel = undefined;
 	}
 
 	toggleToolOutputExpansion(): void {
