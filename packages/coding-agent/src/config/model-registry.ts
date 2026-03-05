@@ -35,6 +35,7 @@ export function isAuthenticated(apiKey: string | undefined | null): apiKey is st
 
 export type ModelRole =
 	| "default"
+	| "ask"
 	| "orchestrator"
 	| "smol"
 	| "slow"
@@ -52,11 +53,18 @@ export type ModelRole =
 export interface ModelRoleInfo {
 	tag?: string;
 	name: string;
+	description?: string;
 	color?: ThemeColor;
 }
 
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	default: { tag: "DEFAULT", name: "Default", color: "success" },
+	ask: {
+		tag: "ASK",
+		name: "Ask Agent",
+		description: "Model for Ask Agent (read-only research mode)",
+		color: "accent",
+	},
 	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent" },
 	smol: { tag: "SMOL", name: "Fast", color: "warning" },
 	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
@@ -74,6 +82,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
 	"default",
+	"ask",
 	"orchestrator",
 	"smol",
 	"slow",
