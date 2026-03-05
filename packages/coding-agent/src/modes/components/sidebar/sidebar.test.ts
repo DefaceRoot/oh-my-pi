@@ -114,6 +114,44 @@ describe("renderSidebar", () => {
 		expect(output).toContain("✓ task");
 	});
 
+	test("modified files section shows clean for empty list", () => {
+		const model: SidebarModel = {
+			width: 80,
+			modifiedFiles: [],
+		};
+
+		const output = renderSidebar(model).map(plain).join("\n");
+		expect(output).toContain("Modified Files");
+		expect(output).toContain("(clean)");
+	});
+
+	test("modified files section renders icons and overflow", () => {
+		const model: SidebarModel = {
+			width: 80,
+			modifiedFiles: [
+				{ path: "src/one.ts", status: "M" },
+				{ path: "src/two.ts", status: "A" },
+				{ path: "src/three.ts", status: "D" },
+				{ path: "src/four.ts", status: "R" },
+				{ path: "src/five.ts", status: "?" },
+				{ path: "src/six.ts", status: "M" },
+				{ path: "src/seven.ts", status: "M" },
+				{ path: "src/eight.ts", status: "M" },
+				{ path: "src/nine.ts", status: "M" },
+				{ path: "src/ten.ts", status: "M" },
+				{ path: "src/eleven.ts", status: "M" },
+			],
+		};
+
+		const output = renderSidebar(model).map(plain).join("\n");
+		expect(output).toContain("✎ one.ts");
+		expect(output).toContain("+ two.ts");
+		expect(output).toContain("- three.ts");
+		expect(output).toContain("> four.ts");
+		expect(output).toContain("? five.ts");
+		expect(output).toContain("...and 1 more");
+		expect(output).not.toContain("eleven.ts");
+	});
 	test("long names are truncated to width", () => {
 		const model: SidebarModel = {
 			width: 24,
