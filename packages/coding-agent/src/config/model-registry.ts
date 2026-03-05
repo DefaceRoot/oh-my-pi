@@ -40,7 +40,7 @@ export type ModelRole =
 	| "slow"
 	| "plan"
 	| "commit"
-	| "subagent"
+	| "implement"
 	| "explore"
 	| "lint"
 	| "merge"
@@ -62,7 +62,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
-	subagent: { tag: "IMPL", name: "Phase Agent", color: "error" },
+	implement: { tag: "IMPL", name: "Phase Agent", color: "error" },
 	explore: { tag: "EXPLORE", name: "Explore", color: "warning" },
 	lint: { tag: "LINT", name: "Lint", color: "muted" },
 	merge: { tag: "MERGE", name: "Merge", color: "warning" },
@@ -79,7 +79,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"plan",
 	"commit",
-	"subagent",
+	"implement",
 	"explore",
 	"lint",
 	"merge",
