@@ -506,6 +506,17 @@ export class Settings {
 			}
 		}
 
+		// modelRoles.subagent -> modelRoles.implement
+		const modelRoles = raw.modelRoles;
+		if (modelRoles && typeof modelRoles === "object" && !Array.isArray(modelRoles)) {
+			const roles = modelRoles as Record<string, unknown>;
+			if ("subagent" in roles) {
+				if (!("implement" in roles)) {
+					roles.implement = roles.subagent;
+				}
+				delete roles.subagent;
+			}
+		}
 		// Migrate old flat "theme" string to nested theme.dark/theme.light
 		if (typeof raw.theme === "string") {
 			const oldTheme = raw.theme;
