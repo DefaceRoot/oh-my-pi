@@ -37,6 +37,7 @@ import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
+import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -80,6 +81,7 @@ const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 const SIDEBAR_WIDTH = 38;
 const SIDEBAR_MIN_WIDTH = 120;
 const SIDEBAR_SUBAGENT_LIMIT = 8;
+const SIDEBAR_MODIFIED_FILES_REFRESH_MS = 5_000;
 
 interface ActionButtonUi {
 	label: string;
@@ -720,6 +722,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	private subagentNavigatorClose: (() => void) | undefined;
 	private subagentNavigatorOverlay: ReturnType<TUI["showOverlay"]> | undefined;
 	private subagentNavigatorGroups: SubagentViewGroup[] = [];
+	private sidebarModifiedFiles: SidebarModel["modifiedFiles"] = [];
+	private sidebarModifiedFilesLastRefreshMs = 0;
+	private sidebarModifiedFilesCwd: string | undefined;
+	private sidebarModifiedFilesRefreshPromise: Promise<void> | undefined;
 	private planModeHasEntered = false;
 	public readonly lspServers:
 		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
@@ -1012,6 +1018,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			lspServers: this.buildSidebarLspServers(),
 			todos: this.buildSidebarTodos(),
 			subagents: this.buildSidebarSubagents(),
+			modifiedFiles: this.buildSidebarModifiedFiles(),
 		};
 	}
 
@@ -1122,6 +1129,55 @@ export class InteractiveMode implements InteractiveModeContext {
 				description: ref.description ?? ref.contextPreview,
 			};
 		});
+	}
+
+	private buildSidebarModifiedFiles(): SidebarModel["modifiedFiles"] {
+		this.refreshSidebarModifiedFilesIfNeeded();
+		return this.sidebarModifiedFiles;
+	}
+
+	private refreshSidebarModifiedFilesIfNeeded(): void {
+		const cwd = this.sessionManager.getCwd();
+		const cwdChanged = this.sidebarModifiedFilesCwd !== cwd;
+		const needsInitialFetch = this.sidebarModifiedFilesLastRefreshMs === 0;
+		const isStale = Date.now() - this.sidebarModifiedFilesLastRefreshMs >= SIDEBAR_MODIFIED_FILES_REFRESH_MS;
+		if (this.sidebarModifiedFilesRefreshPromise || (!cwdChanged && !needsInitialFetch && !isStale)) return;
+		this.sidebarModifiedFilesRefreshPromise = this.refreshSidebarModifiedFiles(cwd);
+	}
+
+	private async refreshSidebarModifiedFiles(cwd: string): Promise<void> {
+		try {
+			const modifiedFiles = await getModifiedFiles(cwd);
+			const hasChanged = !this.isSameSidebarModifiedFiles(this.sidebarModifiedFiles, modifiedFiles);
+			this.sidebarModifiedFiles = modifiedFiles;
+			this.sidebarModifiedFilesCwd = cwd;
+			this.sidebarModifiedFilesLastRefreshMs = Date.now();
+			if (hasChanged && this.isInitialized) {
+				this.ui.requestRender();
+			}
+		} finally {
+			this.sidebarModifiedFilesRefreshPromise = undefined;
+			if (this.sessionManager.getCwd() !== this.sidebarModifiedFilesCwd) {
+				this.sidebarModifiedFilesLastRefreshMs = 0;
+				this.refreshSidebarModifiedFilesIfNeeded();
+			}
+		}
+	}
+
+	private isSameSidebarModifiedFiles(
+		left: SidebarModel["modifiedFiles"],
+		right: SidebarModel["modifiedFiles"],
+	): boolean {
+		const leftFiles = left ?? [];
+		const rightFiles = right ?? [];
+		if (leftFiles.length !== rightFiles.length) return false;
+		for (let i = 0; i < leftFiles.length; i += 1) {
+			const leftFile = leftFiles[i];
+			const rightFile = rightFiles[i];
+			if (!leftFile || !rightFile) return false;
+			if (leftFile.path !== rightFile.path || leftFile.status !== rightFile.status) return false;
+		}
+		return true;
 	}
 
 	rebuildChatFromMessages(): void {
