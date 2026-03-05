@@ -66,7 +66,16 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const SUBAGENT_MODEL_ROLES = new Set<ModelRole>(["implement", "explore", "lint", "merge", "curator", "research", "verifier", "designer"]);
+const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
+	"implement",
+	"explore",
+	"lint",
+	"merge",
+	"curator",
+	"research",
+	"verifier",
+	"designer",
+]);
 
 function resolveSubagentRole(agentName: string): ModelRole {
 	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "implement";
