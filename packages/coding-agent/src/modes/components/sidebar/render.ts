@@ -70,7 +70,6 @@ function renderTodoLine(todo: SidebarTodoItem): string {
 			return `${chalk.cyan("→")} ${todo.content}`;
 		case "abandoned":
 			return `${chalk.red("×")} ${todo.content}`;
-		case "pending":
 		default:
 			return `${chalk.gray("○")} ${todo.content}`;
 	}
