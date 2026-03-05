@@ -44,7 +44,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{
 		fileName: "task.md",
 		frontmatter: {
-			name: "task",
+			name: "implement",
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
 			spawns: "*",
 			model: "default",
