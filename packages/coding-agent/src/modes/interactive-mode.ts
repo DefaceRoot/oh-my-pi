@@ -2,8 +2,9 @@
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
-import * as path from "node:path";
+
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Loader, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
@@ -15,13 +16,13 @@ import {
 	ProcessTerminal,
 	Spacer,
 	Text,
-	truncateToWidth,
 	TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, parseJsonlLenient, postmortem } from "@oh-my-pi/pi-utils";
-import chalk from "chalk";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type Settings, settings } from "../config/settings";
@@ -45,6 +46,9 @@ import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import type { PythonExecutionComponent } from "./components/python-execution";
+import { HorizontalSplit } from "./components/sidebar/horizontal-split";
+import type { SidebarModel, SidebarSubagent } from "./components/sidebar/model";
+import { SidebarPanelComponent } from "./components/sidebar/sidebar-panel";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
@@ -73,6 +77,9 @@ const FIX_PLAN_STATUS_KEY = "ggg-wt-fix-plan";
 const DELETE_WORKTREE_STATUS_KEY = "zzzz-wt-delete";
 const SUBAGENT_VIEWER_STATUS_KEY = "subagent-viewer";
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+const SIDEBAR_WIDTH = 38;
+const SIDEBAR_MIN_WIDTH = 120;
+const SIDEBAR_SUBAGENT_LIMIT = 8;
 
 interface ActionButtonUi {
 	label: string;
@@ -233,7 +240,12 @@ class SubagentNavigatorComponent extends Container {
 			this.onOpenSelection(this.getSelection());
 			return;
 		}
-		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+x") || matchesKey(keyData, "q")) {
+		if (
+			matchesKey(keyData, "escape") ||
+			matchesKey(keyData, "esc") ||
+			matchesKey(keyData, "ctrl+x") ||
+			matchesKey(keyData, "q")
+		) {
 			this.onClose();
 		}
 	}
@@ -266,7 +278,9 @@ class SubagentNavigatorComponent extends Container {
 
 	private selectionToFlatIndex(sel: SubagentNavigatorSelection): number {
 		if (this.flatRefs.length === 0) return 0;
-		const exact = this.flatRefs.findIndex(entry => entry.groupIdx === sel.groupIndex && entry.nestedIdx === sel.nestedIndex);
+		const exact = this.flatRefs.findIndex(
+			entry => entry.groupIdx === sel.groupIndex && entry.nestedIdx === sel.nestedIndex,
+		);
 		if (exact >= 0) return exact;
 		const groupRoot = this.flatRefs.findIndex(entry => entry.groupIdx === sel.groupIndex && entry.isRoot);
 		if (groupRoot >= 0) return groupRoot;
@@ -301,7 +315,10 @@ class SubagentNavigatorComponent extends Container {
 		const modelWidth = 8;
 		const tokensWidth = 8;
 		const ageWidth = 6;
-		const descWidth = Math.max(12, tableWidth - (2 + indexWidth + 1 + roleWidth + 1 + modelWidth + 1 + tokensWidth + 1 + ageWidth + 1));
+		const descWidth = Math.max(
+			12,
+			tableWidth - (2 + indexWidth + 1 + roleWidth + 1 + modelWidth + 1 + tokensWidth + 1 + ageWidth + 1),
+		);
 		const separator = this.clipLine(` ${"─".repeat(Math.max(24, tableWidth - 2))}`, 120);
 
 		this.agentList.addChild(
@@ -536,7 +553,8 @@ const ACTION_BUTTONS: ActionButtonUi[] = [
 		statusKey: PLAN_REVIEW_STATUS_KEY,
 		normalText: "\x1b[30;42m Plan Review \x1b[0m",
 		hoverText: "\x1b[30;102m Plan Review \x1b[0m",
-		editorText: "Review this plan for issues/ambiguities, make sure there are no edge cases being missed. Spawn multiple task subagents for each phase to review the phases in the plan. Do not edit the plan, give me an output with all the synthesized data in a beginner friendly, clear and concise list with numbered labelings for each issue identified and why it may be an issue, do not use technical jargain or undefined acronyms, I want each thing explained clearly and concisely, so that I can understand it and give you guideance. Use research agents in parallel for anything that need up-to-date information, to ensure it is accurate as of today. If there are no issues/ambiguities or edge cases identified, that is fine, do not make up things to try to please me, but also do not overlook potential problems from the plan that may be identified during implementation. Utilize your full suite of subagents, prioritize parallel work as this is a READ-ONLY task that is preferred to be quicker, so parallel subagents are required.\n\nPlan File:\n",
+		editorText:
+			"Review this plan for issues/ambiguities, make sure there are no edge cases being missed. Spawn multiple task subagents for each phase to review the phases in the plan. Do not edit the plan, give me an output with all the synthesized data in a beginner friendly, clear and concise list with numbered labelings for each issue identified and why it may be an issue, do not use technical jargain or undefined acronyms, I want each thing explained clearly and concisely, so that I can understand it and give you guideance. Use research agents in parallel for anything that need up-to-date information, to ensure it is accurate as of today. If there are no issues/ambiguities or edge cases identified, that is fine, do not make up things to try to please me, but also do not overlook potential problems from the plan that may be identified during implementation. Utilize your full suite of subagents, prioritize parallel work as this is a READ-ONLY task that is preferred to be quicker, so parallel subagents are required.\n\nPlan File:\n",
 	},
 	{
 		label: "Fix Plan",
@@ -544,7 +562,8 @@ const ACTION_BUTTONS: ActionButtonUi[] = [
 		statusKey: FIX_PLAN_STATUS_KEY,
 		normalText: "\x1b[30;42m Fix Plan \x1b[0m",
 		hoverText: "\x1b[30;102m Fix Plan \x1b[0m",
-		editorText: "Another agent reviewed this plan and found issues listed below. Read the plan file, then apply each fix directly — do NOT spawn subagents or use isolated mode, just edit the plan file yourself one fix at a time. Do NOT implement the plan or change any other files. Keep changes strictly limited to resolving the identified problems: clarify ambiguous steps, add missing edge cases, tighten verification criteria, and correct factual errors. Do not expand scope or rewrite parts that are not broken. Use research tools if you need up-to-date information to verify a fix.\n\nPlan Review Output:\n",
+		editorText:
+			"Another agent reviewed this plan and found issues listed below. Read the plan file, then apply each fix directly — do NOT spawn subagents or use isolated mode, just edit the plan file yourself one fix at a time. Do NOT implement the plan or change any other files. Keep changes strictly limited to resolving the identified problems: clarify ambiguous steps, add missing edge cases, tighten verification criteria, and correct factual errors. Do not expand scope or rewrite parts that are not broken. Use research tools if you need up-to-date information to verify a fix.\n\nPlan Review Output:\n",
 	},
 ];
 
@@ -636,6 +655,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	public editor: CustomEditor;
 	public editorContainer: Container;
 	public statusLine: StatusLineComponent;
+	private readonly mainLayoutContainer: Container;
+	private readonly sidebarPanel: SidebarPanelComponent;
+	private readonly splitLayout: HorizontalSplit;
+	private readonly responsiveLayout: Component;
 
 	public isInitialized = false;
 	public isBackgrounded = false;
@@ -757,6 +780,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		this.mainLayoutContainer = new Container();
+		this.mainLayoutContainer.addChild(this.chatContainer);
+		this.mainLayoutContainer.addChild(this.pendingMessagesContainer);
+		this.mainLayoutContainer.addChild(this.statusContainer);
+		this.mainLayoutContainer.addChild(this.todoContainer);
+		this.mainLayoutContainer.addChild(new Spacer(1));
+		this.mainLayoutContainer.addChild(this.editorContainer);
+		this.mainLayoutContainer.addChild(this.statusLine);
+		this.sidebarPanel = new SidebarPanelComponent();
+		this.splitLayout = new HorizontalSplit(this.mainLayoutContainer, this.sidebarPanel, SIDEBAR_WIDTH);
+		this.responsiveLayout = {
+			render: width => {
+				if (width >= SIDEBAR_MIN_WIDTH) {
+					this.sidebarPanel.update(this.buildSidebarModel(SIDEBAR_WIDTH));
+					return this.splitLayout.render(width);
+				}
+				return this.mainLayoutContainer.render(width);
+			},
+			invalidate: () => {
+				this.splitLayout.invalidate();
+			},
+		};
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 
@@ -879,13 +924,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			setTerminalTitle(`pi: ${existingTitle}`);
 		}
 
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
-		this.ui.addChild(this.todoContainer);
-		this.ui.addChild(new Spacer(1));
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
+		this.ui.addChild(this.responsiveLayout);
 		this.ui.setFocus(this.editor);
 
 		this.inputController.setupKeyHandlers();
@@ -954,9 +993,135 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	updateEditorTopBorder(): void {
-		const width = this.ui.terminal.columns;
+		const width = this.getMainContentWidth(this.ui.terminal.columns);
 		const topBorder = this.statusLine.getTopBorder(width);
 		this.editor.setTopBorder(topBorder);
+	}
+
+	private getMainContentWidth(totalWidth = this.ui.terminal.columns): number {
+		const safeWidth = Math.max(1, totalWidth);
+		if (safeWidth < SIDEBAR_MIN_WIDTH) return safeWidth;
+		return Math.max(1, safeWidth - SIDEBAR_WIDTH - 1);
+	}
+
+	private buildSidebarModel(width = SIDEBAR_WIDTH): SidebarModel {
+		return {
+			width,
+			tokens: this.buildSidebarTokenSection(),
+			mcpServers: this.buildSidebarMcpServers(),
+			lspServers: this.buildSidebarLspServers(),
+			todos: this.buildSidebarTodos(),
+			subagents: this.buildSidebarSubagents(),
+		};
+	}
+
+	private buildSidebarTokenSection(): SidebarModel["tokens"] {
+		const contextUsage = this.session.getContextUsage();
+		const usageStats = this.sessionManager.getUsageStatistics();
+		const derivedTokens = usageStats.input + usageStats.output + usageStats.cacheRead + usageStats.cacheWrite;
+		const costUsd = Number.isFinite(usageStats.cost) && usageStats.cost > 0 ? usageStats.cost : undefined;
+		const hasData = contextUsage !== undefined || derivedTokens > 0 || costUsd !== undefined;
+		if (!hasData) return undefined;
+
+		const tokensUsedFromContext =
+			typeof contextUsage?.tokens === "number" && Number.isFinite(contextUsage.tokens)
+				? contextUsage.tokens
+				: undefined;
+		const tokensUsed = Math.max(0, Math.round(tokensUsedFromContext ?? derivedTokens));
+		const tokensTotal = Math.max(tokensUsed, Math.round(contextUsage?.contextWindow ?? 0));
+		const contextUsedPercent =
+			typeof contextUsage?.percent === "number" && Number.isFinite(contextUsage.percent)
+				? contextUsage.percent
+				: tokensTotal > 0
+					? (tokensUsed / tokensTotal) * 100
+					: 0;
+
+		return {
+			contextUsedPercent,
+			tokensUsed,
+			tokensTotal,
+			costUsd,
+		};
+	}
+
+	private buildSidebarMcpServers(): SidebarModel["mcpServers"] {
+		if (!this.mcpManager) return undefined;
+		const names = this.mcpManager
+			.getAllServerNames()
+			.slice()
+			.sort((a, b) => a.localeCompare(b));
+		if (names.length === 0) return undefined;
+		return names.map(name => ({
+			name,
+			connected: this.mcpManager?.getConnectionStatus(name) === "connected",
+		}));
+	}
+
+	private buildSidebarLspServers(): SidebarModel["lspServers"] {
+		if (!this.lspServers || this.lspServers.length === 0) return undefined;
+		return this.lspServers.map(server => ({
+			name: server.name,
+			active: server.status === "ready",
+		}));
+	}
+
+	private buildSidebarTodos(): SidebarModel["todos"] {
+		if (this.todoItems.length === 0) return undefined;
+		return this.todoItems.slice(0, SIDEBAR_SUBAGENT_LIMIT).map(todo => ({
+			id: todo.id,
+			content: todo.content,
+			status: todo.status,
+		}));
+	}
+
+	private buildSubagentStatusMap(): Map<string, SidebarSubagent["status"]> {
+		const statuses = new Map<string, SidebarSubagent["status"]>();
+		for (const entry of this.sessionManager.getEntries()) {
+			if (entry.type !== "message") continue;
+			const message = (entry as { message?: Record<string, unknown> }).message;
+			if (!message || message.role !== "toolResult" || message.toolName !== "task") continue;
+			const details = message.details as Record<string, unknown> | undefined;
+			const results = Array.isArray(details?.results) ? details.results : [];
+			for (const result of results) {
+				if (!result || typeof result !== "object") continue;
+				const record = result as Record<string, unknown>;
+				const id = typeof record.id === "string" ? record.id.trim() : "";
+				if (!id) continue;
+				const aborted = record.aborted === true;
+				const exitCode = typeof record.exitCode === "number" ? record.exitCode : 0;
+				const hasError = typeof record.error === "string" && record.error.length > 0;
+				statuses.set(id, aborted || hasError || exitCode !== 0 ? "failed" : "completed");
+			}
+		}
+		return statuses;
+	}
+
+	private buildSidebarSubagents(): SidebarModel["subagents"] {
+		const refs = this.collectSubagentViewRefs().slice(0, SIDEBAR_SUBAGENT_LIMIT);
+		if (refs.length === 0) return undefined;
+		const statuses = this.buildSubagentStatusMap();
+		const now = Date.now();
+		return refs.map(ref => {
+			const isRecent =
+				typeof ref.lastUpdatedMs === "number" &&
+				Number.isFinite(ref.lastUpdatedMs) &&
+				now - ref.lastUpdatedMs <= 30_000;
+			const inferredStatus: SidebarSubagent["status"] =
+				ref.id === this.subagentViewActiveId || isRecent ? "running" : "completed";
+			const recordedStatus = statuses.get(ref.id);
+			const status: SidebarSubagent["status"] =
+				recordedStatus === "failed"
+					? "failed"
+					: inferredStatus === "running"
+						? "running"
+						: (recordedStatus ?? "completed");
+			return {
+				id: ref.id,
+				agentName: ref.agent ?? "task",
+				status,
+				description: ref.description ?? ref.contextPreview,
+			};
+		});
 	}
 
 	rebuildChatFromMessages(): void {
@@ -1694,7 +1859,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNavigatorGroups = groups;
 
 		const currentSelection =
-			this.subagentViewActiveId !== undefined ? this.findSubagentSelection(groups, this.subagentViewActiveId) : undefined;
+			this.subagentViewActiveId !== undefined
+				? this.findSubagentSelection(groups, this.subagentViewActiveId)
+				: undefined;
 		if (currentSelection) {
 			this.subagentCycleIndex = currentSelection.groupIndex;
 			this.subagentNestedCycleIndex = currentSelection.refIndex;
@@ -1760,7 +1927,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.subagentNavigatorComponent = navigator;
 		this.subagentNavigatorClose = closeNavigator;
-		this.subagentNavigatorOverlay = this.ui.showOverlay(navigator, { width: "92%", maxHeight: "80%", anchor: "center", margin: 1 });
+		this.subagentNavigatorOverlay = this.ui.showOverlay(navigator, {
+			width: "92%",
+			maxHeight: "80%",
+			anchor: "center",
+			margin: 1,
+		});
 		this.ui.requestRender();
 		void this.loadMissingTokensForGroups(groups);
 	}
@@ -2366,7 +2538,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		block.addChild(new DynamicBorder());
 		block.addChild(
 			new Text(
-				theme.bold(theme.fg("warning", `[SUBAGENT] task ${taskPosition}/${taskCount}, ${nestedStatusLabel}: ${selected.id}`)),
+				theme.bold(
+					theme.fg(
+						"warning",
+						`[SUBAGENT] task ${taskPosition}/${taskCount}, ${nestedStatusLabel}: ${selected.id}`,
+					),
+				),
 				1,
 				0,
 			),
@@ -2409,8 +2586,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			SUBAGENT_VIEWER_STATUS_KEY,
 			[
 				renderSubagentStatusBadge(),
-				`${theme.bold(theme.fg("statusLineSubagents", `task ${taskPosition}/${taskCount}`))} ${theme.bold(theme.fg("accent", selected.id))}`
-				,
+				`${theme.bold(theme.fg("statusLineSubagents", `task ${taskPosition}/${taskCount}`))} ${theme.bold(theme.fg("accent", selected.id))}`,
 				renderSubagentStatusField("agent", statusAgentLabel, "statusLineSubagents"),
 				renderSubagentStatusField("model", modelStatusLabel, "statusLineModel"),
 				renderSubagentStatusField("skills", statusSkillsLabel, "statusLinePath"),
@@ -2477,7 +2653,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const tail = id.split(".").pop() ?? id;
 		const dashIndex = tail.indexOf("-");
 		if (dashIndex >= 0 && dashIndex < tail.length - 1) {
-			return tail.slice(dashIndex + 1).replace(/[_-]+/g, " ").trim();
+			return tail
+				.slice(dashIndex + 1)
+				.replace(/[_-]+/g, " ")
+				.trim();
 		}
 		return tail.replace(/[_-]+/g, " ").trim();
 	}
@@ -2487,7 +2666,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			return modelOverride;
 		}
 		if (Array.isArray(modelOverride)) {
-			const values = modelOverride.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+			const values = modelOverride.filter(
+				(item): item is string => typeof item === "string" && item.trim().length > 0,
+			);
 			if (values.length > 0) {
 				return values.join(", ");
 			}
@@ -2562,9 +2743,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (entry.type === "mode_change" && typeof entry.mode === "string") {
 				mode = entry.mode;
 				modeData =
-					entry.data && typeof entry.data === "object"
-						? (entry.data as Record<string, unknown>)
-						: undefined;
+					entry.data && typeof entry.data === "object" ? (entry.data as Record<string, unknown>) : undefined;
 				continue;
 			}
 
@@ -2650,10 +2829,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						source: ref.sessionPath,
 						content: rawTranscript,
 						sessionContext: fallback.sessionContext,
-						model:
-							typeof latestModelEntry?.model === "string"
-								? latestModelEntry.model
-								: fallback.model,
+						model: typeof latestModelEntry?.model === "string" ? latestModelEntry.model : fallback.model,
 						tokens: fallback.tokens ?? tokens,
 						contextPreview:
 							typeof sessionInitEntry?.task === "string"
@@ -2667,16 +2843,13 @@ export class InteractiveMode implements InteractiveModeContext {
 					source: ref.sessionPath,
 					content: rawTranscript,
 					sessionContext,
-					model:
-						typeof latestModelEntry?.model === "string"
-							? latestModelEntry.model
-							: undefined,
+					model: typeof latestModelEntry?.model === "string" ? latestModelEntry.model : undefined,
 					tokens,
 					contextPreview:
 						typeof sessionInitEntry?.task === "string"
 							? this.extractTaskContextPreview(sessionInitEntry.task)
 							: undefined,
-						skillsUsed,
+					skillsUsed,
 				};
 			} catch {
 				const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
@@ -2687,10 +2860,10 @@ export class InteractiveMode implements InteractiveModeContext {
 					model: fallback.model,
 					tokens: fallback.tokens,
 					contextPreview: fallback.contextPreview,
-						skillsUsed: fallback.skillsUsed,
+					skillsUsed: fallback.skillsUsed,
 				};
 			}
-			}
+		}
 
 		if (ref.outputPath && (await Bun.file(ref.outputPath).exists())) {
 			return {
