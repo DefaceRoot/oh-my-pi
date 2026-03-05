@@ -1,24 +1,15 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatCount } from "@oh-my-pi/pi-utils";
+import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { $ } from "bun";
 import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
-import { findGitHeadPathSync, sanitizeStatusText } from "../shared";
-import {
-	canReuseCachedPr,
-	createPrCacheContext,
-	isSamePrCacheContext,
-	type PrCacheContext,
-	parseDefaultBranch,
-} from "./status-line/git-utils";
 import { getPreset } from "./status-line/presets";
 import { renderSegment, type SegmentContext } from "./status-line/segments";
 import { getSeparator } from "./status-line/separators";
-import { calculateTokensPerSecond } from "./status-line/token-rate";
 
 export interface StatusLineSegmentOptions {
 	model?: { showThinkingLevel?: boolean };
@@ -36,41 +27,85 @@ export interface StatusLineSettings {
 	showHookStatus?: boolean;
 }
 
+const SUBAGENT_VIEWER_STATUS_KEY = "subagent-viewer";
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Rendering Helpers
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** Sanitize text for display in a single-line status */
+function sanitizeStatusText(text: string): string {
+	return text
+		.replace(/[\r\n\t]/g, " ")
+		.replace(/ +/g, " ")
+		.trim();
+}
+
+function readWorktreeHeadPath(gitFilePath: string): string | null {
+	try {
+		const raw = fs.readFileSync(gitFilePath, "utf8").trim();
+		const match = raw.match(/^gitdir:\s*(.+)$/i);
+		if (!match) return null;
+		const gitDir = match[1].trim();
+		const resolvedGitDir = path.isAbsolute(gitDir)
+			? gitDir
+			: path.resolve(path.dirname(gitFilePath), gitDir);
+		const headPath = path.join(resolvedGitDir, "HEAD");
+		return fs.existsSync(headPath) ? headPath : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Find HEAD file path by walking up from cwd; supports normal repos and worktrees (.git file). */
+function findGitHeadPath(cwd: string = process.cwd()): string | null {
+	let dir = cwd;
+	while (true) {
+		const gitPath = path.join(dir, ".git");
+		try {
+			const stat = fs.lstatSync(gitPath);
+			if (stat.isDirectory()) {
+				const headPath = path.join(gitPath, "HEAD");
+				if (fs.existsSync(headPath)) return headPath;
+			} else if (stat.isFile()) {
+				const worktreeHead = readWorktreeHeadPath(gitPath);
+				if (worktreeHead) return worktreeHead;
+			}
+		} catch {
+			// not a git boundary at this level
+		}
+
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return null;
+		}
+		dir = parent;
+	}
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class StatusLineComponent implements Component {
-	#settings: StatusLineSettings = {};
-	#cachedBranch: string | null | undefined = undefined;
-	#cachedBranchRepoId: string | null | undefined = undefined;
-	#gitWatcher: fs.FSWatcher | null = null;
-	#onBranchChange: (() => void) | null = null;
-	#autoCompactEnabled: boolean = true;
-	#hookStatuses: Map<string, string> = new Map();
-	#subagentCount: number = 0;
-	#sessionStartTime: number = Date.now();
-	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	private settings: StatusLineSettings = {};
+	private cachedBranch: string | null | undefined = undefined;
+	private cachedBranchCwd: string | undefined;
+	private gitWatcher: fs.FSWatcher | null = null;
+	private watchedHeadPath: string | null = null;
+	private onBranchChange: (() => void) | null = null;
+	private autoCompactEnabled: boolean = true;
+	private hookStatuses: Map<string, string> = new Map();
+	private subagentCount: number = 0;
+	private sessionStartTime: number = Date.now();
+	private planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 
 	// Git status caching (1s TTL)
-	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
-	#gitStatusLastFetch = 0;
-	#gitStatusInFlight = false;
-
-	// PR lookup caching (invalidated on branch/repo context changes)
-	#cachedPr: { number: number; url: string } | null | undefined = undefined;
-	#cachedPrContext: PrCacheContext | undefined = undefined;
-	#prLookupInFlight = false;
-	#defaultBranch?: string;
-	#lastTokensPerSecond: number | null = null;
-	#lastTokensPerSecondTimestamp: number | null = null;
+	private cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
+	private gitStatusLastFetch = 0;
 
 	constructor(private readonly session: AgentSession) {
-		this.#settings = {
+		this.settings = {
 			preset: settings.get("statusLine.preset"),
 			leftSegments: settings.get("statusLine.leftSegments"),
 			rightSegments: settings.get("statusLine.rightSegments"),
@@ -81,137 +116,131 @@ export class StatusLineComponent implements Component {
 	}
 
 	updateSettings(settings: StatusLineSettings): void {
-		this.#settings = settings;
+		this.settings = settings;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
-		this.#autoCompactEnabled = enabled;
+		this.autoCompactEnabled = enabled;
 	}
 
 	setSubagentCount(count: number): void {
-		this.#subagentCount = count;
+		this.subagentCount = count;
 	}
 
 	setSessionStartTime(time: number): void {
-		this.#sessionStartTime = time;
+		this.sessionStartTime = time;
 	}
 
 	setPlanModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
-		this.#planModeStatus = status ?? null;
+		this.planModeStatus = status ?? null;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
 		if (text === undefined) {
-			this.#hookStatuses.delete(key);
+			this.hookStatuses.delete(key);
 		} else {
-			this.#hookStatuses.set(key, text);
+			this.hookStatuses.set(key, text);
 		}
+	}
+
+	getHookStatus(key: string): string | undefined {
+		return this.hookStatuses.get(key);
 	}
 
 	watchBranch(onBranchChange: () => void): void {
-		this.#onBranchChange = onBranchChange;
-		this.#setupGitWatcher();
+		this.onBranchChange = onBranchChange;
+		this.setupGitWatcher();
 	}
 
-	#setupGitWatcher(): void {
-		if (this.#gitWatcher) {
-			this.#gitWatcher.close();
-			this.#gitWatcher = null;
+	private setupGitWatcher(): void {
+		const currentCwd = process.cwd();
+		const gitHeadPath = findGitHeadPath(currentCwd);
+		if (this.watchedHeadPath === gitHeadPath && this.gitWatcher) {
+			return;
 		}
 
-		const gitHeadPath = findGitHeadPathSync();
+		if (this.gitWatcher) {
+			this.gitWatcher.close();
+			this.gitWatcher = null;
+		}
+		this.watchedHeadPath = gitHeadPath;
+
 		if (!gitHeadPath) return;
 
 		try {
-			this.#gitWatcher = fs.watch(gitHeadPath, () => {
-				this.#invalidateGitCaches();
-				if (this.#onBranchChange) {
-					this.#onBranchChange();
+			this.gitWatcher = fs.watch(gitHeadPath, () => {
+				this.cachedBranch = undefined;
+				this.cachedBranchCwd = undefined;
+				if (this.onBranchChange) {
+					this.onBranchChange();
 				}
 			});
 		} catch {
-			this.#invalidateGitCaches();
+			// Silently fail
 		}
 	}
 
 	dispose(): void {
-		if (this.#gitWatcher) {
-			this.#gitWatcher.close();
-			this.#gitWatcher = null;
+		if (this.gitWatcher) {
+			this.gitWatcher.close();
+			this.gitWatcher = null;
 		}
+		this.watchedHeadPath = null;
 	}
 
 	invalidate(): void {
-		this.#invalidateGitCaches();
+		this.cachedBranch = undefined;
+		this.cachedBranchCwd = undefined;
 	}
 
-	#invalidateGitCaches(): void {
-		this.#cachedBranch = undefined;
-		this.#cachedBranchRepoId = undefined;
-		this.#cachedPr = undefined;
-		this.#cachedPrContext = undefined;
-	}
-	#getCurrentBranch(): string | null {
-		const gitHeadPath = findGitHeadPathSync();
-		if (this.#cachedBranch !== undefined && this.#cachedBranchRepoId === gitHeadPath) {
-			return this.#cachedBranch;
+	private getCurrentBranch(): string | null {
+		const currentCwd = process.cwd();
+		if (this.cachedBranchCwd !== currentCwd) {
+			this.cachedBranch = undefined;
+			this.cachedBranchCwd = currentCwd;
+			this.cachedGitStatus = null;
+			this.gitStatusLastFetch = 0;
+			this.setupGitWatcher();
 		}
 
-		this.#cachedBranchRepoId = gitHeadPath;
+		if (this.cachedBranch !== undefined) {
+			return this.cachedBranch;
+		}
+
+		const gitHeadPath = findGitHeadPath(currentCwd);
 		if (!gitHeadPath) {
-			this.#cachedBranch = null;
+			this.cachedBranch = null;
 			return null;
 		}
-
 		try {
 			const content = fs.readFileSync(gitHeadPath, "utf8").trim();
 
 			if (content.startsWith("ref: refs/heads/")) {
-				this.#cachedBranch = content.slice(16);
+				this.cachedBranch = content.slice(16);
 			} else {
-				this.#cachedBranch = "detached";
+				this.cachedBranch = "detached";
 			}
 		} catch {
-			this.#cachedBranch = null;
+			this.cachedBranch = null;
 		}
 
-		return this.#cachedBranch ?? null;
+		return this.cachedBranch ?? null;
 	}
 
-	#isDefaultBranch(branch: string): boolean {
-		if (this.#defaultBranch === undefined) {
-			// Kick off async resolution, use hardcoded fallback until it resolves
-			this.#defaultBranch = "main";
-			(async () => {
-				// Try origin/HEAD first, fall back to upstream/HEAD
-				const origin = await $`git rev-parse --abbrev-ref origin/HEAD`.quiet().nothrow();
-				if (origin.exitCode === 0) {
-					this.#defaultBranch = parseDefaultBranch(origin.stdout.toString().trim());
-					return;
-				}
-				const upstream = await $`git rev-parse --abbrev-ref upstream/HEAD`.quiet().nothrow();
-				if (upstream.exitCode === 0) {
-					this.#defaultBranch = parseDefaultBranch(upstream.stdout.toString().trim());
-				}
-			})();
+	private getGitStatus(): { staged: number; unstaged: number; untracked: number } | null {
+		const now = Date.now();
+		if (now - this.gitStatusLastFetch < 1000) {
+			return this.cachedGitStatus;
 		}
-		return branch === this.#defaultBranch;
-	}
-
-	#getGitStatus(): { staged: number; unstaged: number; untracked: number } | null {
-		if (this.#gitStatusInFlight || Date.now() - this.#gitStatusLastFetch < 1000) {
-			return this.#cachedGitStatus;
-		}
-
-		this.#gitStatusInFlight = true;
 
 		// Fire async fetch, return cached value
 		(async () => {
 			try {
-				const result = await $`git --no-optional-locks status --porcelain`.quiet().nothrow();
+				const result = await $`git status --porcelain`.quiet().nothrow();
 
 				if (result.exitCode !== 0) {
-					this.#cachedGitStatus = null;
+					this.cachedGitStatus = null;
+					this.gitStatusLastFetch = now;
 					return;
 				}
 
@@ -240,123 +269,27 @@ export class StatusLineComponent implements Component {
 					}
 				}
 
-				this.#cachedGitStatus = { staged, unstaged, untracked };
+				this.cachedGitStatus = { staged, unstaged, untracked };
+				this.gitStatusLastFetch = now;
 			} catch {
-				this.#cachedGitStatus = null;
-			} finally {
-				this.#gitStatusLastFetch = Date.now();
-				this.#gitStatusInFlight = false;
+				this.cachedGitStatus = null;
+				this.gitStatusLastFetch = now;
 			}
 		})();
 
-		return this.#cachedGitStatus;
+		return this.cachedGitStatus;
 	}
 
-	#lookupPr(): { number: number; url: string } | null {
-		const branch = this.#getCurrentBranch();
-		const currentContext = branch ? createPrCacheContext(branch, this.#cachedBranchRepoId ?? null) : null;
-
-		if (canReuseCachedPr(this.#cachedPr, this.#cachedPrContext, currentContext)) {
-			return this.#cachedPr ?? null;
-		}
-
-		if (this.#cachedPr !== undefined) {
-			this.#cachedPr = undefined;
-			this.#cachedPrContext = undefined;
-		}
-
-		// Don't look up if no branch, detached HEAD, default branch, or already in flight
-		if (!branch || branch === "detached" || this.#isDefaultBranch(branch) || this.#prLookupInFlight) {
-			return null;
-		}
-
-		this.#prLookupInFlight = true;
-		const lookupContext = currentContext;
-
-		// Fire async lookup, return null until resolved
-		(async () => {
-			// Helper: only write cache if branch/repo context hasn't changed since launch
-			const setCachedPr = (value: { number: number; url: string } | null) => {
-				const latestBranch = this.#getCurrentBranch();
-				const latestContext = latestBranch
-					? createPrCacheContext(latestBranch, this.#cachedBranchRepoId ?? null)
-					: undefined;
-				if (lookupContext && isSamePrCacheContext(latestContext, lookupContext)) {
-					this.#cachedPr = value;
-					this.#cachedPrContext = lookupContext;
-				}
-			};
-			try {
-				// Requires `gh repo set-default` to be configured; fails gracefully if not
-				const result = await $`gh pr view --json number,url`.quiet().nothrow();
-				if (result.exitCode !== 0) {
-					setCachedPr(null);
-					return;
-				}
-				const pr = JSON.parse(result.stdout.toString()) as { number: number; url: string };
-				if (typeof pr.number === "number") {
-					setCachedPr({ number: pr.number, url: pr.url });
-				} else {
-					setCachedPr(null);
-				}
-			} catch {
-				setCachedPr(null);
-			} finally {
-				this.#prLookupInFlight = false;
-				if (this.#cachedPr && this.#onBranchChange) {
-					this.#onBranchChange();
-				}
-			}
-		})();
-
-		return null;
-	}
-
-	#getTokensPerSecond(): number | null {
-		let lastAssistantTimestamp: number | null = null;
-		for (let i = this.session.state.messages.length - 1; i >= 0; i--) {
-			const message = this.session.state.messages[i];
-			if (message?.role === "assistant") {
-				lastAssistantTimestamp = message.timestamp;
-				break;
-			}
-		}
-
-		if (lastAssistantTimestamp === null) {
-			this.#lastTokensPerSecond = null;
-			this.#lastTokensPerSecondTimestamp = null;
-			return null;
-		}
-
-		const rate = calculateTokensPerSecond(this.session.state.messages, this.session.isStreaming);
-		if (rate !== null) {
-			this.#lastTokensPerSecond = rate;
-			this.#lastTokensPerSecondTimestamp = lastAssistantTimestamp;
-			return rate;
-		}
-
-		if (this.#lastTokensPerSecondTimestamp === lastAssistantTimestamp) {
-			return this.#lastTokensPerSecond;
-		}
-
-		return null;
-	}
-
-	#buildSegmentContext(width: number): SegmentContext {
+	private buildSegmentContext(width: number): SegmentContext {
 		const state = this.session.state;
 
 		// Get usage statistics
-		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
+		const usageStats = this.session.sessionManager?.getUsageStatistics() ?? {
 			input: 0,
 			output: 0,
 			cacheRead: 0,
 			cacheWrite: 0,
-			premiumRequests: 0,
 			cost: 0,
-		};
-		const usageStats = {
-			...aggregateUsageStats,
-			tokensPerSecond: this.#getTokensPerSecond(),
 		};
 
 		// Get context percentage
@@ -377,27 +310,26 @@ export class StatusLineComponent implements Component {
 		return {
 			session: this.session,
 			width,
-			options: this.#resolveSettings().segmentOptions ?? {},
-			planMode: this.#planModeStatus,
+			options: this.resolveSettings().segmentOptions ?? {},
+			planMode: this.planModeStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,
-			autoCompactEnabled: this.#autoCompactEnabled,
-			subagentCount: this.#subagentCount,
-			sessionStartTime: this.#sessionStartTime,
+			autoCompactEnabled: this.autoCompactEnabled,
+			subagentCount: this.subagentCount,
+			sessionStartTime: this.sessionStartTime,
 			git: {
-				branch: this.#getCurrentBranch(),
-				status: this.#getGitStatus(),
-				pr: this.#lookupPr(),
+				branch: this.getCurrentBranch(),
+				status: this.getGitStatus(),
 			},
 		};
 	}
 
-	#resolveSettings(): Required<
+	private resolveSettings(): Required<
 		Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
 	> &
 		StatusLineSettings {
-		const preset = this.#settings.preset ?? "default";
+		const preset = this.settings.preset ?? "default";
 		const presetDef = getPreset(preset);
 		const useCustomSegments = preset === "custom";
 		const mergedSegmentOptions: StatusLineSettings["segmentOptions"] = {};
@@ -406,7 +338,7 @@ export class StatusLineComponent implements Component {
 			mergedSegmentOptions[segment as keyof StatusLineSegmentOptions] = { ...(options as Record<string, unknown>) };
 		}
 
-		for (const [segment, options] of Object.entries(this.#settings.segmentOptions ?? {})) {
+		for (const [segment, options] of Object.entries(this.settings.segmentOptions ?? {})) {
 			const current = mergedSegmentOptions[segment as keyof StatusLineSegmentOptions] ?? {};
 			mergedSegmentOptions[segment as keyof StatusLineSegmentOptions] = {
 				...(current as Record<string, unknown>),
@@ -415,24 +347,24 @@ export class StatusLineComponent implements Component {
 		}
 
 		const leftSegments = useCustomSegments
-			? (this.#settings.leftSegments ?? presetDef.leftSegments)
+			? (this.settings.leftSegments ?? presetDef.leftSegments)
 			: presetDef.leftSegments;
 		const rightSegments = useCustomSegments
-			? (this.#settings.rightSegments ?? presetDef.rightSegments)
+			? (this.settings.rightSegments ?? presetDef.rightSegments)
 			: presetDef.rightSegments;
 
 		return {
-			...this.#settings,
+			...this.settings,
 			leftSegments,
 			rightSegments,
-			separator: this.#settings.separator ?? presetDef.separator,
+			separator: this.settings.separator ?? presetDef.separator,
 			segmentOptions: mergedSegmentOptions,
 		};
 	}
 
-	#buildStatusLine(width: number): string {
-		const ctx = this.#buildSegmentContext(width);
-		const effectiveSettings = this.#resolveSettings();
+	private buildStatusLine(width: number): string {
+		const ctx = this.buildSegmentContext(width);
+		const effectiveSettings = this.resolveSettings();
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
 		const bgAnsi = theme.getBgAnsi("statusLineBg");
@@ -456,13 +388,7 @@ export class StatusLineComponent implements Component {
 			}
 		}
 
-		const runningBackgroundJobs = this.session.getAsyncJobSnapshot()?.running.length ?? 0;
-		if (runningBackgroundJobs > 0) {
-			const icon = theme.icon.agents ? `${theme.icon.agents} ` : "";
-			const label = `${formatCount("job", runningBackgroundJobs)} running`;
-			rightParts.push(theme.fg("statusLineSubagents", `${icon}${label}`));
-		}
-		const topFillWidth = Math.max(0, width);
+		const topFillWidth = width > 0 ? Math.max(0, width - 4) : 0;
 		const left = [...leftParts];
 		const right = [...rightParts];
 
@@ -525,12 +451,11 @@ export class StatusLineComponent implements Component {
 		leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 		rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
-		const gapFill = theme.fg("border", theme.boxRound.horizontal.repeat(gapWidth));
-		return leftGroup + gapFill + rightGroup;
+		return leftGroup + padding(gapWidth) + rightGroup;
 	}
 
 	getTopBorder(width: number): { content: string; width: number } {
-		const content = this.#buildStatusLine(width);
+		const content = this.buildStatusLine(width);
 		return {
 			content,
 			width: visibleWidth(content),
@@ -539,12 +464,17 @@ export class StatusLineComponent implements Component {
 
 	render(width: number): string[] {
 		// Only render hook statuses - main status is in editor's top border
-		const showHooks = this.#settings.showHookStatus ?? true;
-		if (!showHooks || this.#hookStatuses.size === 0) {
+		const showHooks = this.settings.showHookStatus ?? true;
+		if (!showHooks || this.hookStatuses.size === 0) {
 			return [];
 		}
 
-		const sortedStatuses = Array.from(this.#hookStatuses.entries())
+		const subagentStatus = this.hookStatuses.get(SUBAGENT_VIEWER_STATUS_KEY);
+		if (subagentStatus) {
+			return [truncateToWidth(sanitizeStatusText(subagentStatus), width)];
+		}
+
+		const sortedStatuses = Array.from(this.hookStatuses.entries())
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([, text]) => sanitizeStatusText(text));
 		const hookLine = sortedStatuses.join(" ");

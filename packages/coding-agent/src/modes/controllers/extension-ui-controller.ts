@@ -19,7 +19,18 @@ import type { InteractiveModeContext } from "../../modes/types";
 import { setTerminalTitle } from "../../utils/title-generator";
 
 export class ExtensionUiController {
+	#hookSelectorOverlay: OverlayHandle | undefined;
+	#hookInputOverlay: OverlayHandle | undefined;
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
+
+	readonly #dialogOverlayOptions = {
+		anchor: "bottom-center",
+		width: "80%",
+		minWidth: 40,
+		maxHeight: "70%",
+		margin: 1,
+	} as const;
+
 	constructor(private ctx: InteractiveModeContext) {}
 
 	/**
@@ -30,7 +41,7 @@ export class ExtensionUiController {
 		const uiContext: ExtensionUIContext = {
 			select: (title, options, dialogOptions) => this.showHookSelector(title, options, dialogOptions),
 			confirm: (title, message, _dialogOptions) => this.showHookConfirm(title, message),
-			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
+			input: (title, placeholder, _dialogOptions) => this.showHookInput(title, placeholder),
 			notify: (message, type) => this.showHookNotify(message, type),
 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setHookStatus(key, text),
@@ -106,7 +117,7 @@ export class ExtensionUiController {
 			setModel: async model => {
 				const key = await this.ctx.session.modelRegistry.getApiKey(model);
 				if (!key) return false;
-				await this.ctx.session.setModel(model);
+				await this.ctx.session.setModelTemporary(model);
 				return true;
 			},
 			getThinkingLevel: () => this.ctx.session.thinkingLevel,
@@ -295,7 +306,7 @@ export class ExtensionUiController {
 			setModel: async model => {
 				const key = await this.ctx.session.modelRegistry.getApiKey(model);
 				if (!key) return false;
-				await this.ctx.session.setModel(model);
+				await this.ctx.session.setModelTemporary(model);
 				return true;
 			},
 			getThinkingLevel: () => this.ctx.session.thinkingLevel,
@@ -550,76 +561,39 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
 		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const onAbort = () => {
-			this.hideHookSelector();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			resolve(value);
-		};
+		this.#hookSelectorOverlay?.hide();
+		this.#hookSelectorOverlay = undefined;
 		const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
 		this.ctx.hookSelector = new HookSelectorComponent(
 			title,
 			options,
 			option => {
 				this.hideHookSelector();
-				finish(option);
+				resolve(option);
 			},
 			() => {
 				this.hideHookSelector();
-				finish(undefined);
+				resolve(undefined);
 			},
 			{
-				onLeft: dialogOptions?.onLeft
-					? () => {
-							this.hideHookSelector();
-							dialogOptions.onLeft?.();
-							finish(undefined);
-						}
-					: undefined,
-				onRight: dialogOptions?.onRight
-					? () => {
-							this.hideHookSelector();
-							dialogOptions.onRight?.();
-							finish(undefined);
-						}
-					: undefined,
-				helpText: dialogOptions?.helpText,
 				initialIndex: dialogOptions?.initialIndex,
 				timeout: dialogOptions?.timeout,
-				onTimeout: dialogOptions?.onTimeout,
 				tui: this.ctx.ui,
 				outline: dialogOptions?.outline,
 				maxVisible,
 			},
 		);
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.hookSelector);
-		this.ctx.ui.setFocus(this.ctx.hookSelector);
-		this.ctx.ui.requestRender();
-		if (dialogOptions?.signal) {
-			if (dialogOptions.signal.aborted) {
-				onAbort();
-			} else {
-				dialogOptions.signal.addEventListener("abort", onAbort, { once: true });
-			}
-		}
+		this.#hookSelectorOverlay = this.ctx.ui.showOverlay(this.ctx.hookSelector, this.#dialogOverlayOptions);
 		return promise;
 	}
+
 	/**
 	 * Hide the hook selector.
 	 */
 	hideHookSelector(): void {
 		this.ctx.hookSelector?.dispose();
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.editor);
+		this.#hookSelectorOverlay?.hide();
+		this.#hookSelectorOverlay = undefined;
 		this.ctx.hookSelector = undefined;
 		this.ctx.ui.setFocus(this.ctx.editor);
 		this.ctx.ui.requestRender();
@@ -636,54 +610,23 @@ export class ExtensionUiController {
 	/**
 	 * Show a text input for hooks.
 	 */
-	showHookInput(
-		title: string,
-		placeholder?: string,
-		dialogOptions?: ExtensionUIDialogOptions,
-	): Promise<string | undefined> {
+	showHookInput(title: string, placeholder?: string): Promise<string | undefined> {
 		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const onAbort = () => {
-			this.hideHookInput();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			dialogOptions?.signal?.removeEventListener("abort", onAbort);
-			resolve(value);
-		};
+		this.#hookInputOverlay?.hide();
+		this.#hookInputOverlay = undefined;
 		this.ctx.hookInput = new HookInputComponent(
 			title,
 			placeholder,
 			value => {
 				this.hideHookInput();
-				finish(value);
+				resolve(value);
 			},
 			() => {
 				this.hideHookInput();
-				finish(undefined);
-			},
-			{
-				timeout: dialogOptions?.timeout,
-				onTimeout: dialogOptions?.onTimeout,
-				tui: this.ctx.ui,
+				resolve(undefined);
 			},
 		);
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.hookInput);
-		this.ctx.ui.setFocus(this.ctx.hookInput);
-		this.ctx.ui.requestRender();
-		if (dialogOptions?.signal) {
-			if (dialogOptions.signal.aborted) {
-				onAbort();
-			} else {
-				dialogOptions.signal.addEventListener("abort", onAbort, { once: true });
-			}
-		}
+		this.#hookInputOverlay = this.ctx.ui.showOverlay(this.ctx.hookInput, this.#dialogOverlayOptions);
 		return promise;
 	}
 
@@ -692,8 +635,8 @@ export class ExtensionUiController {
 	 */
 	hideHookInput(): void {
 		this.ctx.hookInput?.dispose();
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.editor);
+		this.#hookInputOverlay?.hide();
+		this.#hookInputOverlay = undefined;
 		this.ctx.hookInput = undefined;
 		this.ctx.ui.setFocus(this.ctx.editor);
 		this.ctx.ui.requestRender();

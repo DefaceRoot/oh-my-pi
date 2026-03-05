@@ -19,7 +19,6 @@ import type { HookSelectorComponent } from "./components/hook-selector";
 import type { PythonExecutionComponent } from "./components/python-execution";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
-import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
 
 export type CompactionQueuedMessage = {
@@ -27,18 +26,10 @@ export type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
-
 export type TodoItem = {
 	id: string;
 	content: string;
-	status: TodoStatus;
-};
-
-export type TodoPhase = {
-	id: string;
-	name: string;
-	tasks: TodoItem[];
+	status: "pending" | "in_progress" | "completed";
 };
 
 export interface InteractiveModeContext {
@@ -98,8 +89,7 @@ export interface InteractiveModeContext {
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
 	skillCommands: Map<string, string>;
-	oauthManualInput: OAuthManualInputManager;
-	todoPhases: TodoPhase[];
+	todoItems: TodoItem[];
 
 	// Lifecycle
 	init(): Promise<void>;
@@ -140,47 +130,38 @@ export interface InteractiveModeContext {
 	updateEditorTopBorder(): void;
 	updateEditorBorderColor(): void;
 	rebuildChatFromMessages(): void;
-	setTodos(todos: TodoItem[] | TodoPhase[]): void;
+	setTodos(todos: TodoItem[]): void;
 	reloadTodos(): Promise<void>;
 	toggleTodoExpansion(): void;
 
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleCopyCommand(): void;
+	handleCopyCommand(): Promise<void>;
 	handleSessionCommand(): Promise<void>;
-	handleJobsCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
-	handleChangelogCommand(showFull?: boolean): Promise<void>;
+	handleChangelogCommand(): Promise<void>;
 	handleHotkeysCommand(): void;
-	handleDumpCommand(): void;
-	handleDebugTranscriptCommand(): Promise<void>;
+	handleDumpCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
-	handleMCPCommand(text: string): Promise<void>;
-	handleSSHCommand(text: string): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
-	handleMoveCommand(targetPath: string): Promise<void>;
-	handleMemoryCommand(text: string): Promise<void>;
-	handleSTTToggle(): Promise<void>;
 	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void>;
 	openInBrowser(urlOrPath: string): void;
-	refreshSlashCommandState(cwd?: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
-	showAgentsDashboard(): void;
 	showModelSelector(options?: { temporaryOnly?: boolean }): void;
 	showUserMessageSelector(): void;
 	showTreeSelector(): void;
 	showSessionSelector(): void;
 	handleResumeSession(sessionPath: string): Promise<void>;
-	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
+	showOAuthSelector(mode: "login" | "logout"): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
 
@@ -189,6 +170,11 @@ export interface InteractiveModeContext {
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	handleDequeue(): void;
+	cycleSubagentView(direction?: 1 | -1): Promise<void>;
+	cycleSubagentNestedView(direction?: 1 | -1): Promise<void>;
+	exitSubagentView(): void;
+	isSubagentViewActive(): boolean;
+	isSubagentNestedArrowModeEnabled(): boolean;
 	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
 	cycleThinkingLevel(): void;
@@ -198,7 +184,7 @@ export interface InteractiveModeContext {
 	toggleThinkingBlockVisibility(): void;
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
-	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handlePlanModeCommand(): Promise<void>;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods
@@ -227,7 +213,6 @@ export interface InteractiveModeContext {
 			keybindings: KeybindingsManager,
 			done: (result: T) => void,
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
-		options?: { overlay?: boolean },
 	): Promise<T>;
 	showExtensionError(extensionPath: string, error: string): void;
 	showToolError(toolName: string, error: string): void;

@@ -1,5 +1,3 @@
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -8,74 +6,30 @@ import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
-import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
+import type { InteractiveModeContext, TodoItem } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { ExitPlanModeDetails } from "../../tools";
 
 export class EventController {
-	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
-	#lastThinkingCount = 0;
-	#renderedCustomMessages = new Set<string>();
-	#lastIntent: string | undefined = undefined;
-	#backgroundToolCallIds = new Set<string>();
-	#readToolCallArgs = new Map<string, Record<string, unknown>>();
-	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
-	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
+	private lastReadGroup: ReadToolGroupComponent | undefined = undefined;
+	private lastThinkingCount = 0;
+	private renderedCustomMessages = new Set<string>();
+
 	constructor(private ctx: InteractiveModeContext) {}
 
-	#resetReadGroup(): void {
-		this.#lastReadGroup = undefined;
+	private resetReadGroup(): void {
+		this.lastReadGroup = undefined;
 	}
 
-	#getReadGroup(): ReadToolGroupComponent {
-		if (!this.#lastReadGroup) {
+	private getReadGroup(): ReadToolGroupComponent {
+		if (!this.lastReadGroup) {
 			this.ctx.chatContainer.addChild(new Text("", 0, 0));
 			const group = new ReadToolGroupComponent();
 			group.setExpanded(this.ctx.toolOutputExpanded);
 			this.ctx.chatContainer.addChild(group);
-			this.#lastReadGroup = group;
+			this.lastReadGroup = group;
 		}
-		return this.#lastReadGroup;
-	}
-
-	#trackReadToolCall(toolCallId: string, args: unknown): void {
-		if (!toolCallId) return;
-		const normalizedArgs =
-			args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-		this.#readToolCallArgs.set(toolCallId, normalizedArgs);
-		const assistantComponent = this.ctx.streamingComponent ?? this.#lastAssistantComponent;
-		if (assistantComponent) {
-			this.#readToolCallAssistantComponents.set(toolCallId, assistantComponent);
-		}
-	}
-
-	#clearReadToolCall(toolCallId: string): void {
-		this.#readToolCallArgs.delete(toolCallId);
-		this.#readToolCallAssistantComponents.delete(toolCallId);
-	}
-
-	#inlineReadToolImages(
-		toolCallId: string,
-		result: { content: Array<{ type: string; data?: string; mimeType?: string }> },
-	): boolean {
-		if (!settings.get("terminal.showImages")) return false;
-		const assistantComponent = this.#readToolCallAssistantComponents.get(toolCallId);
-		if (!assistantComponent) return false;
-		const images: ImageContent[] = result.content
-			.filter(
-				(content): content is ImageContent =>
-					content.type === "image" && typeof content.data === "string" && typeof content.mimeType === "string",
-			)
-			.map(content => ({ type: "image", data: content.data, mimeType: content.mimeType }));
-		if (images.length === 0) return false;
-		assistantComponent.setToolResultImages(toolCallId, images);
-		return true;
-	}
-	#updateWorkingMessageFromIntent(intent: string | undefined): void {
-		const trimmed = intent?.trim();
-		if (!trimmed || trimmed === this.#lastIntent) return;
-		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
+		return this.lastReadGroup;
 	}
 
 	subscribeToAgent(): void {
@@ -89,15 +43,25 @@ export class EventController {
 			await this.ctx.init();
 		}
 
+		const suppressChatMutationsInSubagentView =
+			this.ctx.isSubagentViewActive() &&
+			(event.type === "message_start" ||
+				event.type === "message_update" ||
+				event.type === "message_end" ||
+				event.type === "tool_execution_start" ||
+				event.type === "tool_execution_update" ||
+				event.type === "tool_execution_end" ||
+				event.type === "ttsr_triggered" ||
+				event.type === "todo_reminder");
+		if (suppressChatMutationsInSubagentView) {
+			return;
+		}
+
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorTopBorder();
 
 		switch (event.type) {
 			case "agent_start":
-				this.#lastIntent = undefined;
-				this.#readToolCallArgs.clear();
-				this.#readToolCallAssistantComponents.clear();
-				this.#lastAssistantComponent = undefined;
 				if (this.ctx.retryEscapeHandler) {
 					this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
 					this.ctx.retryEscapeHandler = undefined;
@@ -126,15 +90,15 @@ export class EventController {
 			case "message_start":
 				if (event.message.role === "hookMessage" || event.message.role === "custom") {
 					const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
-					if (this.#renderedCustomMessages.has(signature)) {
+					if (this.renderedCustomMessages.has(signature)) {
 						break;
 					}
-					this.#renderedCustomMessages.add(signature);
-					this.#resetReadGroup();
+					this.renderedCustomMessages.add(signature);
+					this.resetReadGroup();
 					this.ctx.addMessageToChat(event.message);
 					this.ctx.ui.requestRender();
 				} else if (event.message.role === "user") {
-					this.#resetReadGroup();
+					this.resetReadGroup();
 					this.ctx.addMessageToChat(event.message);
 					if (!event.message.synthetic) {
 						this.ctx.editor.setText("");
@@ -142,12 +106,12 @@ export class EventController {
 					}
 					this.ctx.ui.requestRender();
 				} else if (event.message.role === "fileMention") {
-					this.#resetReadGroup();
+					this.resetReadGroup();
 					this.ctx.addMessageToChat(event.message);
 					this.ctx.ui.requestRender();
 				} else if (event.message.role === "assistant") {
-					this.#lastThinkingCount = 0;
-					this.#resetReadGroup();
+					this.lastThinkingCount = 0;
+					this.resetReadGroup();
 					this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock);
 					this.ctx.streamingMessage = event.message;
 					this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -164,28 +128,23 @@ export class EventController {
 					const thinkingCount = this.ctx.streamingMessage.content.filter(
 						content => content.type === "thinking" && content.thinking.trim(),
 					).length;
-					if (thinkingCount > this.#lastThinkingCount) {
-						this.#resetReadGroup();
-						this.#lastThinkingCount = thinkingCount;
+					if (thinkingCount > this.lastThinkingCount) {
+						this.resetReadGroup();
+						this.lastThinkingCount = thinkingCount;
 					}
 
 					for (const content of this.ctx.streamingMessage.content) {
 						if (content.type !== "toolCall") continue;
-						if (content.name === "read") {
-							this.#trackReadToolCall(content.id, content.arguments);
-							const component = this.ctx.pendingTools.get(content.id);
-							if (component) {
-								component.updateArgs(content.arguments, content.id);
-							} else {
-								const group = this.#getReadGroup();
-								group.updateArgs(content.arguments, content.id);
-								this.ctx.pendingTools.set(content.id, group);
-							}
-							continue;
-						}
 
 						if (!this.ctx.pendingTools.has(content.id)) {
-							this.#resetReadGroup();
+							if (content.name === "read") {
+								const group = this.getReadGroup();
+								group.updateArgs(content.arguments, content.id);
+								this.ctx.pendingTools.set(content.id, group);
+								continue;
+							}
+
+							this.resetReadGroup();
 							this.ctx.chatContainer.addChild(new Text("", 0, 0));
 							const tool = this.ctx.session.getToolByName(content.name);
 							const component = new ToolExecutionComponent(
@@ -210,15 +169,6 @@ export class EventController {
 							}
 						}
 					}
-
-					// Update working message with intent from streamed tool arguments
-					for (const content of this.ctx.streamingMessage.content) {
-						if (content.type !== "toolCall") continue;
-						const args = content.arguments;
-						if (!args || typeof args !== "object" || !(INTENT_FIELD in args)) continue;
-						this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
-					}
-
 					this.ctx.ui.requestRender();
 				}
 				break;
@@ -251,7 +201,6 @@ export class EventController {
 							component.setArgsComplete(toolCallId);
 						}
 					}
-					this.#lastAssistantComponent = this.ctx.streamingComponent;
 					this.ctx.streamingComponent = undefined;
 					this.ctx.streamingMessage = undefined;
 					this.ctx.statusLine.invalidate();
@@ -261,23 +210,16 @@ export class EventController {
 				break;
 
 			case "tool_execution_start": {
-				this.#updateWorkingMessageFromIntent(event.intent);
 				if (!this.ctx.pendingTools.has(event.toolCallId)) {
 					if (event.toolName === "read") {
-						this.#trackReadToolCall(event.toolCallId, event.args);
-						const component = this.ctx.pendingTools.get(event.toolCallId);
-						if (component) {
-							component.updateArgs(event.args, event.toolCallId);
-						} else {
-							const group = this.#getReadGroup();
-							group.updateArgs(event.args, event.toolCallId);
-							this.ctx.pendingTools.set(event.toolCallId, group);
-						}
+						const group = this.getReadGroup();
+						group.updateArgs(event.args, event.toolCallId);
+						this.ctx.pendingTools.set(event.toolCallId, group);
 						this.ctx.ui.requestRender();
 						break;
 					}
 
-					this.#resetReadGroup();
+					this.resetReadGroup();
 					const tool = this.ctx.session.getToolByName(event.toolName);
 					const component = new ToolExecutionComponent(
 						event.toolName,
@@ -302,98 +244,25 @@ export class EventController {
 			case "tool_execution_update": {
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
-					const asyncState = (event.partialResult.details as { async?: { state?: string } } | undefined)?.async
-						?.state;
-					const isFinalAsyncState = asyncState === "completed" || asyncState === "failed";
-					component.updateResult(
-						{ ...event.partialResult, isError: asyncState === "failed" },
-						!isFinalAsyncState,
-						event.toolCallId,
-					);
-					if (isFinalAsyncState) {
-						this.ctx.pendingTools.delete(event.toolCallId);
-						this.#backgroundToolCallIds.delete(event.toolCallId);
-					}
+					component.updateResult({ ...event.partialResult, isError: false }, true, event.toolCallId);
 					this.ctx.ui.requestRender();
 				}
 				break;
 			}
 
 			case "tool_execution_end": {
-				if (event.toolName === "read") {
-					if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
-						const component = this.ctx.pendingTools.get(event.toolCallId);
-						if (component) {
-							component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
-							this.ctx.pendingTools.delete(event.toolCallId);
-						}
-						const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-						if (asyncState === "running") {
-							this.#backgroundToolCallIds.add(event.toolCallId);
-						} else {
-							this.#backgroundToolCallIds.delete(event.toolCallId);
-							this.#clearReadToolCall(event.toolCallId);
-						}
-						this.ctx.ui.requestRender();
-					} else {
-						let component = this.ctx.pendingTools.get(event.toolCallId);
-						if (!component) {
-							const group = this.#getReadGroup();
-							const args = this.#readToolCallArgs.get(event.toolCallId);
-							if (args) {
-								group.updateArgs(args, event.toolCallId);
-							}
-							component = group;
-							this.ctx.pendingTools.set(event.toolCallId, group);
-						}
-						const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-						const isBackgroundRunning = asyncState === "running";
-						component.updateResult(
-							{ ...event.result, isError: event.isError },
-							isBackgroundRunning,
-							event.toolCallId,
-						);
-						if (isBackgroundRunning) {
-							this.#backgroundToolCallIds.add(event.toolCallId);
-						} else {
-							this.ctx.pendingTools.delete(event.toolCallId);
-							this.#backgroundToolCallIds.delete(event.toolCallId);
-							this.#clearReadToolCall(event.toolCallId);
-						}
-						this.ctx.ui.requestRender();
-					}
-				} else {
-					const component = this.ctx.pendingTools.get(event.toolCallId);
-					if (component) {
-						const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-						const isBackgroundRunning = asyncState === "running";
-						component.updateResult(
-							{ ...event.result, isError: event.isError },
-							isBackgroundRunning,
-							event.toolCallId,
-						);
-						if (isBackgroundRunning) {
-							this.#backgroundToolCallIds.add(event.toolCallId);
-						} else {
-							this.ctx.pendingTools.delete(event.toolCallId);
-							this.#backgroundToolCallIds.delete(event.toolCallId);
-						}
-						this.ctx.ui.requestRender();
-					}
+				const component = this.ctx.pendingTools.get(event.toolCallId);
+				if (component) {
+					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
+					this.ctx.pendingTools.delete(event.toolCallId);
+					this.ctx.ui.requestRender();
 				}
 				// Update todo display when todo_write tool completes
 				if (event.toolName === "todo_write" && !event.isError) {
-					const details = event.result.details as { phases?: TodoPhase[] } | undefined;
-					if (details?.phases) {
-						this.ctx.setTodos(details.phases);
+					const details = event.result.details as { todos?: TodoItem[] } | undefined;
+					if (details?.todos) {
+						this.ctx.setTodos(details.todos);
 					}
-				} else if (event.toolName === "todo_write" && event.isError) {
-					const textContent = event.result.content.find(
-						(content: { type: string; text?: string }) => content.type === "text",
-					)?.text;
-					this.ctx.showWarning(
-						`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo_write succeeds."}`,
-					);
 				}
 				if (event.toolName === "exit_plan_mode" && !event.isError) {
 					const details = event.result.details as ExitPlanModeDetails | undefined;
@@ -416,17 +285,7 @@ export class EventController {
 					this.ctx.streamingMessage = undefined;
 				}
 				await this.ctx.flushPendingModelSwitch();
-				for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
-					if (!this.#backgroundToolCallIds.has(toolCallId)) {
-						this.ctx.pendingTools.delete(toolCallId);
-					}
-				}
-				this.#backgroundToolCallIds = new Set(
-					Array.from(this.#backgroundToolCallIds).filter(toolCallId => this.ctx.pendingTools.has(toolCallId)),
-				);
-				this.#readToolCallArgs.clear();
-				this.#readToolCallAssistantComponents.clear();
-				this.#lastAssistantComponent = undefined;
+				this.ctx.pendingTools.clear();
 				this.ctx.ui.requestRender();
 				this.sendCompletionNotification();
 				break;

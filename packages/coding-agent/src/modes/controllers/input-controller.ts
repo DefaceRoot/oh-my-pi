@@ -1,13 +1,13 @@
 import * as fs from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { copyToClipboard, readImageFromClipboard, sanitizeText } from "@oh-my-pi/pi-natives";
+import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
 import { $env } from "@oh-my-pi/pi-utils";
+import type { SettingPath, SettingValue } from "../../config/settings";
 import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
-import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
@@ -21,23 +21,15 @@ function isExpandable(obj: unknown): obj is Expandable {
 }
 
 export class InputController {
+
 	constructor(private ctx: InteractiveModeContext) {}
 
 	setupKeyHandlers(): void {
-		this.ctx.editor.shouldBypassAutocompleteOnEscape = () =>
-			Boolean(
-				this.ctx.loadingAnimation ||
-					this.ctx.session.isStreaming ||
-					this.ctx.session.isCompacting ||
-					this.ctx.session.isGeneratingHandoff ||
-					this.ctx.session.isBashRunning ||
-					this.ctx.session.isPythonRunning ||
-					this.ctx.autoCompactionLoader ||
-					this.ctx.retryLoader ||
-					this.ctx.autoCompactionEscapeHandler ||
-					this.ctx.retryEscapeHandler,
-			);
 		this.ctx.editor.onEscape = () => {
+			if (this.ctx.isSubagentViewActive()) {
+				this.ctx.exitSubagentView();
+				return;
+			}
 			if (this.ctx.loadingAnimation) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.ctx.session.isBashRunning) {
@@ -74,7 +66,13 @@ export class InputController {
 		this.ctx.editor.onCtrlC = () => this.handleCtrlC();
 		this.ctx.editor.onCtrlD = () => this.handleCtrlD();
 		this.ctx.editor.onCtrlZ = () => this.handleCtrlZ();
-		this.ctx.editor.onShiftTab = () => this.cycleThinkingLevel();
+		this.ctx.editor.onShiftTab = () => {
+			if (this.ctx.isSubagentViewActive()) {
+				void this.ctx.cycleSubagentNestedView(-1);
+				return;
+			}
+			this.cycleThinkingLevel();
+		};
 		this.ctx.editor.onCtrlP = () => this.cycleRoleModel();
 		this.ctx.editor.onShiftCtrlP = () => this.cycleRoleModel({ temporary: true });
 		this.ctx.editor.onAltP = () => this.ctx.showModelSelector({ temporaryOnly: true });
@@ -87,7 +85,6 @@ export class InputController {
 		this.ctx.editor.onCtrlG = () => void this.openExternalEditor();
 		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
-		this.ctx.editor.onCopyPrompt = () => this.handleCopyPrompt();
 
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
@@ -121,14 +118,36 @@ export class InputController {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showUserMessageSelector());
 		}
 		for (const key of this.ctx.keybindings.getKeys("resume")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				const hasResumeUiCommand = Boolean(this.ctx.session.extensionRunner?.getCommand("resume-ui"));
+				if (hasResumeUiCommand) {
+					void this.ctx.session.prompt("/resume-ui").catch(() => {
+						this.ctx.showSessionSelector();
+					});
+					return;
+				}
+				this.ctx.showSessionSelector();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
-		for (const key of this.ctx.keybindings.getKeys("toggleSTT")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
+		for (const key of this.ctx.keybindings.getKeys("cycleSubagentForward")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.handleSubagentNavigatorToggle());
 		}
+		for (const key of this.ctx.keybindings.getKeys("cycleSubagentBackward")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.handleSubagentRootNavigation(-1, { allowOpen: true }));
+		}
+		for (const key of this.ctx.keybindings.getKeys("cycleAgentMode")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.cycleAgentMode());
+		}
+		this.ctx.editor.setCustomKeyHandler("left", () => this.handleSubagentRootNavigation(-1));
+		this.ctx.editor.setCustomKeyHandler("right", () => this.handleSubagentRootNavigation(1));
+		this.ctx.editor.setCustomKeyHandler("up", () => this.handleSubagentArrowNavigation(-1));
+		this.ctx.editor.setCustomKeyHandler("down", () => this.handleSubagentArrowNavigation(1));
+		this.ctx.editor.setCustomKeyHandler("tab", () => this.handleSubagentNestedNavigation(1));
+		this.ctx.editor.setCustomKeyHandler("a", () => this.handleSubagentAgentToggle());
+		this.ctx.editor.setCustomKeyHandler("A", () => this.handleSubagentAgentToggle());
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
@@ -185,13 +204,186 @@ export class InputController {
 
 			if (!text) return;
 
-			// Handle built-in slash commands
-			if (
-				await executeBuiltinSlashCommand(text, {
-					ctx: this.ctx,
-					handleBackgroundCommand: () => this.handleBackgroundCommand(),
-				})
-			) {
+			// Handle slash commands
+			if (text === "/settings") {
+				this.ctx.showSettingsSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/plan") {
+				await this.ctx.handlePlanModeCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/model" || text === "/models") {
+				this.ctx.showModelSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/agent" || text.startsWith("/agent ")) {
+				const arg = text.slice(6).trim().toLowerCase();
+				this.ctx.editor.setText("");
+				if (!arg || arg === "toggle") {
+					await this.cycleAgentMode();
+					return;
+				}
+				if (arg === "default" || arg === "orchestrator") {
+					await this.switchAgentMode(arg);
+					return;
+				}
+				if (arg === "status") {
+					this.showAgentModeStatus();
+					return;
+				}
+				this.ctx.showStatus("Usage: /agent [toggle|default|orchestrator|status]");
+				return;
+			}
+			if (text.startsWith("/export")) {
+				await this.ctx.handleExportCommand(text);
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/dump") {
+				await this.ctx.handleDumpCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/share") {
+				await this.ctx.handleShareCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/browser" || text.startsWith("/browser ")) {
+				const arg = text.slice(8).trim().toLowerCase();
+				const current = settings.get("browser.headless" as SettingPath) as boolean;
+				let next = current;
+				if (!(settings.get("browser.enabled" as SettingPath) as boolean)) {
+					this.ctx.showWarning("Browser tool is disabled (enable in settings)");
+					this.ctx.editor.setText("");
+					return;
+				}
+				if (!arg) {
+					next = !current;
+				} else if (["headless", "hidden"].includes(arg)) {
+					next = true;
+				} else if (["visible", "show", "headful"].includes(arg)) {
+					next = false;
+				} else {
+					this.ctx.showStatus("Usage: /browser [headless|visible]");
+					this.ctx.editor.setText("");
+					return;
+				}
+				settings.set("browser.headless" as SettingPath, next as SettingValue<SettingPath>);
+				const tool = this.ctx.session.getToolByName("browser");
+				if (tool && "restartForModeChange" in tool) {
+					try {
+						await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
+					} catch (error) {
+						this.ctx.showWarning(
+							`Failed to restart browser: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						this.ctx.editor.setText("");
+						return;
+					}
+				}
+				this.ctx.showStatus(`Browser mode: ${next ? "headless" : "visible"}`);
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/copy") {
+				await this.ctx.handleCopyCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/session") {
+				await this.ctx.handleSessionCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/usage") {
+				await this.ctx.handleUsageCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/changelog") {
+				await this.ctx.handleChangelogCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/hotkeys") {
+				this.ctx.handleHotkeysCommand();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/extensions" || text === "/status") {
+				this.ctx.showExtensionsDashboard();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/branch") {
+				if (settings.get("doubleEscapeAction") === "tree") {
+					this.ctx.showTreeSelector();
+				} else {
+					this.ctx.showUserMessageSelector();
+				}
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/tree") {
+				this.ctx.showTreeSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/login") {
+				this.ctx.showOAuthSelector("login");
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/logout") {
+				this.ctx.showOAuthSelector("logout");
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/new") {
+				this.ctx.editor.setText("");
+				await this.ctx.handleClearCommand();
+				return;
+			}
+			if (text === "/fork") {
+				this.ctx.editor.setText("");
+				await this.ctx.handleForkCommand();
+				return;
+			}
+			if (text === "/compact" || text.startsWith("/compact ")) {
+				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
+				this.ctx.editor.setText("");
+				await this.ctx.handleCompactCommand(customInstructions);
+				return;
+			}
+			if (text === "/handoff" || text.startsWith("/handoff ")) {
+				const customInstructions = text.startsWith("/handoff ") ? text.slice(9).trim() : undefined;
+				this.ctx.editor.setText("");
+				await this.ctx.handleHandoffCommand(customInstructions);
+				return;
+			}
+			if (text === "/background" || text === "/bg") {
+				this.ctx.editor.setText("");
+				this.handleBackgroundCommand();
+				return;
+			}
+			if (text === "/debug") {
+				this.ctx.showDebugSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/resume") {
+				this.ctx.showSessionSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/quit" || text === "/exit") {
+				this.ctx.editor.setText("");
+				void this.ctx.shutdown();
 				return;
 			}
 
@@ -225,7 +417,6 @@ export class InputController {
 								content: message,
 								display: true,
 								details,
-								attribution: "user",
 							},
 							{ streamingBehavior: "followUp" },
 						);
@@ -300,7 +491,7 @@ export class InputController {
 			this.ctx.flushPendingBashComponents();
 
 			// Generate session title on first message
-			const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
+			const hasUserMessages = this.ctx.agent.state.messages.some((m: AgentMessage) => m.role === "user");
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				const registry = this.ctx.session.modelRegistry;
 				const smolModel = this.ctx.settings.getModelRole("smol");
@@ -362,6 +553,53 @@ export class InputController {
 		}
 	}
 
+	private handleSubagentNavigatorToggle(): boolean {
+		if (this.ctx.isSubagentViewActive()) {
+			this.ctx.exitSubagentView();
+			return true;
+		}
+		this.ctx.showStatus("Subagent navigator: Up/Down task, Tab cycle nested, Enter open transcript, Esc close");
+		void this.ctx.cycleSubagentView(1);
+		return true;
+	}
+
+	private handleSubagentArrowNavigation(direction: 1 | -1): boolean {
+		if (this.ctx.isSubagentViewActive() && this.ctx.isSubagentNestedArrowModeEnabled()) {
+			void this.ctx.cycleSubagentNestedView(direction);
+			return true;
+		}
+		return this.handleSubagentRootNavigation(direction);
+	}
+
+	private handleSubagentRootNavigation(direction: 1 | -1, options?: { allowOpen?: boolean }): boolean {
+		if (!this.ctx.isSubagentViewActive()) {
+			if (!options?.allowOpen) {
+				return false;
+			}
+			this.ctx.showStatus("Subagent navigator: Up/Down task, Tab cycle nested, Enter open transcript, Esc close");
+			void this.ctx.cycleSubagentView(direction);
+			return true;
+		}
+		void this.ctx.cycleSubagentView(direction);
+		return true;
+	}
+
+	private handleSubagentNestedNavigation(direction: 1 | -1): boolean {
+		if (!this.ctx.isSubagentViewActive()) {
+			return false;
+		}
+		void this.ctx.cycleSubagentNestedView(direction);
+		return true;
+	}
+
+	private handleSubagentAgentToggle(): boolean {
+		if (!this.ctx.isSubagentViewActive()) {
+			return false;
+		}
+		void this.cycleAgentMode();
+		return true;
+	}
+
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
 		const text = this.ctx.editor.getText().trim();
@@ -393,7 +631,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort();
+				this.ctx.agent.abort();
 			}
 			return 0;
 		}
@@ -403,7 +641,7 @@ export class InputController {
 		this.ctx.editor.setText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort();
+			this.ctx.agent.abort();
 		}
 		return allQueued.length;
 	}
@@ -503,23 +741,6 @@ export class InputController {
 		}
 	}
 
-	/** Copy current prompt text to system clipboard. */
-	handleCopyPrompt(): void {
-		const text = this.ctx.editor.getText();
-		if (!text) {
-			this.ctx.showStatus("Nothing to copy");
-			return;
-		}
-		try {
-			copyToClipboard(text);
-			const sanitized = sanitizeText(text);
-			const preview = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
-			this.ctx.showStatus(`Copied: ${preview}`);
-		} catch {
-			this.ctx.showWarning("Failed to copy to clipboard");
-		}
-	}
-
 	cycleThinkingLevel(): void {
 		const newLevel = this.ctx.session.cycleThinkingLevel();
 		if (newLevel === undefined) {
@@ -565,6 +786,97 @@ export class InputController {
 		}
 	}
 
+	async cycleAgentMode(): Promise<void> {
+		if (this.ctx.session.isStreaming) {
+			this.ctx.showWarning("Wait for the current response to finish before switching agent mode.");
+			return;
+		}
+		const currentRole = this.resolveCurrentAgentRole();
+		let nextRole: "default" | "orchestrator" | "plan";
+		if (currentRole === "default") nextRole = "orchestrator";
+		else if (currentRole === "orchestrator") nextRole = "plan";
+		else nextRole = "default";
+		await this.switchAgentMode(nextRole);
+	}
+
+	private resolveCurrentAgentRole(): "default" | "orchestrator" | "plan" | "custom" {
+		const defaultModel = this.ctx.session.resolveRoleModel("default");
+		const orchestratorModel = this.ctx.session.resolveRoleModel("orchestrator");
+		const planModel = this.ctx.session.resolveRoleModel("plan");
+
+		const lastRole = this.ctx.sessionManager.getLastModelChangeRole();
+		if (lastRole === "default" || lastRole === "orchestrator" || lastRole === "plan") {
+			return lastRole;
+		}
+
+		const currentModel = this.ctx.session.model;
+		if (defaultModel && currentModel?.provider === defaultModel.provider && currentModel?.id === defaultModel.id) {
+			return "default";
+		}
+		if (orchestratorModel && currentModel?.provider === orchestratorModel.provider && currentModel?.id === orchestratorModel.id) {
+			return "orchestrator";
+		}
+		if (planModel && currentModel?.provider === planModel.provider && currentModel?.id === planModel.id) {
+			return "plan";
+		}
+		return "custom";
+	}
+
+	private showAgentModeStatus(): void {
+		const role = this.resolveCurrentAgentRole();
+		const model = this.ctx.session.model;
+		const modelLabel = model ? model.name || model.id : "no-model";
+		this.ctx.showStatus(`Agent mode: ${theme.bold(theme.fg("accent", role))} (${modelLabel})`, { dim: false });
+	}
+
+	private async switchAgentMode(targetRole: "default" | "orchestrator" | "plan"): Promise<void> {
+		const configuredDefaultRole = settings.getModelRole("default");
+		const configuredOrchestratorRole = settings.getModelRole("orchestrator");
+		const configuredPlanRole = settings.getModelRole("plan");
+		if (!configuredDefaultRole || !configuredOrchestratorRole) {
+			this.ctx.showWarning("Configure both default and orchestrator role models first (use /model).");
+			return;
+		}
+		if (targetRole === "plan" && !configuredPlanRole) {
+			this.ctx.showWarning("Configure the plan role model first (use /model -> Set as Plan).");
+			return;
+		}
+
+		const defaultModel = this.ctx.session.resolveRoleModel("default");
+		const orchestratorModel = this.ctx.session.resolveRoleModel("orchestrator");
+		const planModel = this.ctx.session.resolveRoleModel("plan");
+		if (!defaultModel || !orchestratorModel) {
+			this.ctx.showWarning(
+				"Configured default/orchestrator model is unavailable (check API keys and /model assignments).",
+			);
+			return;
+		}
+		if (targetRole === "plan" && !planModel) {
+			this.ctx.showWarning("Plan role model is unavailable (check API keys and /model assignments).");
+			return;
+		}
+
+		const nextModel =
+			targetRole === "orchestrator" ? orchestratorModel! :
+			targetRole === "plan" ? planModel! :
+			defaultModel;
+		const nextModelRef = `${nextModel.provider}/${nextModel.id}`;
+
+		try {
+			await this.ctx.session.setModelTemporary(nextModel);
+			this.ctx.sessionManager.appendModelChange(nextModelRef, targetRole);
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+			const modelLabel = nextModel.name || nextModel.id;
+			this.ctx.showStatus(
+				`Agent mode: ${theme.bold(theme.fg("accent", targetRole))} (${modelLabel}) · session only (/model controls defaults)`,
+				{ dim: false },
+			);
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	toggleToolOutputExpansion(): void {
 		this.setToolsExpanded(!this.ctx.toolOutputExpanded);
 	}
@@ -597,15 +909,15 @@ export class InputController {
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	#getEditorTerminalPath(): string | null {
+	private getEditorTerminalPath(): string | null {
 		if (process.platform === "win32") {
 			return null;
 		}
 		return "/dev/tty";
 	}
 
-	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = this.#getEditorTerminalPath();
+	private async openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
+		const terminalPath = this.getEditorTerminalPath();
 		if (!terminalPath) {
 			return null;
 		}
@@ -627,7 +939,7 @@ export class InputController {
 
 		let ttyHandle: fs.FileHandle | null = null;
 		try {
-			ttyHandle = await this.#openEditorTerminalHandle();
+			ttyHandle = await this.openEditorTerminalHandle();
 			this.ctx.ui.stop();
 
 			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = ttyHandle

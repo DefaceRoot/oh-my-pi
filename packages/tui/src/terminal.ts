@@ -1,4 +1,3 @@
-import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
@@ -13,8 +12,6 @@ let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
 
-const STD_INPUT_HANDLE = -10;
-const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -30,7 +27,7 @@ export function emergencyTerminalRestore(): void {
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
 				"\x1b[?2004l" + // Disable bracketed paste
-					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
+					"\x1b[?1000l\x1b[?1003l\x1b[?1006l" + // Disable mouse tracking
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[?25h", // Show cursor
 			);
@@ -42,8 +39,6 @@ export function emergencyTerminalRestore(): void {
 		// Terminal may already be dead during crash cleanup - ignore errors
 	}
 }
-/** Terminal-reported appearance (dark/light mode). */
-export type TerminalAppearance = "dark" | "light";
 export interface Terminal {
 	// Start the terminal with input and resize handlers
 	start(onInput: (data: string) => void, onResize: () => void): void;
@@ -83,56 +78,35 @@ export interface Terminal {
 
 	// Title operations
 	setTitle(title: string): void; // Set terminal window title
-
-	/**
-	 * Register a callback for Mode 2031 dark/light appearance change notifications.
-	 * Supported by Ghostty, Kitty, Contour, VTE (GNOME Terminal), and tmux 3.6+.
-	 * The callback fires when the terminal reports a change; it does NOT fire for the initial query.
-	 */
-	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
-
-	/** The last appearance reported by the terminal, or undefined if not yet known. */
-	get appearance(): TerminalAppearance | undefined;
 }
 
 /**
  * Real terminal using process.stdin/stdout
  */
 export class ProcessTerminal implements Terminal {
-	#wasRaw = false;
-	#inputHandler?: (data: string) => void;
-	#resizeHandler?: () => void;
-	#kittyProtocolActive = false;
-	#stdinBuffer?: StdinBuffer;
-	#stdinDataHandler?: (data: string) => void;
-	#dead = false;
-	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
-	#windowsVTInputRestore?: () => void;
-	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
-	#appearance: TerminalAppearance | undefined;
+	private wasRaw = false;
+	private inputHandler?: (data: string) => void;
+	private resizeHandler?: () => void;
+	private _kittyProtocolActive = false;
+	private stdinBuffer?: StdinBuffer;
+	private stdinDataHandler?: (data: string) => void;
+	private dead = false;
+	private writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 
 	get kittyProtocolActive(): boolean {
-		return this.#kittyProtocolActive;
-	}
-
-	get appearance(): TerminalAppearance | undefined {
-		return this.#appearance;
-	}
-
-	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
-		this.#appearanceCallbacks.push(callback);
+		return this._kittyProtocolActive;
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
-		this.#inputHandler = onInput;
-		this.#resizeHandler = onResize;
+		this.inputHandler = onInput;
+		this.resizeHandler = onResize;
 
 		// Register for emergency cleanup
 		activeTerminal = this;
 		terminalEverStarted = true;
 
 		// Save previous state and enable raw mode
-		this.#wasRaw = process.stdin.isRaw || false;
+		this.wasRaw = process.stdin.isRaw || false;
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(true);
 		}
@@ -140,10 +114,12 @@ export class ProcessTerminal implements Terminal {
 		process.stdin.resume();
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
-		this.#safeWrite("\x1b[?2004h");
+		this.safeWrite("\x1b[?2004h");
+		// Enable mouse reporting (button + all-motion + SGR extended coordinates)
+		this.safeWrite("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
 
 		// Set up resize handler immediately
-		process.stdout.on("resize", this.#resizeHandler);
+		process.stdout.on("resize", this.resizeHandler);
 
 		// Refresh terminal dimensions - they may be stale after suspend/resume
 		// (SIGWINCH is lost while process is stopped). Unix only.
@@ -151,72 +127,10 @@ export class ProcessTerminal implements Terminal {
 			process.kill(process.pid, "SIGWINCH");
 		}
 
-		// On Windows, enable ENABLE_VIRTUAL_TERMINAL_INPUT so the console sends
-		// VT escape sequences (e.g. \x1b[Z for Shift+Tab) instead of raw console
-		// events that lose modifier information. Must run after setRawMode(true)
-		// since that resets console mode flags.
-		this.#enableWindowsVTInput();
 		// Query and enable Kitty keyboard protocol
 		// The query handler intercepts input temporarily, then installs the user's handler
 		// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
-		this.#queryAndEnableKittyProtocol();
-
-		// Enable Mode 2031: terminal will send DSR notifications on dark/light appearance changes.
-		// Query current mode with CSI ? 996 n, then subscribe with CSI ? 2031 h.
-		// Supported by Ghostty, Kitty, Contour, VTE/GNOME Terminal, tmux 3.6+.
-		// Unsupported terminals silently ignore these sequences.
-		this.#safeWrite("\x1b[?996n"); // Query current appearance
-		this.#safeWrite("\x1b[?2031h"); // Subscribe to appearance changes
-	}
-
-	/**
-	 * On Windows, add ENABLE_VIRTUAL_TERMINAL_INPUT to the stdin console mode
-	 * so modified keys (for example Shift+Tab) arrive as VT escape sequences.
-	 */
-	#enableWindowsVTInput(): void {
-		if (process.platform !== "win32") return;
-		this.#restoreWindowsVTInput();
-		try {
-			const kernel32 = dlopen("kernel32.dll", {
-				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
-				GetConsoleMode: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
-				SetConsoleMode: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.bool },
-			});
-			const handle = kernel32.symbols.GetStdHandle(STD_INPUT_HANDLE);
-			const mode = new Uint32Array(1);
-			const modePtr = ptr(mode);
-			if (!modePtr || !kernel32.symbols.GetConsoleMode(handle, modePtr)) {
-				kernel32.close();
-				return;
-			}
-			const originalMode = mode[0]!;
-			const vtMode = originalMode | ENABLE_VIRTUAL_TERMINAL_INPUT;
-			if (vtMode !== originalMode && !kernel32.symbols.SetConsoleMode(handle, vtMode)) {
-				kernel32.close();
-				return;
-			}
-			this.#windowsVTInputRestore = () => {
-				try {
-					kernel32.symbols.SetConsoleMode(handle, originalMode);
-				} finally {
-					kernel32.close();
-				}
-			};
-		} catch {
-			// bun:ffi unavailable or console API unsupported; keep startup non-fatal.
-		}
-	}
-
-	#restoreWindowsVTInput(): void {
-		if (process.platform !== "win32") return;
-		const restore = this.#windowsVTInputRestore;
-		this.#windowsVTInputRestore = undefined;
-		if (!restore) return;
-		try {
-			restore();
-		} catch {
-			// Ignore restore errors during terminal teardown.
-		}
+		this.queryAndEnableKittyProtocol();
 	}
 
 	/**
@@ -227,65 +141,45 @@ export class ProcessTerminal implements Terminal {
 	 * This is done here (after stdinBuffer parsing) rather than on raw stdin
 	 * to handle the case where the response arrives split across multiple events.
 	 */
-	#setupStdinBuffer(): void {
-		this.#stdinBuffer = new StdinBuffer({ timeout: 10 });
+	private setupStdinBuffer(): void {
+		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
 
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
 
-		// Mode 2031 DSR response pattern: \x1b[?997;{1=dark,2=light}n
-		const appearanceDsrPattern = /^\x1b\[\?997;([12])n$/;
-
 		// Forward individual sequences to the input handler
-		this.#stdinBuffer.on("data", (sequence: string) => {
+		this.stdinBuffer.on("data", (sequence: string) => {
 			// Check for Kitty protocol response (only if not already enabled)
-			if (!this.#kittyProtocolActive) {
+			if (!this._kittyProtocolActive) {
 				const match = sequence.match(kittyResponsePattern);
 				if (match) {
-					this.#kittyProtocolActive = true;
+					this._kittyProtocolActive = true;
 					setKittyProtocolActive(true);
 
 					// Enable Kitty keyboard protocol (push flags)
 					// Flag 1 = disambiguate escape codes
 					// Flag 2 = report event types (press/repeat/release)
 					// Flag 4 = report alternate keys
-					this.#safeWrite("\x1b[>7u");
+					this.safeWrite("\x1b[>7u");
 					return; // Don't forward protocol response to TUI
 				}
 			}
 
-			// Check for Mode 2031 appearance DSR response: CSI ? 997 ; {1,2} n
-			const appearanceMatch = sequence.match(appearanceDsrPattern);
-			if (appearanceMatch) {
-				const mode: TerminalAppearance = appearanceMatch[1] === "1" ? "dark" : "light";
-				const changed = mode !== this.#appearance;
-				this.#appearance = mode;
-				if (changed) {
-					for (const cb of this.#appearanceCallbacks) {
-						try {
-							cb(mode);
-						} catch {
-							/* ignore callback errors */
-						}
-					}
-				}
-				return; // Don't forward DSR to TUI
-			}
-			if (this.#inputHandler) {
-				this.#inputHandler(sequence);
+			if (this.inputHandler) {
+				this.inputHandler(sequence);
 			}
 		});
 
 		// Re-wrap paste content with bracketed paste markers for existing editor handling
-		this.#stdinBuffer.on("paste", (content: string) => {
-			if (this.#inputHandler) {
-				this.#inputHandler(`\x1b[200~${content}\x1b[201~`);
+		this.stdinBuffer.on("paste", (content: string) => {
+			if (this.inputHandler) {
+				this.inputHandler(`\x1b[200~${content}\x1b[201~`);
 			}
 		});
 
 		// Handler that pipes stdin data through the buffer
-		this.#stdinDataHandler = (data: string) => {
-			this.#stdinBuffer!.process(data);
+		this.stdinDataHandler = (data: string) => {
+			this.stdinBuffer!.process(data);
 		};
 	}
 
@@ -298,23 +192,23 @@ export class ProcessTerminal implements Terminal {
 	 * The response is detected in setupStdinBuffer's data handler, which properly
 	 * handles the case where the response arrives split across multiple stdin events.
 	 */
-	#queryAndEnableKittyProtocol(): void {
-		this.#setupStdinBuffer();
-		process.stdin.on("data", this.#stdinDataHandler!);
-		this.#safeWrite("\x1b[?u");
+	private queryAndEnableKittyProtocol(): void {
+		this.setupStdinBuffer();
+		process.stdin.on("data", this.stdinDataHandler!);
+		this.safeWrite("\x1b[?u");
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
-		if (this.#kittyProtocolActive) {
+		if (this._kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
-			this.#safeWrite("\x1b[<u");
-			this.#kittyProtocolActive = false;
+			this.safeWrite("\x1b[<u");
+			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
 		}
 
-		const previousHandler = this.#inputHandler;
-		this.#inputHandler = undefined;
+		const previousHandler = this.inputHandler;
+		this.inputHandler = undefined;
 
 		let lastDataTime = Date.now();
 		const onData = () => {
@@ -334,7 +228,7 @@ export class ProcessTerminal implements Terminal {
 			}
 		} finally {
 			process.stdin.removeListener("data", onData);
-			this.#inputHandler = previousHandler;
+			this.inputHandler = previousHandler;
 		}
 	}
 
@@ -345,36 +239,32 @@ export class ProcessTerminal implements Terminal {
 		}
 
 		// Disable bracketed paste mode
-		this.#safeWrite("\x1b[?2004l");
-
-		// Disable Mode 2031 appearance change notifications
-		this.#safeWrite("\x1b[?2031l");
-		this.#appearanceCallbacks = [];
+		this.safeWrite("\x1b[?2004l");
+		// Disable mouse reporting
+		this.safeWrite("\x1b[?1000l\x1b[?1003l\x1b[?1006l");
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
-		if (this.#kittyProtocolActive) {
-			this.#safeWrite("\x1b[<u");
-			this.#kittyProtocolActive = false;
+		if (this._kittyProtocolActive) {
+			this.safeWrite("\x1b[<u");
+			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
 		}
 
-		this.#restoreWindowsVTInput();
 		// Clean up StdinBuffer
-		if (this.#stdinBuffer) {
-			this.#stdinBuffer.destroy();
-			this.#stdinBuffer = undefined;
+		if (this.stdinBuffer) {
+			this.stdinBuffer.destroy();
+			this.stdinBuffer = undefined;
 		}
 
 		// Remove event handlers
-		if (this.#stdinDataHandler) {
-			process.stdin.removeListener("data", this.#stdinDataHandler);
-			this.#stdinDataHandler = undefined;
+		if (this.stdinDataHandler) {
+			process.stdin.removeListener("data", this.stdinDataHandler);
+			this.stdinDataHandler = undefined;
 		}
-		this.#inputHandler = undefined;
-		this.#appearance = undefined;
-		if (this.#resizeHandler) {
-			process.stdout.removeListener("resize", this.#resizeHandler);
-			this.#resizeHandler = undefined;
+		this.inputHandler = undefined;
+		if (this.resizeHandler) {
+			process.stdout.removeListener("resize", this.resizeHandler);
+			this.resizeHandler = undefined;
 		}
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
@@ -384,28 +274,28 @@ export class ProcessTerminal implements Terminal {
 
 		// Restore raw mode state
 		if (process.stdin.setRawMode) {
-			process.stdin.setRawMode(this.#wasRaw);
+			process.stdin.setRawMode(this.wasRaw);
 		}
 	}
 
 	write(data: string): void {
-		this.#safeWrite(data);
-		if (this.#writeLogPath) {
+		this.safeWrite(data);
+		if (this.writeLogPath) {
 			try {
-				fs.appendFileSync(this.#writeLogPath, data, { encoding: "utf8" });
+				fs.appendFileSync(this.writeLogPath, data, { encoding: "utf8" });
 			} catch {
 				// Ignore logging errors
 			}
 		}
 	}
 
-	#safeWrite(data: string): void {
-		if (this.#dead) return;
+	private safeWrite(data: string): void {
+		if (this.dead) return;
 		try {
 			process.stdout.write(data);
 		} catch (err) {
 			// Any write failure means terminal is dead - no recovery possible
-			this.#dead = true;
+			this.dead = true;
 			logger.warn("terminal is dead - no recovery possible", { error: err, data });
 		}
 	}
@@ -421,36 +311,36 @@ export class ProcessTerminal implements Terminal {
 	moveBy(lines: number): void {
 		if (lines > 0) {
 			// Move down
-			this.#safeWrite(`\x1b[${lines}B`);
+			this.safeWrite(`\x1b[${lines}B`);
 		} else if (lines < 0) {
 			// Move up
-			this.#safeWrite(`\x1b[${-lines}A`);
+			this.safeWrite(`\x1b[${-lines}A`);
 		}
 		// lines === 0: no movement
 	}
 
 	hideCursor(): void {
-		this.#safeWrite("\x1b[?25l");
+		this.safeWrite("\x1b[?25l");
 	}
 
 	showCursor(): void {
-		this.#safeWrite("\x1b[?25h");
+		this.safeWrite("\x1b[?25h");
 	}
 
 	clearLine(): void {
-		this.#safeWrite("\x1b[K");
+		this.safeWrite("\x1b[K");
 	}
 
 	clearFromCursor(): void {
-		this.#safeWrite("\x1b[J");
+		this.safeWrite("\x1b[J");
 	}
 
 	clearScreen(): void {
-		this.#safeWrite("\x1b[H\x1b[0J"); // Move to home (1,1) and clear from cursor to end
+		this.safeWrite("\x1b[2J\x1b[H"); // Clear screen and move to home (1,1)
 	}
 
 	setTitle(title: string): void {
 		// OSC 0;title BEL - set terminal window title
-		this.#safeWrite(`\x1b]0;${title}\x07`);
+		this.safeWrite(`\x1b]0;${title}\x07`);
 	}
 }

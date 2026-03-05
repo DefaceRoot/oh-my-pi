@@ -8,7 +8,8 @@ import {
 	matchesKey,
 	setEditorKeybindings,
 } from "@oh-my-pi/pi-tui";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
 /**
  * Application-level actions (coding agent specific).
@@ -30,12 +31,14 @@ export type AppAction =
 	| "historySearch"
 	| "followUp"
 	| "dequeue"
+	| "cycleSubagentForward"
+	| "cycleSubagentBackward"
+	| "cycleAgentMode"
 	| "pasteImage"
 	| "newSession"
 	| "tree"
 	| "fork"
-	| "resume"
-	| "toggleSTT";
+	| "resume";
 
 /**
  * All configurable actions.
@@ -69,12 +72,14 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	externalEditor: "ctrl+g",
 	followUp: "ctrl+enter",
 	dequeue: "alt+up",
+	cycleSubagentForward: "ctrl+x",
+	cycleSubagentBackward: [],
+	cycleAgentMode: [],
 	pasteImage: "ctrl+v",
 	newSession: [],
 	tree: [],
 	fork: [],
 	resume: [],
-	toggleSTT: "alt+h",
 };
 
 /**
@@ -103,12 +108,14 @@ const APP_ACTIONS: AppAction[] = [
 	"externalEditor",
 	"followUp",
 	"dequeue",
+	"cycleSubagentForward",
+	"cycleSubagentBackward",
+	"cycleAgentMode",
 	"pasteImage",
 	"newSession",
 	"tree",
 	"fork",
 	"resume",
-	"toggleSTT",
 ];
 
 function isAppAction(action: string): action is AppAction {
@@ -168,11 +175,11 @@ export function formatKeyHints(keys: KeyId | KeyId[]): string {
  * Manages all keybindings (app + editor).
  */
 export class KeybindingsManager {
-	#appActionToKeys: Map<AppAction, KeyId[]>;
+	private appActionToKeys: Map<AppAction, KeyId[]>;
 
 	private constructor(private readonly config: KeybindingsConfig) {
-		this.#appActionToKeys = new Map();
-		this.#buildMaps();
+		this.appActionToKeys = new Map();
+		this.buildMaps();
 	}
 
 	/**
@@ -180,7 +187,7 @@ export class KeybindingsManager {
 	 */
 	static async create(agentDir: string = getAgentDir()): Promise<KeybindingsManager> {
 		const configPath = path.join(agentDir, "keybindings.json");
-		const config = await KeybindingsManager.#loadFromFile(configPath);
+		const config = await KeybindingsManager.loadFromFile(configPath);
 		const manager = new KeybindingsManager(config);
 
 		// Set up editor keybindings globally
@@ -202,23 +209,22 @@ export class KeybindingsManager {
 		return new KeybindingsManager(config);
 	}
 
-	static async #loadFromFile(path: string): Promise<KeybindingsConfig> {
+	private static async loadFromFile(path: string): Promise<KeybindingsConfig> {
 		try {
 			return await Bun.file(path).json();
 		} catch (error) {
-			if (isEnoent(error)) return {};
 			logger.warn("Failed to parse keybindings config", { path, error: String(error) });
 			return {};
 		}
 	}
 
-	#buildMaps(): void {
-		this.#appActionToKeys.clear();
+	private buildMaps(): void {
+		this.appActionToKeys.clear();
 
 		// Set defaults for app actions
 		for (const [action, keys] of Object.entries(DEFAULT_APP_KEYBINDINGS)) {
 			const keyArray = Array.isArray(keys) ? keys : [keys];
-			this.#appActionToKeys.set(
+			this.appActionToKeys.set(
 				action as AppAction,
 				keyArray.map(key => normalizeKeyId(key as KeyId)),
 			);
@@ -228,7 +234,7 @@ export class KeybindingsManager {
 		for (const [action, keys] of Object.entries(this.config)) {
 			if (keys === undefined || !isAppAction(action)) continue;
 			const keyArray = Array.isArray(keys) ? keys : [keys];
-			this.#appActionToKeys.set(
+			this.appActionToKeys.set(
 				action,
 				keyArray.map(key => normalizeKeyId(key as KeyId)),
 			);
@@ -239,7 +245,7 @@ export class KeybindingsManager {
 	 * Check if input matches an app action.
 	 */
 	matches(data: string, action: AppAction): boolean {
-		const keys = this.#appActionToKeys.get(action);
+		const keys = this.appActionToKeys.get(action);
 		if (!keys) return false;
 		for (const key of keys) {
 			if (matchesKey(data, key)) return true;
@@ -251,7 +257,7 @@ export class KeybindingsManager {
 	 * Get keys bound to an app action.
 	 */
 	getKeys(action: AppAction): KeyId[] {
-		return this.#appActionToKeys.get(action) ?? [];
+		return this.appActionToKeys.get(action) ?? [];
 	}
 
 	/**

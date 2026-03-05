@@ -1,6 +1,5 @@
 import * as os from "node:os";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
@@ -15,8 +14,73 @@ function withIcon(icon: string, text: string): string {
 	return icon ? `${icon} ${text}` : text;
 }
 
-function normalizePremiumRequests(value: number): number {
-	return Math.round((value + Number.EPSILON) * 100) / 100;
+function formatTokens(n: number): string {
+	if (n < 1000) return n.toString();
+	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+	if (n < 1000000) return `${Math.round(n / 1000)}k`;
+	if (n < 10000000) return `${(n / 1000000).toFixed(1)}M`;
+	return `${Math.round(n / 1000000)}M`;
+}
+
+function formatDuration(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const hours = Math.floor(minutes / 60);
+
+	if (hours > 0) return `${hours}h${minutes % 60}m`;
+	if (minutes > 0) return `${minutes}m${seconds % 60}s`;
+	return `${seconds}s`;
+}
+
+function isWorktreePath(cwd: string): boolean {
+	return cwd.includes(`${path.sep}.worktrees${path.sep}`);
+}
+
+function formatDisplayedPath(cwd: string): string {
+	if (!isWorktreePath(cwd)) return cwd;
+
+	const marker = `${path.sep}.worktrees${path.sep}`;
+	const markerIndex = cwd.indexOf(marker);
+	if (markerIndex === -1) return cwd;
+
+	const repoRoot = cwd.slice(0, markerIndex);
+	const repoName = path.basename(repoRoot);
+	const worktreeRel = cwd.slice(markerIndex + 1); // drop leading slash
+	return `${repoName}/${worktreeRel}`;
+}
+
+function modelMatchesRole(
+	model: { provider: string; id: string } | undefined,
+	configuredModel: string | undefined,
+): boolean {
+	if (!model || !configuredModel) return false;
+	const slash = configuredModel.indexOf("/");
+	if (slash > 0) {
+		const provider = configuredModel.slice(0, slash);
+		const id = configuredModel.slice(slash + 1);
+		return provider === model.provider && id === model.id;
+	}
+	return configuredModel.toLowerCase() === model.id.toLowerCase();
+}
+
+function resolveAgentModeLabel(ctx: SegmentContext): "default" | "orchestrator" | "plan" | "custom" {
+	const sessionRole = ctx.session.sessionManager.getLastModelChangeRole();
+	if (sessionRole === "default" || sessionRole === "orchestrator" || sessionRole === "plan") {
+		return sessionRole;
+	}
+
+	const currentModel = ctx.session.state.model;
+	if (modelMatchesRole(currentModel, ctx.session.settings.getModelRole("default"))) {
+		return "default";
+	}
+	if (modelMatchesRole(currentModel, ctx.session.settings.getModelRole("orchestrator"))) {
+		return "orchestrator";
+	}
+	if (modelMatchesRole(currentModel, ctx.session.settings.getModelRole("plan"))) {
+		return "plan";
+	}
+
+	return "custom";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -43,6 +107,15 @@ const modelSegment: StatusLineSegment = {
 		}
 
 		let content = withIcon(theme.icon.model, modelName);
+		const agentModeLabel = resolveAgentModeLabel(ctx);
+		if (agentModeLabel === "orchestrator") {
+			content += `${theme.sep.dot}\x1b[1;38;5;208mOrchestrator\x1b[22;39m`;
+		} else if (agentModeLabel === "default") {
+			content += `${theme.sep.dot}${theme.fg("success", "Default")}`;
+		} else if (agentModeLabel === "plan") {
+			content += `${theme.sep.dot}${theme.fg("accent", "Plan")}`;
+		}
+		// custom mode: show nothing extra
 
 		// Add thinking level with dot separator
 		if (opts.showThinkingLevel !== false && state.model?.reasoning) {
@@ -79,14 +152,13 @@ const pathSegment: StatusLineSegment = {
 	render(ctx) {
 		const opts = ctx.options.path ?? {};
 
-		let pwd = getProjectDir();
+		let pwd = formatDisplayedPath(process.cwd());
 
 		if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);
 		}
-		if (opts.stripWorkPrefix !== false) {
-			if (pwd.startsWith("/work/")) pwd = pwd.slice(6);
-			else if (pwd.startsWith("~/Projects/")) pwd = pwd.slice(11);
+		if (opts.stripWorkPrefix !== false && pwd.startsWith("/work/")) {
+			pwd = pwd.slice(6);
 		}
 
 		const maxLen = opts.maxLength ?? 40;
@@ -106,6 +178,8 @@ const gitSegment: StatusLineSegment = {
 	render(ctx) {
 		const { branch, status } = ctx.git;
 		if (!branch && !status) return { content: "", visible: false };
+		const cwd = process.cwd();
+		const inWorktree = isWorktreePath(cwd);
 
 		const opts = ctx.options.git ?? {};
 		const gitStatus = status;
@@ -114,7 +188,12 @@ const gitSegment: StatusLineSegment = {
 		const showBranch = opts.showBranch !== false;
 		let content = "";
 		if (showBranch && branch) {
-			content = withIcon(theme.icon.branch, branch);
+			const branchIcon = inWorktree
+				? theme.icon.branch === "@"
+					? "wt"
+					: ""
+				: theme.icon.branch;
+			content = withIcon(branchIcon, branch);
 		}
 
 		// Add status indicators
@@ -146,18 +225,6 @@ const gitSegment: StatusLineSegment = {
 	},
 };
 
-const prSegment: StatusLineSegment = {
-	id: "pr",
-	render(ctx) {
-		const { pr } = ctx.git;
-		if (!pr) return { content: "", visible: false };
-
-		const label = withIcon(theme.icon.pr, `#${pr.number}`);
-		const content = TERMINAL.hyperlinks ? `\x1b]8;;${pr.url}\x07${label}\x1b]8;;\x07` : label;
-		return { content: theme.fg("accent", content), visible: true };
-	},
-};
-
 const subagentsSegment: StatusLineSegment = {
 	id: "subagents",
 	render(ctx) {
@@ -175,7 +242,7 @@ const tokenInSegment: StatusLineSegment = {
 		const { input } = ctx.usageStats;
 		if (!input) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.input, formatNumber(input));
+		const content = withIcon(theme.icon.input, formatTokens(input));
 		return { content: theme.fg("statusLineSpend", content), visible: true };
 	},
 };
@@ -186,7 +253,7 @@ const tokenOutSegment: StatusLineSegment = {
 		const { output } = ctx.usageStats;
 		if (!output) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.output, formatNumber(output));
+		const content = withIcon(theme.icon.output, formatTokens(output));
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
 };
@@ -198,40 +265,26 @@ const tokenTotalSegment: StatusLineSegment = {
 		const total = input + output + cacheRead + cacheWrite;
 		if (!total) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.tokens, formatNumber(total));
+		const content = withIcon(theme.icon.tokens, formatTokens(total));
 		return { content: theme.fg("statusLineSpend", content), visible: true };
-	},
-};
-
-const tokenRateSegment: StatusLineSegment = {
-	id: "token_rate",
-	render(ctx) {
-		const { tokensPerSecond } = ctx.usageStats;
-		if (!tokensPerSecond) return { content: "", visible: false };
-
-		const content = withIcon(theme.icon.output, `${tokensPerSecond.toFixed(1)}/s`);
-		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
 };
 
 const costSegment: StatusLineSegment = {
 	id: "cost",
 	render(ctx) {
-		const { cost, premiumRequests } = ctx.usageStats;
-		const normalizedPremiumRequests = normalizePremiumRequests(premiumRequests);
+		const { cost } = ctx.usageStats;
 		const state = ctx.session.state;
 		const usingSubscription = state.model ? ctx.session.modelRegistry.isUsingOAuth(state.model) : false;
 
-		if (!cost && !usingSubscription && !normalizedPremiumRequests) {
+		if (usingSubscription && !cost) {
 			return { content: "", visible: false };
 		}
-
-		const billingParts: string[] = [];
-		if (cost) billingParts.push(`$${cost.toFixed(2)}`);
-		if (normalizedPremiumRequests) billingParts.push(`★ ${formatNumber(normalizedPremiumRequests)}`);
-		if (usingSubscription) billingParts.push("(sub)");
-
-		return { content: theme.fg("statusLineCost", billingParts.join(" ")), visible: true };
+		if (!cost && !usingSubscription) {
+			return { content: "", visible: false };
+		}
+		const costDisplay = `$${cost.toFixed(2)}`;
+		return { content: theme.fg("statusLineCost", costDisplay), visible: true };
 	},
 };
 
@@ -242,7 +295,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 
 		const autoIcon = ctx.autoCompactEnabled && theme.icon.auto ? ` ${theme.icon.auto}` : "";
-		const text = `${pct.toFixed(1)}%/${formatNumber(window)}${autoIcon}`;
+		const text = `${pct.toFixed(1)}%/${formatTokens(window)}${autoIcon}`;
 
 		let content: string;
 		if (pct > 90) {
@@ -264,7 +317,7 @@ const contextTotalSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 		if (!window) return { content: "", visible: false };
 		return {
-			content: theme.fg("statusLineContext", withIcon(theme.icon.context, formatNumber(window))),
+			content: theme.fg("statusLineContext", withIcon(theme.icon.context, formatTokens(window))),
 			visible: true,
 		};
 	},
@@ -329,7 +382,7 @@ const cacheReadSegment: StatusLineSegment = {
 		const { cacheRead } = ctx.usageStats;
 		if (!cacheRead) return { content: "", visible: false };
 
-		const parts = [theme.icon.cache, theme.icon.input, formatNumber(cacheRead)].filter(Boolean);
+		const parts = [theme.icon.cache, theme.icon.input, formatTokens(cacheRead)].filter(Boolean);
 		const content = parts.join(" ");
 		return { content: theme.fg("statusLineSpend", content), visible: true };
 	},
@@ -341,7 +394,7 @@ const cacheWriteSegment: StatusLineSegment = {
 		const { cacheWrite } = ctx.usageStats;
 		if (!cacheWrite) return { content: "", visible: false };
 
-		const parts = [theme.icon.cache, theme.icon.output, formatNumber(cacheWrite)].filter(Boolean);
+		const parts = [theme.icon.cache, theme.icon.output, formatTokens(cacheWrite)].filter(Boolean);
 		const content = parts.join(" ");
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
@@ -357,12 +410,10 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	plan_mode: planModeSegment,
 	path: pathSegment,
 	git: gitSegment,
-	pr: prSegment,
 	subagents: subagentsSegment,
 	token_in: tokenInSegment,
 	token_out: tokenOutSegment,
 	token_total: tokenTotalSegment,
-	token_rate: tokenRateSegment,
 	cost: costSegment,
 	context_pct: contextPctSegment,
 	context_total: contextTotalSegment,
