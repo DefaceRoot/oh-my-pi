@@ -66,10 +66,10 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const SUBAGENT_MODEL_ROLES = new Set<ModelRole>(["subagent", "explore", "lint", "merge", "curator", "research", "verifier", "designer"]);
+const SUBAGENT_MODEL_ROLES = new Set<ModelRole>(["implement", "explore", "lint", "merge", "curator", "research", "verifier", "designer"]);
 
 function resolveSubagentRole(agentName: string): ModelRole {
-	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "subagent";
+	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "implement";
 }
 
 function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
@@ -87,7 +87,7 @@ function normalizeModelOverride(value: string | string[] | undefined): string | 
 function resolveRoleModelOverride(session: ToolSession, agentName: string): string | string[] | undefined {
 	const subagentRole = resolveSubagentRole(agentName);
 	const roleModelLookupOrder: ModelRole[] =
-		subagentRole === "subagent" ? ["subagent", "default"] : [subagentRole, "subagent", "default"];
+		subagentRole === "implement" ? ["implement", "default"] : [subagentRole, "implement", "default"];
 	return roleModelLookupOrder
 		.map(role => normalizeModelOverride(session.settings.getModelRole(role)))
 		.find((value): value is string | string[] => value !== undefined);
