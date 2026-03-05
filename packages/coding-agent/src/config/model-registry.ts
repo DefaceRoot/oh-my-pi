@@ -33,7 +33,21 @@ export function isAuthenticated(apiKey: string | undefined | null): apiKey is st
 	return Boolean(apiKey) && apiKey !== kNoAuth;
 }
 
-export type ModelRole = "default" | "smol" | "slow" | "plan" | "commit";
+export type ModelRole =
+	| "default"
+	| "orchestrator"
+	| "smol"
+	| "slow"
+	| "plan"
+	| "commit"
+	| "subagent"
+	| "explore"
+	| "lint"
+	| "merge"
+	| "curator"
+	| "research"
+	| "verifier"
+	| "designer";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -43,13 +57,37 @@ export interface ModelRoleInfo {
 
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	default: { tag: "DEFAULT", name: "Default", color: "success" },
+	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent" },
 	smol: { tag: "SMOL", name: "Fast", color: "warning" },
 	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
+	subagent: { tag: "IMPL", name: "Phase Agent", color: "error" },
+	explore: { tag: "EXPLORE", name: "Explore", color: "warning" },
+	lint: { tag: "LINT", name: "Lint", color: "muted" },
+	merge: { tag: "MERGE", name: "Merge", color: "warning" },
+	curator: { tag: "CURATE", name: "Curator", color: "muted" },
+	research: { tag: "RESEARCH", name: "Research", color: "accent" },
+	verifier: { tag: "VERIFY", name: "Verifier", color: "muted" },
+	designer: { tag: "DESIGN", name: "Frontend", color: "accent" },
 };
 
-export const MODEL_ROLE_IDS: ModelRole[] = ["default", "smol", "slow", "plan", "commit"];
+export const MODEL_ROLE_IDS: ModelRole[] = [
+	"default",
+	"orchestrator",
+	"smol",
+	"slow",
+	"plan",
+	"commit",
+	"subagent",
+	"explore",
+	"lint",
+	"merge",
+	"curator",
+	"research",
+	"verifier",
+	"designer",
+];
 
 const OpenRouterRoutingSchema = Type.Object({
 	only: Type.Optional(Type.Array(Type.String())),

@@ -20,6 +20,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
+import { type ModelRole } from "../config/model-registry";
 import { isDefaultModelAlias } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Theme } from "../modes/theme/theme";
@@ -65,6 +66,32 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
+const SUBAGENT_MODEL_ROLES = new Set<ModelRole>(["subagent", "explore", "lint", "merge", "curator", "research", "verifier", "designer"]);
+
+function resolveSubagentRole(agentName: string): ModelRole {
+	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "subagent";
+}
+
+function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
+	if (Array.isArray(value)) {
+		const normalized = value.map(pattern => pattern.trim()).filter(pattern => pattern.length > 0);
+		return normalized.length > 0 ? normalized : undefined;
+	}
+	if (typeof value === "string") {
+		const normalized = value.trim();
+		return normalized.length > 0 ? normalized : undefined;
+	}
+	return undefined;
+}
+
+function resolveRoleModelOverride(session: ToolSession, agentName: string): string | string[] | undefined {
+	const subagentRole = resolveSubagentRole(agentName);
+	const roleModelLookupOrder: ModelRole[] =
+		subagentRole === "subagent" ? ["subagent", "default"] : [subagentRole, "subagent", "default"];
+	return roleModelLookupOrder
+		.map(role => normalizeModelOverride(session.settings.getModelRole(role)))
+		.find((value): value is string | string[] => value !== undefined);
+}
 function createUsageTotals(): Usage {
 	return {
 		input: 0,
@@ -505,15 +532,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			: agent;
 
-		// Apply per-agent model override from settings (highest priority)
+		// Apply per-agent model override from settings (highest priority), then role-based fallback
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides") as Record<string, string>;
-		const settingsModelOverride = agentModelOverrides[agentName];
-		const effectiveAgentModel = isDefaultModelAlias(effectiveAgent.model) ? undefined : effectiveAgent.model;
+		const settingsModelOverride = normalizeModelOverride(agentModelOverrides[agentName]);
+		const roleModelOverride = resolveRoleModelOverride(this.session, effectiveAgent.name);
+		const effectiveAgentModel = normalizeModelOverride(
+			isDefaultModelAlias(effectiveAgent.model) ? undefined : effectiveAgent.model,
+		);
 		const modelOverride =
 			settingsModelOverride ??
+			roleModelOverride ??
 			effectiveAgentModel ??
-			this.session.getActiveModelString?.() ??
-			this.session.getModelString?.();
+			normalizeModelOverride(this.session.getActiveModelString?.() ?? this.session.getModelString?.());
 		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
 
 		// Output schema priority: agent frontmatter > params > inherited from parent session
