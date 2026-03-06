@@ -40,6 +40,57 @@ find_tarball() {
   printf '%s\n' "${matches[0]}"
 }
 
+resolve_global_node_modules() {
+  local bun_bin_dir bun_home
+  bun_bin_dir=$(bun pm bin -g)
+  bun_home=$(cd "$bun_bin_dir/.." && pwd -P)
+  printf '%s\n' "$bun_home/install/global/node_modules"
+}
+
+link_workspace_dependencies() {
+  local global_node_modules package_name dependency_name package_dir dependency_dir nested_scope nested_dir
+  global_node_modules=$(resolve_global_node_modules)
+
+  while IFS=$'\t' read -r package_name dependency_name; do
+    package_dir="$global_node_modules/$package_name"
+    dependency_dir="$global_node_modules/$dependency_name"
+    nested_scope="$package_dir/node_modules/$(dirname "$dependency_name")"
+    nested_dir="$package_dir/node_modules/$dependency_name"
+
+    if [[ ! -d "$package_dir" ]]; then
+      echo "Expected installed package at $package_dir" >&2
+      exit 1
+    fi
+
+    if [[ ! -d "$dependency_dir" ]]; then
+      echo "Expected installed dependency at $dependency_dir" >&2
+      exit 1
+    fi
+
+    mkdir -p "$nested_scope"
+    rm -rf "$nested_dir"
+    ln -s "$dependency_dir" "$nested_dir"
+  done < <(
+    cd "$ROOT_DIR"
+    bun -e '
+const packages = ["utils", "natives", "ai", "agent", "tui", "stats", "coding-agent"];
+for (const pkg of packages) {
+  const packageJson = await Bun.file(`packages/${pkg}/package.json`).json();
+  const dependencies = Object.keys(packageJson.dependencies ?? {}).filter(dep => dep.startsWith("@oh-my-pi/") && dep !== packageJson.name);
+  for (const dependency of dependencies) {
+    console.log(`${packageJson.name}\t${dependency}`);
+  }
+}
+'
+  )
+}
+
+verify_cli_launch() {
+  local omp_version_output
+  omp_version_output=$(omp --version)
+  echo "Verified installed omp: $omp_version_output"
+}
+
 echo "Packing local workspace packages for global install..."
 for pkg in "${PACKAGES[@]}"; do
   pack_workspace "$pkg"
@@ -66,6 +117,10 @@ bun add -g \
   "$stats_tgz" \
   "$coding_agent_tgz"
 
+echo "Linking workspace package dependencies inside the global install..."
+link_workspace_dependencies
+
 bash "$SCRIPT_DIR/install.sh" --verify-path-precedence
+verify_cli_launch
 
 echo "Fork global reinstall complete"

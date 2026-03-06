@@ -17,8 +17,11 @@ describe("fork global install contract", () => {
 		};
 
 		expect(packageJson.scripts?.["reinstall:fork"]).toContain("scripts/reinstall-fork-global.sh");
-		expect(await readText(reinstallScriptPath)).toContain("bun pm pack");
-		expect(await readText(reinstallScriptPath)).toContain("bun add -g");
+		const reinstallScript = await readText(reinstallScriptPath);
+		expect(reinstallScript).toContain("bun pm pack");
+		expect(reinstallScript).toContain("bun add -g");
+		expect(reinstallScript).toContain("link_workspace_dependencies");
+		expect(reinstallScript).toContain("omp --version");
 	});
 
 	test("installer delegates local fork reinstalls through the dedicated script", async () => {
