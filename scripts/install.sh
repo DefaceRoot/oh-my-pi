@@ -9,11 +9,14 @@ set -e
 #   --binary       Always install prebuilt binary
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
+#   --verify-path-precedence  Verify omp resolves inside Bun global bin
 
 REPO="can1357/oh-my-pi"
 PACKAGE="@oh-my-pi/pi-coding-agent"
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.7"
+FORK_REPO_ROOT="/home/colin/devpod-repos/DefaceRoot/oh-my-pi"
+FORK_REINSTALL_SCRIPT="$FORK_REPO_ROOT/scripts/reinstall-fork-global.sh"
 
 # Parse arguments
 MODE=""
@@ -52,6 +55,10 @@ while [ $# -gt 0 ]; do
                 exit 1
             fi
             REF="$1"
+            shift
+            ;;
+        --verify-path-precedence)
+            MODE="verify-path-precedence"
             shift
             ;;
         *)
@@ -139,6 +146,53 @@ has_git_lfs() {
     command -v git-lfs >/dev/null 2>&1
 }
 
+run_fork_reinstall() {
+    repo_root="$1"
+    reinstall_script="$repo_root/scripts/reinstall-fork-global.sh"
+
+    if [ ! -f "$reinstall_script" ]; then
+        echo "Expected reinstall script at $reinstall_script"
+        exit 1
+    fi
+
+    if ! command -v bash >/dev/null 2>&1; then
+        echo "bash is required for local fork reinstall"
+        exit 1
+    fi
+
+    (cd "$repo_root" && bun install)
+    bash "$reinstall_script" || {
+        echo "Failed to reinstall fork from $repo_root"
+        exit 1
+    }
+}
+
+verify_path_precedence() {
+    bun_bin_dir=$(bun pm bin -g 2>/dev/null || true)
+    if [ -z "$bun_bin_dir" ]; then
+        echo "Warning: could not resolve Bun global bin via 'bun pm bin -g'"
+        echo "Verify PATH precedence manually: command -v omp && bun pm bin -g"
+        return
+    fi
+
+    resolved_omp=$(command -v omp 2>/dev/null || true)
+    if [ -z "$resolved_omp" ]; then
+        echo "Warning: omp is not on PATH after install"
+        echo "Verify PATH precedence manually: command -v omp && bun pm bin -g"
+        return
+    fi
+
+    case "$resolved_omp" in
+        "$bun_bin_dir"/*)
+            echo "✓ PATH precedence verified: ${resolved_omp}"
+            ;;
+        *)
+            echo "Warning: omp resolves to ${resolved_omp}, outside Bun global bin ${bun_bin_dir}"
+            echo "Move ${bun_bin_dir} earlier in PATH, then run: command -v omp && bun pm bin -g"
+            ;;
+    esac
+}
+
 # Install via bun
 install_via_bun() {
     echo "Installing via bun..."
@@ -168,10 +222,9 @@ install_via_bun() {
             exit 1
         fi
 
-        bun install -g "$TMP_DIR/packages/coding-agent" || {
-            echo "Failed to install from source"
-            exit 1
-        }
+        run_fork_reinstall "$TMP_DIR"
+    elif [ -d "$FORK_REPO_ROOT" ]; then
+        run_fork_reinstall "$FORK_REPO_ROOT"
     else
         bun install -g "$PACKAGE" || {
             echo "Failed to install $PACKAGE"
@@ -180,6 +233,7 @@ install_via_bun() {
     fi
     echo ""
     echo "✓ Installed omp via bun"
+    verify_path_precedence
     echo "Run 'omp' to get started!"
 }
 
@@ -271,6 +325,14 @@ case "$MODE" in
         ;;
     binary)
         install_binary
+        ;;
+    verify-path-precedence)
+        if ! has_bun; then
+            echo "bun is required for PATH precedence verification"
+            exit 1
+        fi
+        require_bun_version
+        verify_path_precedence
         ;;
     *)
         # Default: use bun if available, otherwise binary

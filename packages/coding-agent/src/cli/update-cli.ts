@@ -14,6 +14,9 @@ import { theme } from "../modes/theme/theme";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
+const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
+const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
+const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} run reinstall:fork`;
 
 interface ReleaseInfo {
 	tag: string;
@@ -69,6 +72,14 @@ function resolveUpdateMethod(ompPath: string, bunBinDir: string | undefined): "b
 
 export function _resolveUpdateMethodForTest(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
 	return resolveUpdateMethod(ompPath, bunBinDir);
+}
+
+function buildForkReinstallGuidance(): string {
+	return `Reinstall from this fork with: ${FORK_REINSTALL_COMMAND}\nThen verify PATH precedence with: ${PATH_PRECEDENCE_CHECK_COMMAND}`;
+}
+
+export function _buildForkReinstallGuidanceForTest(): string {
+	return buildForkReinstallGuidance();
 }
 async function resolveUpdateTarget(): Promise<UpdateTarget> {
 	const bunBinDir = await getBunGlobalBinDir();
@@ -175,60 +186,64 @@ function resolveOmpPath(): string | undefined {
  */
 async function verifyInstalledVersion(
 	expectedVersion: string,
-): Promise<{ ok: boolean; actual?: string; path?: string }> {
+	expectedMethod: "bun" | "binary",
+): Promise<{ ok: boolean; actual?: string; path?: string; pathMismatch?: boolean }> {
 	const ompPath = resolveOmpPath();
-	if (!ompPath) return { ok: false };
+	const pathMismatch =
+		expectedMethod === "bun" &&
+		(!ompPath || resolveUpdateMethod(ompPath, await getBunGlobalBinDir()) !== "bun");
+
+	if (!ompPath) return { ok: false, pathMismatch };
+
 	try {
 		const result = await $`${ompPath} --version`.quiet().nothrow();
-		if (result.exitCode !== 0) return { ok: false, path: ompPath };
+		if (result.exitCode !== 0) return { ok: false, path: ompPath, pathMismatch };
 		const output = result.text().trim();
 		// Output format: "omp/X.Y.Z"
 		const match = output.match(/\/(\d+\.\d+\.\d+)/);
 		const actual = match?.[1];
-		return { ok: actual === expectedVersion, actual, path: ompPath };
+		return { ok: actual === expectedVersion && !pathMismatch, actual, path: ompPath, pathMismatch };
 	} catch {
-		return { ok: false, path: ompPath };
+		return { ok: false, path: ompPath, pathMismatch };
 	}
 }
 
 /**
  * Print post-update verification result.
  */
-async function printVerification(expectedVersion: string): Promise<void> {
-	const result = await verifyInstalledVersion(expectedVersion);
+async function printVerification(expectedVersion: string, expectedMethod: "bun" | "binary"): Promise<void> {
+	const result = await verifyInstalledVersion(expectedVersion, expectedMethod);
 	if (result.ok) {
 		console.log(chalk.green(`\n${theme.status.success} Updated to ${expectedVersion}`));
 		return;
 	}
+
 	if (result.actual) {
-		console.log(
-			chalk.yellow(
-				`\nWarning: ${APP_NAME} at ${result.path} still reports ${result.actual} (expected ${expectedVersion})`,
-			),
-		);
+		const warning =
+			expectedMethod === "bun" && result.pathMismatch
+				? `\nWarning: ${APP_NAME} at ${result.path} is outside Bun global bin and still reports ${result.actual} (expected ${expectedVersion})`
+				: `\nWarning: ${APP_NAME} at ${result.path} still reports ${result.actual} (expected ${expectedVersion})`;
+		console.log(chalk.yellow(warning));
 	} else {
 		console.log(
 			chalk.yellow(`\nWarning: could not verify updated version${result.path ? ` at ${result.path}` : ""}`),
 		);
 	}
-	console.log(
-		chalk.yellow(
-			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash`,
-		),
-	);
+
+	console.log(chalk.yellow(`\n${buildForkReinstallGuidance()}`));
 }
 
 /**
  * Update via bun package manager.
  */
-async function updateViaBun(expectedVersion: string): Promise<void> {
+async function updateViaBun(): Promise<void> {
 	console.log(chalk.dim("Updating via bun..."));
-	const result = await $`bun install -g ${PACKAGE}@${expectedVersion}`.nothrow();
+	const result = await $`bun run reinstall:fork`.cwd(FORK_REPO_ROOT).nothrow();
 	if (result.exitCode !== 0) {
-		throw new Error(`bun install failed with exit code ${result.exitCode}`);
+		throw new Error(`bun reinstall failed with exit code ${result.exitCode}`);
 	}
 
-	await printVerification(expectedVersion);
+	await printVerification(VERSION, "bun");
 }
 
 /**
@@ -261,7 +276,7 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 		await fs.promises.rename(tempPath, targetPath);
 		await fs.promises.unlink(backupPath);
 
-		await printVerification(expectedVersion);
+		await printVerification(expectedVersion, "binary");
 		console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 	} catch (err) {
 		if (fs.existsSync(backupPath) && !fs.existsSync(targetPath)) {
@@ -274,51 +289,101 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 	}
 }
 
-/**
- * Run the update command.
- */
-export async function runUpdateCommand(opts: { force: boolean; check: boolean }): Promise<void> {
-	console.log(chalk.dim(`Current version: ${VERSION}`));
+interface UpdateCommandDeps {
+	resolveUpdateTarget(): Promise<UpdateTarget>;
+	getLatestRelease(): Promise<ReleaseInfo>;
+	updateViaBun(): Promise<void>;
+	updateViaBinaryAt(targetPath: string, expectedVersion: string): Promise<void>;
+	log(message: string): void;
+	error(message: string): void;
+	exit(code: number): never;
+}
 
-	// Check for updates
+const defaultUpdateCommandDeps: UpdateCommandDeps = {
+	resolveUpdateTarget,
+	getLatestRelease,
+	updateViaBun,
+	updateViaBinaryAt,
+	log: message => console.log(message),
+	error: message => console.error(message),
+	exit: code => process.exit(code),
+};
+
+async function runUpdateCommandWithDeps(
+	opts: { force: boolean; check: boolean },
+	deps: UpdateCommandDeps,
+): Promise<void> {
+	deps.log(chalk.dim(`Current version: ${VERSION}`));
+
+	let target: UpdateTarget;
+	try {
+		target = await deps.resolveUpdateTarget();
+	} catch (err) {
+		deps.error(chalk.red(`Update failed: ${err}`));
+		deps.exit(1);
+	}
+
+	if (target.method === "bun") {
+		if (opts.check) {
+			deps.log(chalk.cyan(`Fork-managed Bun install detected.\n${buildForkReinstallGuidance()}`));
+			return;
+		}
+
+		deps.log(chalk.cyan(`Reinstalling fork-managed Bun install from ${FORK_REPO_ROOT}`));
+		try {
+			await deps.updateViaBun();
+			return;
+		} catch (err) {
+			deps.error(chalk.red(`Update failed: ${err}`));
+			deps.exit(1);
+		}
+	}
+
 	let release: ReleaseInfo;
 	try {
-		release = await getLatestRelease();
+		release = await deps.getLatestRelease();
 	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
+		deps.error(chalk.red(`Failed to check for updates: ${err}`));
+		deps.exit(1);
 	}
 
 	const comparison = compareVersions(release.version, VERSION);
 
 	if (comparison <= 0 && !opts.force) {
-		console.log(chalk.green(`${theme.status.success} Already up to date`));
+		deps.log(chalk.green(`${theme.status.success} Already up to date`));
 		return;
 	}
 
 	if (comparison > 0) {
-		console.log(chalk.cyan(`New version available: ${release.version}`));
+		deps.log(chalk.cyan(`New version available: ${release.version}`));
 	} else {
-		console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
+		deps.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
 	}
 
 	if (opts.check) {
-		// Just check, don't install
 		return;
 	}
 
-	// Choose update method based on the prioritized omp binary in PATH
 	try {
-		const target = await resolveUpdateTarget();
-		if (target.method === "bun") {
-			await updateViaBun(release.version);
-		} else {
-			await updateViaBinaryAt(target.path, release.version);
-		}
+		await deps.updateViaBinaryAt(target.path, release.version);
 	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
+		deps.error(chalk.red(`Update failed: ${err}`));
+		deps.exit(1);
 	}
+}
+
+export async function _runUpdateCommandForTest(
+	opts: { force: boolean; check: boolean },
+	overrides: Partial<UpdateCommandDeps>,
+): Promise<void> {
+	return runUpdateCommandWithDeps(opts, { ...defaultUpdateCommandDeps, ...overrides });
+}
+
+/**
+ * Run the update command.
+ */
+export async function runUpdateCommand(opts: { force: boolean; check: boolean }): Promise<void> {
+	await runUpdateCommandWithDeps(opts, defaultUpdateCommandDeps);
 }
 
 /**
@@ -335,8 +400,8 @@ ${chalk.bold("Options:")}
   -f, --force   Force reinstall even if up to date
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} update           Update to latest version
-  ${APP_NAME} update --check   Check if updates are available
+  ${APP_NAME} update           Update installation
+  ${APP_NAME} update --check   Check binary updates or print fork reinstall guidance
   ${APP_NAME} update --force   Force reinstall
 `);
 }
