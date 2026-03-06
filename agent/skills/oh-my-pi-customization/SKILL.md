@@ -7,42 +7,46 @@ description: Customize and extend Oh My Pi (omp) coding agent with extensions, r
 
 Extend omp's behavior through **extensions**, rules, system prompts, and custom agents.
 
+For this fork, the live user config path `~/.omp/agent` should be a symlink to `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent`. Edit the repo files directly and use `UPDATING.md` for the rebuild and reinstall loop.
+
 ## Extension Points Overview
 
 | Type | Location | Purpose |
 |------|----------|---------|
-| **Extensions** | `~/.omp/agent/extensions/*.{ts,js}` or `~/.omp/agent/extensions/*/index.ts` | Full lifecycle events, UI prompts, commands, tools, process control |
-| **Hooks (legacy)** | `~/.omp/agent/hooks/{pre,post}/*.ts` | Older lifecycle hooks (still loaded, but prefer extensions) |
-| **Rules** | `~/.omp/agent/rules/*.md` | Inject context/constraints into system prompt |
-| **System Prompt** | `~/.omp/agent/AGENTS.md` or `.omp/SYSTEM.md` | Global instructions for all sessions |
-| **Custom Agents** | `~/.omp/agent/agents/*.md` | Subagent definitions spawned via Task tool |
+| **Extensions** | `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/*.{ts,js}` or `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/*/index.ts` | Full lifecycle events, UI prompts, commands, tools, process control |
+| **Hooks (legacy)** | `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/hooks/{pre,post}/*.ts` | Older lifecycle hooks (still loaded, but prefer extensions) |
+| **Rules** | `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/rules/*.md` | Inject context/constraints into system prompt |
+| **System Prompt** | `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/AGENTS.md` or `.omp/SYSTEM.md` | Global instructions for all sessions |
+| **Custom Agents** | `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/*.md` | Subagent definitions spawned via Task tool |
 
 ## Directory Structure
 
 ```
-~/.omp/agent/                    # User-level (affects all repos)
-├── extensions/                  # Extensions (preferred customization mechanism)
-│   ├── my-extension.ts          # Single-file extension
-│   └── plan-worktree/           # Directory extension
+/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/   # Repo-managed source of truth for this fork
+├── extensions/                                      # Extensions (preferred customization mechanism)
+│   ├── my-extension.ts                              # Single-file extension
+│   └── plan-worktree/                               # Directory extension
 │       └── index.ts
-├── hooks/                       # Legacy hooks
+├── hooks/                                           # Legacy hooks
 │   ├── pre/*.ts
 │   └── post/*.ts
-├── agents/                      # Custom agent definitions
+├── agents/                                          # Custom agent definitions
 │   ├── worktree-setup.md
-│   ├── task.md                  # User override: worker with explore fan-out policy
-│   └── explore.md               # User override: read-only reconnaissance agent
+│   ├── task.md                                      # User override: worker with explore fan-out policy
+│   └── explore.md                                   # User override: read-only reconnaissance agent
 ├── rules/
 │   └── my-rule.md
-├── AGENTS.md                    # Global system prompt additions
-├── config.yml                   # Agent configuration
-└── settings.json                # User settings
+├── AGENTS.md                                        # Global system prompt additions
+├── config.yml                                       # Agent configuration
+└── settings.json                                    # User settings
 
-.omp/                            # Project-level (repo-specific)
+~/.omp/agent -> /home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent
+
+.omp/                                                # Project-level (repo-specific)
 ├── extensions/*.ts
 ├── hooks/{pre,post}/*.ts
 ├── rules/*.md
-└── SYSTEM.md                    # Project system prompt
+└── SYSTEM.md                                        # Project system prompt
 ```
 
 ---
@@ -409,7 +413,7 @@ Critical instructions the agent MUST follow.
 
 ## System Prompt (AGENTS.md / SYSTEM.md)
 
-- **User-level**: `~/.omp/agent/AGENTS.md` — applies to all repos
+- **User-level for this fork**: `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/AGENTS.md` (exposed at runtime through the `~/.omp/agent` symlink)
 - **Project-level**: `.omp/SYSTEM.md` — applies to one repo
 
 Use `<critical>` tags for instructions the agent must follow. Use `<important>` for strong suggestions.
@@ -418,7 +422,7 @@ Use `<critical>` tags for instructions the agent must follow. Use `<important>` 
 
 ## Custom Agents
 
-Custom agent definitions live in `~/.omp/agent/agents/*.md`. They define subagents that can be spawned via the Task tool.
+Custom agent definitions for this fork live in `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/*.md`. They are exposed at runtime through the `~/.omp/agent` symlink and can be spawned via the Task tool.
 
 ```markdown
 ---
@@ -454,7 +458,7 @@ output:
 ## Common Pitfalls and Hard-Won Learnings
 
 ### 1. Extensions vs Hooks
-Extensions (`~/.omp/agent/extensions/`) are loaded by the `ExtensionRunner` and receive `ExtensionAPI`. Hooks (`~/.omp/agent/hooks/`) are loaded by the `HookRunner` and receive `HookAPI`. They are **separate systems**. Use extensions for new work.
+Extensions (`/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/`) are loaded by the `ExtensionRunner` and receive `ExtensionAPI`. Hooks (`/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/hooks/`) are loaded by the `HookRunner` and receive `HookAPI`. They are **separate systems**. Use extensions for new work.
 
 ### 2. pi.exec stdout is unreliable in background contexts
 See the critical section above. If you fire-and-forget a promise from `before_agent_start` and call `pi.exec` inside it, stdout will often be empty. Use `Bun.spawn` instead.
@@ -544,7 +548,7 @@ Model roles choose **which model** runs. Thinking level comes from agent frontma
 
 For Task subagents:
 - Bundled default lives in `src/task/agents.ts` (`task` agent)
-- User override path: `~/.omp/agent/agents/task.md`
+- User override path for this fork: `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/task.md`
 
 Set `thinking-level: high` (or `xhigh`) in that user agent file if you want persistent local override without re-patching runtime files.
 
@@ -569,16 +573,13 @@ For workflows that usually auto-read session metadata (e.g., `/plan-new` output)
 
 This prevents restarts/session loss from blocking implementation.
 
-### 21. Treat global runtime patches as drift-prone and self-heal on startup
-Files under `~/.bun/install/global/node_modules/...` are overwritten by OMP upgrades. Keep a versioned patch bundle (`manage.sh` + `files/`) and run a startup guard in your extension:
-- `manage.sh status` to detect drift
-- auto-apply on drift (best effort)
-- notify user if restart is required
+### 21. Treat repo source as the customization surface and reinstall globally after edits
+For this fork, do not patch files inside the global Bun install. Edit repo files under `/home/colin/devpod-repos/DefaceRoot/oh-my-pi` and `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent`, then follow `UPDATING.md`:
+- `bun install`
+- `bun run reinstall:fork`
+- `command -v omp && bun pm bin -g`
 
-Recommended env controls:
-- `OMP_IMPLEMENT_PATCH_GUARD=0` (disable guard)
-- `OMP_IMPLEMENT_PATCH_AUTO_APPLY=0` (warn-only)
-- `OMP_IMPLEMENT_PATCH_AUTO_FORCE=1` (allow `--force` apply)
+`bun run reinstall:fork` packs the local workspace packages into tarballs and reinstalls those tarballs globally. That keeps the fork reproducible and survives reinstall or update cycles.
 
 ### 22. Use `effectiveAgent` when spawning subagents
 If Task tool mutates an agent for runtime mode behavior (e.g., plan-mode system prompt/tool restrictions), pass that **effective** agent object into `runSubprocess`. Passing the original agent can silently ignore mode-specific behavior and confuse debugging.
@@ -649,7 +650,7 @@ Practical guardrails:
 
 ## Reference Implementation
 
-See `~/.omp/agent/extensions/plan-worktree/index.ts` for a complete, production extension that:
+See `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/plan-worktree/index.ts` for a complete, production extension that:
 - Keeps planning in the primary checkout via `/plan-new`, then launches implementation with `/implement`
 - Captures strict `/plan-new` metadata by observing writes under `docs/plans/**/*.md`
 - Shows dual initial footer actions (`Plan` + `Implement`) and stage-aware lifecycle buttons (`Implement` -> `Submit PR` (+ optional `Review Complete`) -> `Cleanup`)
@@ -668,7 +669,7 @@ See `~/.omp/agent/extensions/plan-worktree/index.ts` for a complete, production 
 - Uses section-aware + deduplicated phase extraction to avoid double-counting phases in review kickoff
 - Includes startup patch-guard logic to detect/reapply runtime patch drift after upgrades
 - Adds a dedicated `Subagent` model role (red badge) and routes phase Task subagents to it by default
-- Uses high thinking level for bundled `task` subagents, with user override via `~/.omp/agent/agents/task.md`
+- Uses high thinking level for bundled `task` subagents, with user override via `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/task.md`
 - Resolves `Subagent` model role at per-task launch so `/model` updates apply immediately (no restart required)
 - Shows uncached token counts for subagent progress/view (`input + output`) to avoid cache-inflated metrics
 - Preserves normal OMP message/tool formatting in subagent view even during partial transcript writes (lenient JSONL structured fallback)
@@ -717,9 +718,9 @@ OMP's `/model` list comes from **built-in models shipped in** `@oh-my-pi/pi-ai` 
 3. Verify: `bun -e "import { getModels } from './src/models'; console.log(getModels('anthropic').map(m=>m.id))"`
 4. Publish or run from source
 
-### Temporary workaround (patch global install)
+### Temporary workaround while iterating on model definitions
 
-Edit `~/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/models.generated.ts` directly. Will be overwritten on next upgrade.
+Edit `packages/ai/src/models.generated.ts` in this repo, then reinstall from the fork with `bun run reinstall:fork`.
 
 ---
 
