@@ -262,7 +262,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mainLayoutContainer.addChild(this.todoContainer);
 		this.mainLayoutContainer.addChild(new Spacer(1));
 		this.mainLayoutContainer.addChild(this.editorContainer);
-		this.mainLayoutContainer.addChild(this.statusLine);
 		this.sidebarPanel = new SidebarPanelComponent();
 		this.splitLayout = new HorizontalSplit(this.mainLayoutContainer, this.sidebarPanel, SIDEBAR_WIDTH);
 		this.responsiveLayout = {
@@ -400,6 +399,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.ui.addChild(this.responsiveLayout);
+		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.setFocus(this.editor);
 
 		this.inputController.setupKeyHandlers();

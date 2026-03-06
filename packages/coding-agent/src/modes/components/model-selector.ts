@@ -413,23 +413,24 @@ export class ModelSelectorComponent extends Container {
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
+			const displayId = /^gpt-/i.test(item.id) ? "GPT-" + item.id.slice(4) : item.id;
 
 			let line = "";
 			if (isSelected) {
 				const prefix = theme.fg("accent", `${theme.nav.cursor} `);
 				if (showProvider) {
 					const providerPrefix = theme.fg("dim", `${item.provider}/`);
-					line = `${prefix}${providerPrefix}${theme.fg("accent", item.id)}${badgeText}`;
+					line = `${prefix}${providerPrefix}${theme.fg("accent", displayId)}${badgeText}`;
 				} else {
-					line = `${prefix}${theme.fg("accent", item.id)}${badgeText}`;
+					line = `${prefix}${theme.fg("accent", displayId)}${badgeText}`;
 				}
 			} else {
 				const prefix = "  ";
 				if (showProvider) {
 					const providerPrefix = theme.fg("dim", `${item.provider}/`);
-					line = `${prefix}${providerPrefix}${item.id}${badgeText}`;
+					line = `${prefix}${providerPrefix}${displayId}${badgeText}`;
 				} else {
-					line = `${prefix}${item.id}${badgeText}`;
+					line = `${prefix}${displayId}${badgeText}`;
 				}
 			}
 
@@ -453,7 +454,8 @@ export class ModelSelectorComponent extends Container {
 		} else {
 			const selected = this.#filteredModels[this.#selectedIndex];
 			this.#listContainer.addChild(new Spacer(1));
-			this.#listContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`), 0, 0));
+			const selectedDisplayName = selected.model.name && /^gpt-/i.test(selected.model.name) ? "GPT-" + selected.model.name.slice(4) : (selected.model.name || selected.model.id);
+			this.#listContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selectedDisplayName}`), 0, 0));
 		}
 	}
 	#getThinkingModesForModel(model: Model): ReadonlyArray<ThinkingMode> {

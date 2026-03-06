@@ -63,13 +63,16 @@ function modelMatchesRole(
 	return configuredModel.toLowerCase() === model.id.toLowerCase();
 }
 
-function resolveAgentModeLabel(ctx: SegmentContext): "default" | "orchestrator" | "plan" | "custom" {
+function resolveAgentModeLabel(ctx: SegmentContext): "default" | "ask" | "orchestrator" | "plan" | "custom" {
 	const sessionRole = ctx.session.sessionManager.getLastModelChangeRole();
-	if (sessionRole === "default" || sessionRole === "orchestrator" || sessionRole === "plan") {
+	if (sessionRole === "default" || sessionRole === "ask" || sessionRole === "orchestrator" || sessionRole === "plan") {
 		return sessionRole;
 	}
 
 	const currentModel = ctx.session.state.model;
+	if (modelMatchesRole(currentModel, ctx.session.settings.getModelRole("ask"))) {
+		return "ask";
+	}
 	if (modelMatchesRole(currentModel, ctx.session.settings.getModelRole("default"))) {
 		return "default";
 	}
@@ -105,11 +108,16 @@ const modelSegment: StatusLineSegment = {
 		if (modelName.startsWith("Claude ")) {
 			modelName = modelName.slice(7);
 		}
+		if (/^gpt-/i.test(modelName)) {
+			modelName = "GPT-" + modelName.slice(4);
+		}
 
 		let content = withIcon(theme.icon.model, modelName);
 		const agentModeLabel = resolveAgentModeLabel(ctx);
 		if (agentModeLabel === "orchestrator") {
 			content += `${theme.sep.dot}\x1b[1;38;5;208mOrchestrator\x1b[22;39m`;
+		} else if (agentModeLabel === "ask") {
+			content += `${theme.sep.dot}${theme.fg("statusLineSubagents", "Ask")}`;
 		} else if (agentModeLabel === "default") {
 			content += `${theme.sep.dot}${theme.fg("success", "Default")}`;
 		} else if (agentModeLabel === "plan") {
