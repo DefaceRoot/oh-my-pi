@@ -236,7 +236,7 @@ export class InputController {
 					await this.cycleAgentMode();
 					return;
 				}
-				if (arg === "default" || arg === "orchestrator" || arg === "ask") {
+				if (arg === "default" || arg === "orchestrator" || arg === "plan" || arg === "ask") {
 					await this.switchAgentMode(arg);
 					return;
 				}
@@ -244,7 +244,7 @@ export class InputController {
 					this.showAgentModeStatus();
 					return;
 				}
-				this.ctx.showStatus("Usage: /agent [toggle|default|orchestrator|ask|status]");
+				this.ctx.showStatus("Usage: /agent [toggle|default|orchestrator|plan|ask|status]");
 				return;
 			}
 			if (text.startsWith("/export")) {
@@ -802,9 +802,9 @@ export class InputController {
 		}
 		const cycleOrder: Array<"default" | "ask" | "orchestrator" | "plan"> = [
 			"default",
-			"ask",
 			"orchestrator",
 			"plan",
+			"ask",
 		];
 		const currentRole = this.resolveCurrentAgentRole();
 		const normalizedRole = currentRole === "custom" ? "default" : currentRole;

@@ -16,6 +16,7 @@ modelRoles:
   verifier: anthropic/claude-opus-4-6
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: github-copilot/gemini-3.1-pro-preview
+  subagent: openai-codex/gpt-5.3-codex
 defaultThinkingLevel: high
 providers: 
   webSearch: auto

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import type { AgentSession } from "../../../session/agent-session";
+import { initTheme, theme } from "../../../modes/theme/theme";
 import type { SegmentContext } from "./segments";
 import { renderSegment } from "./segments";
 
@@ -62,7 +63,11 @@ function createContext(options: {
 	};
 }
 
-describe("status-line model segment ask mode", () => {
+describe("status-line model segment agent modes", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
 	it("shows Ask label when current session role is ask", () => {
 		const ctx = createContext({
 			lastRole: "ask",
@@ -91,5 +96,32 @@ describe("status-line model segment ask mode", () => {
 
 		expect(rendered.content).toContain("Ask");
 		expect(rendered.content).not.toContain("Default");
+	});
+
+	it("renders distinct labels and colors for each main agent role", () => {
+		const cases = [
+			{ role: "default", label: "Default", style: theme.fg("success", "Default") },
+			{ role: "ask", label: "Ask", style: theme.fg("statusLineSubagents", "Ask") },
+			{ role: "orchestrator", label: "Orchestrator", style: theme.fg("warning", "Orchestrator") },
+			{ role: "plan", label: "Plan", style: theme.fg("statusLineContext", "Plan") },
+		] as const;
+
+		for (const testCase of cases) {
+			const rendered = renderSegment(
+				"model",
+				createContext({
+ 					lastRole: testCase.role,
+					roles: {
+						default: "anthropic/default-model",
+						ask: "anthropic/ask-model",
+						orchestrator: "anthropic/orchestrator-model",
+						plan: "anthropic/plan-model",
+					},
+				}),
+			);
+
+			expect(rendered.content).toContain(testCase.label);
+			expect(rendered.content).toContain(testCase.style);
+		}
 	});
 });

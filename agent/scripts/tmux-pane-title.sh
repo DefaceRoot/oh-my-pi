@@ -17,7 +17,9 @@ is_omp_process() {
   local cmdline
 
   cmdline="$(read_cmdline "$pid")"
-  if [[ "$cmdline" == *"/.bun/bin/omp"* ]] || [[ "$cmdline" == *"/bin/omp"* ]] || [[ "$cmdline" == *" oh-my-pi "* ]] || [[ "$cmdline" == *" pi-coding-agent "* ]]; then
+  if [[ "$cmdline" == *"/.bun/bin/omp"* ]] || [[ "$cmdline" == *"/bin/omp"* ]] || [[ "$cmdline" == *" oh-my-pi "* ]] || [[ "$cmdline" == *" pi-coding-agent "* ]] ||
+    ([[ "$cmdline" == *"packages/coding-agent"* ]] && [[ "$cmdline" == *"src/cli.ts"* ]]) ||
+    ([[ "$cmdline" == *"/oh-my-pi"* ]] && [[ "$cmdline" == *" run dev"* ]]); then
     return 0
   fi
 

@@ -114,14 +114,15 @@ const modelSegment: StatusLineSegment = {
 
 		let content = withIcon(theme.icon.model, modelName);
 		const agentModeLabel = resolveAgentModeLabel(ctx);
-		if (agentModeLabel === "orchestrator") {
-			content += `${theme.sep.dot}\x1b[1;38;5;208mOrchestrator\x1b[22;39m`;
-		} else if (agentModeLabel === "ask") {
-			content += `${theme.sep.dot}${theme.fg("statusLineSubagents", "Ask")}`;
-		} else if (agentModeLabel === "default") {
-			content += `${theme.sep.dot}${theme.fg("success", "Default")}`;
-		} else if (agentModeLabel === "plan") {
-			content += `${theme.sep.dot}${theme.fg("accent", "Plan")}`;
+		if (agentModeLabel !== "custom") {
+			const modeStyle = {
+				default: { label: "Default", color: "success" },
+				ask: { label: "Ask", color: "statusLineSubagents" },
+				orchestrator: { label: "Orchestrator", color: "warning" },
+				plan: { label: "Plan", color: "statusLineContext" },
+			} as const;
+			const { label, color } = modeStyle[agentModeLabel];
+			content += `${theme.sep.dot}${theme.fg(color, label)}`;
 		}
 		// custom mode: show nothing extra
 

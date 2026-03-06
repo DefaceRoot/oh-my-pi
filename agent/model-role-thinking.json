@@ -14,5 +14,6 @@
   "verifier": "xhigh",
   "plan": "xhigh",
   "frontend": "high",
-  "designer": "medium"
+  "designer": "medium",
+  "subagent": "high"
 }
