@@ -1,0 +1,10 @@
+{
+  "hosts": {
+    "vmware-esxi": {
+      "host": "192.168.6.218",
+      "username": "root",
+      "keyPath": "~/.ssh/omp_esxi_rsa",
+      "description": "VMware ESXi host"
+    }
+  }
+}

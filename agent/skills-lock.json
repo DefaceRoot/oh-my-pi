@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "grafana-dashboards": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "0bbc8f7f88dfb799eff73bca43aef5274d009083f6cf54a280a9c16e47e22807"
+    }
+  }
+}

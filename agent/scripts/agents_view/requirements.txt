@@ -1,0 +1,3 @@
+textual>=8.0.0
+rich>=14.0.0
+psutil>=7.0.0  # optional: system resource monitoring

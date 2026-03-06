@@ -1,0 +1,77 @@
+lastChangelogVersion: 13.7.1
+modelRoles: 
+  slow: kimi-code/kimi-k2.5
+  default: openai-codex/gpt-5.3-codex
+  ask: openai-codex/gpt-5.3-codex
+  orchestrator: anthropic/claude-sonnet-4-6
+  plan: openai-codex/gpt-5.2
+  smol: github-copilot/gemini-3-flash-preview
+  commit: zai/glm-5
+  implement: openai-codex/gpt-5.3-codex
+  explore: github-copilot/gemini-3-flash-preview
+  merge: openai-codex/gpt-5.3-codex
+  lint: zai/glm-5
+  curator: kimi-code/kimi-k2.5
+  research: openai-codex/gpt-5.2
+  verifier: openai-codex/gpt-5.3-codex
+  frontend: github-copilot/gemini-3.1-pro-preview
+  designer: github-copilot/gemini-3.1-pro-preview
+defaultThinkingLevel: high
+providers: 
+  webSearch: auto
+  image: auto
+statusLine: 
+  preset: default
+  separator: pipe
+disabledExtensions: 
+  []
+steeringMode: one-at-a-time
+task: 
+  maxRecursionDepth: 3
+  eager: false
+stt: 
+  enabled: true
+disabledProviders: 
+  - opencode
+  - codex
+  - agents-md
+memories: 
+  enabled: true
+theme: 
+  dark: titanium
+agents_view: 
+  columns: 
+    status_width: 8
+    harness_width: 8
+    role_width: 7
+    session_width: 36
+    branch_width: 22
+    age_width: 5
+    ctx_width: 13
+  stall: 
+    threshold_def_seconds: 240
+    threshold_orch_seconds: 900
+  recovery: 
+    auto_recover: false
+    auto_recover_patterns: 
+      - stdin_waiting
+      - agent_asking
+    auto_recover_threshold_seconds: 300
+  notifications: 
+    enabled: true
+    events: 
+      - session_done
+      - session_asking
+      - session_stalled
+      - ctx_warn
+    bell: true
+    desktop: true
+    footer_flash: true
+ask: 
+  timeout: 0
+async: 
+  enabled: true
+lsp: 
+  diagnosticsOnEdit: false
+browser: 
+  headless: false

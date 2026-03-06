@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ZAI_API_KEY": "<REPLACE_WITH_YOUR_KEY>",
+    "BTCA_API_KEY": "<REPLACE_WITH_YOUR_KEY>",
+    "OMP_ORCHESTRATOR_THINKING_LEVEL": "xhigh"
+  }
+}

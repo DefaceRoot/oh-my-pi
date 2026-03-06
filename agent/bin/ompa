@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# ompa — launch the Oh My Pi Agents View TUI dashboard
+# This file lives in the repo at bin/ompa and is installed to ~/.local/bin/ompa by setup.sh.
+exec python3 "$HOME/.omp/agent/scripts/agents-view.py" "$@"

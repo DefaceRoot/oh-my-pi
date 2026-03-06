@@ -1,0 +1,24 @@
+providers:
+  github-copilot:
+    baseUrl: https://api.individual.githubcopilot.com
+    apiKey: COPILOT_GITHUB_TOKEN
+    api: openai-completions
+    headers:
+      User-Agent: GitHubCopilotChat/0.35.0
+      Editor-Version: vscode/1.107.0
+      Editor-Plugin-Version: copilot-chat/0.35.0
+      Copilot-Integration-Id: vscode-chat
+    models:
+      - id: gemini-3.1-pro-preview
+        name: Gemini 3.1 Pro
+        reasoning: true
+        input: [text, image]
+        contextWindow: 128000
+        maxTokens: 64000
+
+  anthropic:
+    modelOverrides:
+      claude-sonnet-4-6:
+        contextWindow: 1000000
+        headers:
+          anthropic-beta: context-1m-2025-08-07

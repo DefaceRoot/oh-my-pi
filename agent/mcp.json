@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "augment": {
+      "type": "stdio",
+      "command": "auggie",
+      "args": [
+        "--mcp",
+        "--mcp-auto-workspace"
+      ],
+      "enabled": true,
+      "timeout": 120000
+    },
+    "better-context": {
+      "type": "http",
+      "url": "https://btca.dev/api/mcp",
+      "enabled": true,
+      "timeout": 120000,
+      "headers": {
+        "Authorization": "Bearer ak_E4H3NBEHQ5QTMSS0QNQ4HVQMQ1CTZYD6"
+      }
+    },
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ],
+      "enabled": true,
+      "timeout": 120000
+    }
+  }
+}

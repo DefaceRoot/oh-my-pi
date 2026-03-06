@@ -1,0 +1,17 @@
+{
+  "orchestrator": "medium",
+  "implement": "high",
+  "lint": "medium",
+  "merge": "xhigh",
+  "curator": "minimal",
+  "commit": "medium",
+  "research": "medium",
+  "explore": "minimal",
+  "default": "high",
+  "smol": "minimal",
+  "slow": "high",
+  "verifier": "xhigh",
+  "plan": "xhigh",
+  "frontend": "high",
+  "designer": "medium"
+}
