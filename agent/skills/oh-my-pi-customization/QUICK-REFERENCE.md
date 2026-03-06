@@ -1,28 +1,43 @@
 # Oh My Pi Customization Quick Reference
 
-For this fork, `~/.omp/agent` should be a symlink to `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent`. Edit the repo files directly, then follow `UPDATING.md` to reinstall the fork into `omp`.
+Definitions:
+- `<fork-root>` = the local clone of your custom OMP fork
+- live agent config = `~/.omp/agent -> <fork-root>/agent`
+
+Edit the fork directly. Do not patch Bun's global install.
 
 ## File Locations
 
+```text
+<fork-root>/agent/extensions/*.ts        # Extensions (preferred, auto-loaded)
+<fork-root>/agent/extensions/*/index.ts  # Directory extensions (auto-loaded)
+<fork-root>/agent/hooks/{pre,post}/*.ts  # Hooks (legacy, auto-loaded)
+<fork-root>/agent/agents/*.md            # Custom agent definitions
+<fork-root>/agent/rules/*.md             # Rules (auto-loaded)
+<fork-root>/agent/AGENTS.md              # Global system prompt
+.omp/SYSTEM.md                           # Project system prompt
+.omp/extensions/*.ts                     # Project-level extensions
 ```
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/*.ts        # Extensions (preferred, auto-loaded)
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/extensions/*/index.ts  # Directory extensions (auto-loaded)
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/hooks/{pre,post}/*.ts  # Hooks (legacy, auto-loaded)
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/*.md            # Custom agent definitions
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/rules/*.md             # Rules (auto-loaded)
-/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/AGENTS.md              # Global system prompt
-.omp/SYSTEM.md                                                             # Project system prompt
-.omp/extensions/*.ts                                                       # Project-level extensions
-```
+
+## Refresh Rules
+
+- Changes under `<fork-root>/packages/` require reinstall plus restart
+- Changes under `<fork-root>/agent/` usually only require restart
+- Commit and push do not update the live local `omp` install
 
 ## Reinstall Loop
 
+From `<fork-root>`:
 1. `git fetch upstream && git rebase upstream/main`
 2. `bun install`
 3. `bun run reinstall:fork`
 4. `command -v omp && bun pm bin -g`
+5. restart `omp`
 
-`bun run reinstall:fork` packs the local workspace packages into tarballs and reinstalls those tarballs globally. Use that instead of `bun link` or `bun install -g /path/to/packages/coding-agent`.
+From any working directory:
+- `bun --cwd=<fork-root> run reinstall:fork`
+
+`bun run reinstall:fork` packs the local workspace packages into tarballs, reinstalls them globally, relinks internal workspace dependencies, and verifies that `omp` can start. Use that instead of `bun link`.
 
 See `UPDATING.md` for the full workflow, PATH checks, and smoke verification steps.
 
@@ -123,7 +138,7 @@ globs: ["*.py", "src/**/*"]
   - other worker subagents -> `Subagent` model role
 - If task execution mutates agent config for runtime mode behavior, pass `effectiveAgent` to `runSubprocess`.
 - Thinking level is defined in agent frontmatter (`thinking-level`), not in `/model` roles.
-- For persistent local overrides in this fork, edit `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/`.
+- For persistent local overrides in this fork, edit `<fork-root>/agent/agents/`.
 
 ## Pitfalls
 
