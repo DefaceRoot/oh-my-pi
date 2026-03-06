@@ -200,6 +200,15 @@ async function runLoop(
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
+			// Abort-before-LLM guard: submit_result fires requestAbort() asynchronously.
+			// The abort signal may not be set until AFTER executeToolCalls returns,
+			// causing a race where the next LLM turn starts before the abort propagates.
+			// Checking here ensures we exit before making the HTTP request.
+			if (signal?.aborted) {
+				stream.push({ type: "agent_end", messages: newMessages });
+				stream.end(newMessages);
+				return;
+			}
 			if (!firstTurn) {
 				stream.push({ type: "turn_start" });
 			} else {

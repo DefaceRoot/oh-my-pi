@@ -138,6 +138,48 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
 	});
 
+	it("does not force object-shaped submit_result data when output schema allows primitives", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			if (promptIndex === 1) {
+				const assistant = createAssistantStopMessage("finished analysis but forgot submit_result");
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				return;
+			}
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-string-success",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: "done" },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-primitive-reminder",
+			outputSchema: { type: "string" },
+		});
+
+		expect(prompts).toHaveLength(2);
+		expect(prompts[1]).toContain("data MUST match the required output schema exactly");
+		expect(prompts[1]).toContain("Primitive, array, or null data is valid when the output schema allows it");
+		expect(prompts[1]).not.toContain("data MUST be a JSON object for successful completion");
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe('"done"');
+	});
+
 	it("keeps null submit_result warning when subagent submits success without data", async () => {
 		const session = createMockSession(({ promptIndex, emit, state }) => {
 			if (promptIndex === 1) {
@@ -211,6 +253,44 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain('"ok": true');
 	});
+	it("terminates repeated submit_result errors in submit-only mode", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			const assistant = createAssistantStopMessage(
+				promptIndex === 1 ? "attempted submit_result" : "still attempting submit_result",
+			);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+			if (promptIndex === 1) return;
+
+			for (let i = 0; i < 12; i++) {
+				emit({
+					type: "tool_execution_end",
+					toolCallId: `tool-error-${promptIndex}-${i}`,	
+					toolName: "submit_result",
+					result: {
+						content: [{ type: "text", text: `Output does not match schema ${i}` }],
+						details: { status: "error", error: `Output does not match schema ${i}` },
+					},
+					isError: true,
+				});
+			}
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-submit-loop" });
+		expect(prompts).toHaveLength(2);
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("prevent an infinite submit_result loop");
+		expect(result.stderr).toContain("prevent an infinite submit_result loop");
+	});
+
 	it("uses provided thinking level when model override has no explicit suffix", async () => {
 		vi.clearAllMocks();
 		const session = createMockSession(({ emit }) => {

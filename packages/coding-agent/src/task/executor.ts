@@ -578,6 +578,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
 	let submitResultCalled = false;
+	const MAX_SUBMIT_RESULT_ERROR_ATTEMPTS = 12;
+	const SUBMIT_RESULT_ONLY_PROMPT_TIMEOUT_MS = 90_000;
+	let submitResultOnlyMode = false;
+	let submitResultErrorAttempts = 0;
+	let submitResultErrorLoopDetected = false;
+	let submitResultPromptTimedOut = false;
+	let lastSubmitResultErrorText = "";
+
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -684,6 +692,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		return undefined;
 	};
 
+	const getToolResultText = (result: unknown): string => {
+		if (!result || typeof result !== "object" || !("content" in result)) return "";
+		const content = (result as { content?: unknown }).content;
+		if (!Array.isArray(content)) return "";
+		const textBlocks: string[] = [];
+		for (const block of content) {
+			if (!block || typeof block !== "object") continue;
+			const record = block as { type?: unknown; text?: unknown };
+			if (record.type !== "text" || typeof record.text !== "string") continue;
+			if (!record.text) continue;
+			textBlocks.push(record.text);
+		}
+		return textBlocks.join("\n");
+	};
+
 	const updateRecentOutputLines = () => {
 		const lines = recentOutputTail.split("\n").filter(line => line.trim());
 		progress.recentOutput = lines.slice(-8).reverse();
@@ -771,6 +794,23 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				progress.currentToolArgs = undefined;
 				progress.currentToolStartMs = undefined;
 
+				if (event.toolName === "submit_result") {
+					if (event.isError) {
+						lastSubmitResultErrorText = getToolResultText(event.result);
+						if (submitResultOnlyMode) {
+							submitResultErrorAttempts++;
+							if (submitResultErrorAttempts >= MAX_SUBMIT_RESULT_ERROR_ATTEMPTS && !submitResultErrorLoopDetected) {
+								submitResultErrorLoopDetected = true;
+								requestAbort("terminate");
+							}
+						}
+					} else {
+						submitResultCalled = true;
+						submitResultErrorAttempts = 0;
+						lastSubmitResultErrorText = "";
+					}
+				}
+
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
 				const eventArgs = (event as { args?: Record<string, unknown> }).args ?? {};
@@ -799,9 +839,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								existing.push(data);
 							}
 							progress.extractedToolData[event.toolName] = existing;
-							if (event.toolName === "submit_result") {
-								submitResultCalled = true;
-							}
 						}
 					}
 
@@ -1089,29 +1126,57 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			await session.prompt(task);
-			await session.waitForIdle();
 
 			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
 
 			let retryCount = 0;
-			while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
-				try {
+			let previousTools: string[] | null = null;
+			try {
+				while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
 					retryCount++;
-					const reminder = renderPromptTemplate(submitReminderTemplate, {
+					if (!previousTools) {
+						previousTools = session.getActiveToolNames();
+						await session.setActiveToolsByName(["submit_result"]);
+					}
+					const reminderBase = renderPromptTemplate(submitReminderTemplate, {
 						retryCount,
 						maxRetries: MAX_SUBMIT_RESULT_RETRIES,
 					});
+					const reminder = [
+						reminderBase,
+						"",
+						"<submit-result-contract>",
+						"- On success, call submit_result with: { result: { data: <value matching the output schema> } }",
+						"- On failure, call submit_result with: { result: { error: \"reason\" } }",
+						"- result MUST contain exactly one of data or error (never both)",
+						"- data MUST match the required output schema exactly",
+						"- Primitive, array, or null data is valid when the output schema allows it; do not wrap it in an object unless the schema requires that",
+						"- Do NOT invent placeholder values; submit the actual result only",
+						"- If the output schema is an object with required fields, include them all in result.data before submitting",
+						"</submit-result-contract>",
+					].join("\n");
 
-					await session.prompt(reminder, reminderToolChoice ? { toolChoice: reminderToolChoice } : undefined);
-					await session.waitForIdle();
-				} catch (err) {
-					logger.error("Subagent prompt failed", {
-						error: err instanceof Error ? err.message : String(err),
-					});
+					const timeoutId = setTimeout(() => {
+						submitResultPromptTimedOut = true;
+						requestAbort("terminate");
+					}, SUBMIT_RESULT_ONLY_PROMPT_TIMEOUT_MS);
+					submitResultOnlyMode = true;
+					submitResultErrorAttempts = 0;
+					try {
+						await session.prompt(reminder, reminderToolChoice ? { toolChoice: reminderToolChoice } : undefined);
+					} finally {
+						submitResultOnlyMode = false;
+						clearTimeout(timeoutId);
+					}
+					if (submitResultPromptTimedOut || submitResultErrorLoopDetected) {
+						break;
+					}
+				}
+			} finally {
+				if (previousTools) {
+					await session.setActiveToolsByName(previousTools);
 				}
 			}
-
-			await session.waitForIdle();
 			if (!submitResultCalled && !abortSignal.aborted) {
 				aborted = true;
 				exitCode = 1;
@@ -1190,6 +1255,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	// Use final output if available, otherwise accumulated output
 	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
+	if (submitResultErrorLoopDetected || submitResultPromptTimedOut) {
+		const loopReasons: string[] = [];
+		if (submitResultErrorLoopDetected) {
+			loopReasons.push(
+				`submit_result returned errors ${submitResultErrorAttempts} times in submit-only mode`,
+			);
+		}
+		if (submitResultPromptTimedOut) {
+			loopReasons.push(
+				`submit-only reminder prompt exceeded ${Math.round(SUBMIT_RESULT_ONLY_PROMPT_TIMEOUT_MS / 1000)}s timeout`,
+			);
+		}
+		if (lastSubmitResultErrorText) {
+			const firstErrorLine = lastSubmitResultErrorText.split("\n").find(line => line.trim().length > 0);
+			if (firstErrorLine) {
+				loopReasons.push(`last error: ${firstErrorLine}`);
+			}
+		}
+		const warning = `SYSTEM WARNING: Subagent terminated to prevent an infinite submit_result loop (${loopReasons.join("; ")}).`;
+		rawOutput = rawOutput ? `${warning}\n\n${rawOutput}` : warning;
+		if (!stderr) stderr = warning;
+		if (exitCode === 0) exitCode = 1;
+	}
+
 	const submitResultItems = progress.extractedToolData?.submit_result as SubmitResultItem[] | undefined;
 	const reportFindings = progress.extractedToolData?.report_finding as ReviewFinding[] | undefined;
 	const finalized = finalizeSubprocessOutput({

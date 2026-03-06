@@ -603,6 +603,80 @@ describe("agentLoop with AgentMessage", () => {
 			expect(text).not.toContain("Tool execution was aborted.:");
 		}
 	});
+	it("does not start another LLM turn after a tool aborts the session", async () => {
+		const toolSchema = Type.Object({});
+		const abortController = new AbortController();
+		const tool: AgentTool<typeof toolSchema, { ok: boolean }> = {
+			name: "submit_result",
+			label: "Submit Result",
+			description: "Terminal completion tool",
+			parameters: toolSchema,
+			async execute() {
+				queueMicrotask(() => abortController.abort());
+				return {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { ok: true },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [tool],
+		};
+		const userPrompt: AgentMessage = createUserMessage("finish work");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		let streamCallCount = 0;
+		const events: AgentEvent[] = [];
+		const stream = agentLoop(
+			[userPrompt],
+			context,
+			config,
+			abortController.signal,
+			() => {
+				streamCallCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (streamCallCount === 1) {
+						const message = createAssistantMessage(
+							[{ type: "toolCall", id: "tool-1", name: "submit_result", arguments: {} }],
+							"toolUse",
+						);
+						stream.push({ type: "done", reason: "toolUse", message });
+						return;
+					}
+
+					const message = createAssistantMessage([{ type: "text", text: "unexpected second turn" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+		);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(streamCallCount).toBe(1);
+		expect(events.some(event => event.type === "agent_end")).toBe(true);
+		const messages = await stream.result();
+		expect(
+			messages.some(
+				message =>
+					message.role === "assistant" &&
+					Array.isArray(message.content) &&
+					message.content.some(
+						content => content.type === "text" && content.text === "unexpected second turn",
+					),
+			),
+		).toBe(false);
+	});
+
 	it("should inject queued messages and skip remaining tool calls", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

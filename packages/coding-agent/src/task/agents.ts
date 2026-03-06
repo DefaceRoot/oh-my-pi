@@ -7,8 +7,10 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import { parseAgentFields } from "../discovery/helpers";
 import designerMd from "../prompts/agents/designer.md" with { type: "text" };
 import exploreMd from "../prompts/agents/explore.md" with { type: "text" };
+import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
+import oracleMd from "../prompts/agents/oracle.md" with { type: "text" };
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
@@ -38,6 +40,8 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "explore.md", template: exploreMd },
+	{ fileName: "librarian.md", template: librarianMd },
+	{ fileName: "oracle.md", template: oracleMd },
 	{ fileName: "plan.md", template: planMd },
 	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
@@ -48,10 +52,10 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
 			spawns: "*",
 			model: "default",
-				thinkingLevel: "high",
+			thinkingLevel: "high",
 		},
 		template: taskMd,
-		},
+	},
 	{
 		fileName: "quick_task.md",
 		frontmatter: {

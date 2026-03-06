@@ -36,6 +36,7 @@ import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
+import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { renderTemplate } from "./template";
 import {
@@ -76,6 +77,7 @@ const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
 	"verifier",
 	"designer",
 ]);
+
 
 function resolveSubagentRole(agentName: string): ModelRole {
 	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "implement";
@@ -531,12 +533,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		const planModeState = this.session.getPlanModeState?.();
-		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search"];
 		const effectiveAgent: typeof agent = planModeState?.enabled
 			? {
 					...agent,
 					systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-					tools: planModeTools,
+					tools: [...PLAN_MODE_SUBAGENT_TOOLS],
 					spawns: undefined,
 				}
 			: agent;
