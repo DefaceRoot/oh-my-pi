@@ -9,16 +9,59 @@ providers:
       Editor-Plugin-Version: copilot-chat/0.35.0
       Copilot-Integration-Id: vscode-chat
     models:
+      - id: claude-opus-41
+        name: Claude Opus 4.1
+        reasoning: true
+        input: [text, image]
+        contextWindow: 80000
+        maxTokens: 16000
+      - id: claude-opus-4.6-fast
+        name: Claude Opus 4.6 (fast mode)
+        reasoning: true
+        input: [text, image]
+        contextWindow: 128000
+        maxTokens: 64000
+      - id: gpt-5-codex
+        name: GPT-5-Codex
+        api: openai-responses
+        reasoning: true
+        input: [text, image]
+        contextWindow: 128000
+        maxTokens: 128000
       - id: gemini-3.1-pro-preview
         name: Gemini 3.1 Pro
         reasoning: true
         input: [text, image]
         contextWindow: 128000
         maxTokens: 64000
+      - id: oswe-vscode-prime
+        name: Raptor mini (Preview)
+        api: openai-responses
+        reasoning: false
+        input: [text, image]
+        contextWindow: 264000
+        maxTokens: 64000
+
+  openai-codex:
+    baseUrl: https://chatgpt.com/backend-api
+    api: openai-codex-responses
+    apiKey: OPENAI_CODEX_API_KEY
+    authHeader: false
+    models:
+      - id: gpt-5.4
+        name: GPT-5.4
+        reasoning: true
+        input: [text, image]
+        contextWindow: 1050000
+        maxTokens: 128000
 
   anthropic:
     modelOverrides:
       claude-sonnet-4-6:
+        contextWindow: 1000000
+        headers:
+          anthropic-beta: context-1m-2025-08-07
+      claude-opus-4-6:
         contextWindow: 1000000
         headers:
           anthropic-beta: context-1m-2025-08-07

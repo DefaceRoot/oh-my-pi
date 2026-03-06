@@ -800,16 +800,17 @@ export class InputController {
 			this.ctx.showWarning("Wait for the current response to finish before switching agent mode.");
 			return;
 		}
+		const cycleOrder: Array<"default" | "ask" | "orchestrator" | "plan"> = [
+			"default",
+			"ask",
+			"orchestrator",
+			"plan",
+		];
 		const currentRole = this.resolveCurrentAgentRole();
-		if (currentRole === "ask") {
-			await this.#restoreAskMode();
-			return;
-		}
-		let nextRole: "default" | "orchestrator" | "plan";
-		if (currentRole === "default") nextRole = "orchestrator";
-		else if (currentRole === "orchestrator") nextRole = "plan";
-		else nextRole = "default";
-		await this.switchAgentMode(nextRole);
+		const normalizedRole = currentRole === "custom" ? "default" : currentRole;
+		const currentIndex = cycleOrder.indexOf(normalizedRole);
+		const nextRole = cycleOrder[(currentIndex + 1) % cycleOrder.length];
+		await this.switchAgentMode(nextRole, { bypassAskRestore: true });
 	}
 
 	private resolveCurrentAgentRole(): "default" | "ask" | "orchestrator" | "plan" | "custom" {

@@ -1,19 +1,19 @@
-lastChangelogVersion: 13.7.1
+lastChangelogVersion: 13.9.2
 modelRoles: 
   slow: kimi-code/kimi-k2.5
-  default: openai-codex/gpt-5.3-codex
-  ask: openai-codex/gpt-5.3-codex
-  orchestrator: anthropic/claude-sonnet-4-6
-  plan: openai-codex/gpt-5.2
+  default: openai-codex/gpt-5.4:high
+  ask: anthropic/claude-opus-4-6
+  orchestrator: openai-codex/gpt-5.4
+  plan: openai-codex/gpt-5.4
   smol: github-copilot/gemini-3-flash-preview
   commit: zai/glm-5
   implement: openai-codex/gpt-5.3-codex
   explore: github-copilot/gemini-3-flash-preview
-  merge: openai-codex/gpt-5.3-codex
+  merge: openai-codex/gpt-5.4
   lint: zai/glm-5
   curator: kimi-code/kimi-k2.5
-  research: openai-codex/gpt-5.2
-  verifier: openai-codex/gpt-5.3-codex
+  research: anthropic/claude-sonnet-4-6
+  verifier: anthropic/claude-opus-4-6
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: github-copilot/gemini-3.1-pro-preview
 defaultThinkingLevel: high
@@ -74,4 +74,6 @@ async:
 lsp: 
   diagnosticsOnEdit: false
 browser: 
-  headless: false
+  headless: true
+exa: 
+  enableResearcher: true

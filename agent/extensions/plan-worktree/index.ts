@@ -3156,6 +3156,7 @@ export default function planWorktree(pi: ExtensionAPI) {
 					level: thinkingLevel,
 				});
 			}
+			setActionButton(ctx, actionButtonStage);
 		}
 	});
 
@@ -3213,6 +3214,7 @@ export default function planWorktree(pi: ExtensionAPI) {
 					level: thinkingLevel,
 				});
 			}
+			setActionButton(ctx, actionButtonStage);
 		}
 	});
 

@@ -247,51 +247,61 @@ async function handleStatic(requestPath: string): Promise<Response> {
 export async function startServer(port = 3847): Promise<{ port: number; stop: () => void }> {
 	await ensureClientBuild();
 
-	const server = Bun.serve({
-		port,
-		async fetch(req) {
-			const url = new URL(req.url);
-			const path = url.pathname;
+	const serve = (requestedPort: number) =>
+		Bun.serve({
+			port: requestedPort,
+			async fetch(req) {
+				const url = new URL(req.url);
+				const path = url.pathname;
 
-			// CORS headers for local development
-			const corsHeaders = {
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				"Access-Control-Allow-Headers": "Content-Type",
-			};
+				// CORS headers for local development
+				const corsHeaders = {
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type",
+				};
 
-			if (req.method === "OPTIONS") {
-				return new Response(null, { headers: corsHeaders });
-			}
-
-			try {
-				let response: Response;
-
-				if (path.startsWith("/api/")) {
-					response = await handleApi(req);
-				} else {
-					response = await handleStatic(path);
+				if (req.method === "OPTIONS") {
+					return new Response(null, { headers: corsHeaders });
 				}
 
-				// Add CORS headers to all responses
-				const headers = new Headers(response.headers);
-				for (const [key, value] of Object.entries(corsHeaders)) {
-					headers.set(key, value);
-				}
+				try {
+					let response: Response;
 
-				return new Response(response.body, {
-					status: response.status,
-					headers,
-				});
-			} catch (error) {
-				console.error("Server error:", error);
-				return Response.json(
-					{ error: error instanceof Error ? error.message : "Unknown error" },
-					{ status: 500, headers: corsHeaders },
-				);
-			}
-		},
-	});
+					if (path.startsWith("/api/")) {
+						response = await handleApi(req);
+					} else {
+						response = await handleStatic(path);
+					}
+
+					// Add CORS headers to all responses
+					const headers = new Headers(response.headers);
+					for (const [key, value] of Object.entries(corsHeaders)) {
+						headers.set(key, value);
+					}
+
+					return new Response(response.body, {
+						status: response.status,
+						headers,
+					});
+				} catch (error) {
+					console.error("Server error:", error);
+					return Response.json(
+						{ error: error instanceof Error ? error.message : "Unknown error" },
+						{ status: 500, headers: corsHeaders },
+					);
+				}
+			},
+		});
+
+	let server: Bun.Server<unknown>;
+	try {
+		server = serve(port);
+	} catch (error) {
+		const isPortInUseError = typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE";
+		if (!isPortInUseError) throw error;
+		server = serve(0);
+	}
 
 	return {
 		port: server.port ?? port,
