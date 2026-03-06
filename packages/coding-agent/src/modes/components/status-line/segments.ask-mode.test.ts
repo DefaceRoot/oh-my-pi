@@ -34,6 +34,7 @@ function createContext(options: {
 		settings: {
 			getModelRole: (role: string) => roleMap[role],
 		},
+		isFastModeEnabled: () => false,
 	} as unknown as AgentSession;
 
 	return {

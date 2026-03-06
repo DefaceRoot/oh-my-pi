@@ -3,6 +3,7 @@
  *
  * Agents are embedded at build time via Bun's import with { type: "text" }.
  */
+import { Effort } from "@oh-my-pi/pi-ai";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { parseAgentFields } from "../discovery/helpers";
 import designerMd from "../prompts/agents/designer.md" with { type: "text" };
@@ -52,7 +53,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
 			spawns: "*",
 			model: "default",
-			thinkingLevel: "high",
+			thinkingLevel: Effort.Medium,
 		},
 		template: taskMd,
 	},
@@ -62,7 +63,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			name: "quick_task",
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
 			model: "pi/smol",
-			thinkingLevel: "minimal",
+			thinkingLevel: Effort.Minimal,
 		},
 		template: taskMd,
 	},

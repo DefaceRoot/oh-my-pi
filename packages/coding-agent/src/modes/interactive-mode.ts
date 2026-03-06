@@ -5,7 +5,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Loader, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
 import {
@@ -460,7 +460,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else if (this.isPythonMode) {
 			this.editor.borderColor = theme.getPythonModeBorderColor();
 		} else {
-			const level = this.session.thinkingLevel || "off";
+			const level = this.session.thinkingLevel ?? ThinkingLevel.Off;
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
 		}
 		this.updateEditorTopBorder();
