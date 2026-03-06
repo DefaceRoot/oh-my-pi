@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PI_CODING_AGENT_DIR="$HOME/devpod-repos/DefaceRoot/omp-agent"
-export PI_CONFIG_DIR="devpod-repos/DefaceRoot/omp-root"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-exec ~/.bun/bin/bun --cwd="$HOME/devpod-repos/DefaceRoot/oh-my-pi" run dev "$@"
+export PI_CODING_AGENT_DIR="$REPO_ROOT/agent"
+export PI_CONFIG_DIR=".omp"
+
+exec ~/.bun/bin/bun --cwd="$REPO_ROOT" run dev "$@"
