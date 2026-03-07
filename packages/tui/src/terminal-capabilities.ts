@@ -223,6 +223,14 @@ export function setCellDimensions(dims: CellDimensions): void {
 	cellDimensions = dims;
 }
 
+function wrapTmuxPassthrough(sequence: string): string {
+	if (!Bun.env.TMUX) {
+		return sequence;
+	}
+
+	return `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`;
+}
+
 export function encodeKitty(
 	base64Data: string,
 	options: {
@@ -231,16 +239,15 @@ export function encodeKitty(
 		imageId?: number;
 	} = {},
 ): string {
-	const CHUNK_SIZE = 4096;
-
+	const chunkSize = 4096;
 	const params: string[] = ["a=T", "f=100", "q=2"];
 
 	if (options.columns) params.push(`c=${options.columns}`);
 	if (options.rows) params.push(`r=${options.rows}`);
 	if (options.imageId) params.push(`i=${options.imageId}`);
 
-	if (base64Data.length <= CHUNK_SIZE) {
-		return `\x1b_G${params.join(",")};${base64Data}\x1b\\`;
+	if (base64Data.length <= chunkSize) {
+		return wrapTmuxPassthrough(`\x1b_G${params.join(",")};${base64Data}\x1b\\`);
 	}
 
 	const chunks: string[] = [];
@@ -248,8 +255,8 @@ export function encodeKitty(
 	let isFirst = true;
 
 	while (offset < base64Data.length) {
-		const chunk = base64Data.slice(offset, offset + CHUNK_SIZE);
-		const isLast = offset + CHUNK_SIZE >= base64Data.length;
+		const chunk = base64Data.slice(offset, offset + chunkSize);
+		const isLast = offset + chunkSize >= base64Data.length;
 
 		if (isFirst) {
 			chunks.push(`\x1b_G${params.join(",")},m=1;${chunk}\x1b\\`);
@@ -260,10 +267,10 @@ export function encodeKitty(
 			chunks.push(`\x1b_Gm=1;${chunk}\x1b\\`);
 		}
 
-		offset += CHUNK_SIZE;
+		offset += chunkSize;
 	}
 
-	return chunks.join("");
+	return wrapTmuxPassthrough(chunks.join(""));
 }
 
 export function encodeITerm2(
