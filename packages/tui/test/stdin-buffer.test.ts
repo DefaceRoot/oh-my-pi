@@ -74,6 +74,22 @@ describe("StdinBuffer", () => {
 			processInput(ss3);
 			expect(emittedSequences).toEqual([ss3]);
 		});
+
+		it("should pass through complete APC sequences terminated by ST", () => {
+			const apc = "\x1b_pi:c\x1b\\";
+			processInput(apc);
+			expect(emittedSequences).toEqual([apc]);
+		});
+
+		it("should buffer incomplete APC sequences until ST arrives", () => {
+			processInput("\x1b_pi:c");
+			expect(emittedSequences).toEqual([]);
+			expect(buffer.getBuffer()).toBe("\x1b_pi:c");
+
+			processInput("\x1b\\");
+			expect(emittedSequences).toEqual(["\x1b_pi:c\x1b\\"]);
+			expect(buffer.getBuffer()).toBe("");
+		});
 	});
 
 	describe("Partial Escape Sequences", () => {
