@@ -39,8 +39,6 @@ export type ModelRole =
 	| "default"
 	| "ask"
 	| "orchestrator"
-	| "smol"
-	| "slow"
 	| "plan"
 	| "commit"
 	| "implement"
@@ -50,7 +48,11 @@ export type ModelRole =
 	| "curator"
 	| "research"
 	| "verifier"
-	| "designer";
+	| "designer"
+	| "worktree-setup"
+	| "code-reviewer"
+	| "plan-verifier"
+	| "coderabbit";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -68,11 +70,9 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 		color: "accent",
 	},
 	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent" },
-	smol: { tag: "SMOL", name: "Fast", color: "warning" },
-	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
-	implement: { tag: "IMPL", name: "Phase Agent", color: "error" },
+	implement: { tag: "IMPL", name: "Implementation Agent", color: "error" },
 	explore: { tag: "EXPLORE", name: "Explore", color: "warning" },
 	lint: { tag: "LINT", name: "Lint", color: "muted" },
 	merge: { tag: "MERGE", name: "Merge", color: "warning" },
@@ -80,14 +80,16 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	research: { tag: "RESEARCH", name: "Research", color: "accent" },
 	verifier: { tag: "VERIFY", name: "Verifier", color: "muted" },
 	designer: { tag: "DESIGN", name: "Frontend", color: "accent" },
+	"worktree-setup": { tag: "WORKTREE", name: "Worktree Setup", color: "warning" },
+	"code-reviewer": { tag: "REVIEW", name: "Code Reviewer", color: "muted" },
+	"plan-verifier": { tag: "PLANCHK", name: "Plan Verifier", color: "muted" },
+	coderabbit: { tag: "RABBIT", name: "CodeRabbit", color: "accent" },
 };
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
 	"default",
 	"ask",
 	"orchestrator",
-	"smol",
-	"slow",
 	"plan",
 	"commit",
 	"implement",
@@ -98,6 +100,10 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"research",
 	"verifier",
 	"designer",
+	"worktree-setup",
+	"code-reviewer",
+	"plan-verifier",
+	"coderabbit",
 ];
 
 const OpenRouterRoutingSchema = Type.Object({

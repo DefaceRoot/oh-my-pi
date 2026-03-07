@@ -2,7 +2,7 @@
 name: curator
 description: Workflow artifact naming specialist. Generates clear, concise names for branches, session titles, plan phases, and task descriptions.
 tools: read
-model: pi/curator, pi/smol, haiku-4.5, gemini-3-flash, flash, mini
+model: pi/curator, haiku-4.5, gemini-3-flash, flash, mini
 thinking-level: minimal
 output:
 	properties:

@@ -14,8 +14,8 @@ export interface Args {
 	allowHome?: boolean;
 	provider?: string;
 	model?: string;
-	smol?: string;
-	slow?: string;
+	explore?: string;
+	orchestrator?: string;
 	plan?: string;
 	apiKey?: string;
 	systemPrompt?: string;
@@ -83,10 +83,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
 			result.model = args[++i];
-		} else if (arg === "--smol" && i + 1 < args.length) {
-			result.smol = args[++i];
-		} else if (arg === "--slow" && i + 1 < args.length) {
-			result.slow = args[++i];
+		} else if (arg === "--explore" && i + 1 < args.length) {
+			result.explore = args[++i];
+		} else if (arg === "--orchestrator" && i + 1 < args.length) {
+			result.orchestrator = args[++i];
 		} else if (arg === "--plan" && i + 1 < args.length) {
 			result.plan = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
@@ -227,8 +227,8 @@ export function getExtraHelpText(): string {
   ${chalk.dim("# Configuration")}
   PI_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
   PI_PACKAGE_DIR             - Override package directory (for Nix/Guix store paths)
-  PI_SMOL_MODEL              - Override smol/fast model (see --smol)
-  PI_SLOW_MODEL              - Override slow/reasoning model (see --slow)
+  PI_EXPLORE_MODEL           - Override explore/fast model (see --explore)
+  PI_ORCHESTRATOR_MODEL      - Override orchestrator/reasoning model (see --orchestrator)
   PI_PLAN_MODEL              - Override planning model (see --plan)
   PI_NO_PTY                  - Disable PTY-based interactive bash execution
 

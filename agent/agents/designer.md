@@ -2,7 +2,7 @@
 name: designer
 description: UI/UX specialist for design implementation, review, and visual refinement
 spawns: "*"
-model: pi/designer, pi/subagent, anthropic/claude-sonnet-4-6
+model: pi/designer, anthropic/claude-sonnet-4-6
 thinking-level: high
 ---
 

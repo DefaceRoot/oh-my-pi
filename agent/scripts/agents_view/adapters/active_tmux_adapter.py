@@ -275,7 +275,7 @@ def _parse_omp_session_file(file_path: Path, lines: list[str]) -> tuple[str, str
     Title resolution order:
     1. ``title`` field on first line (session record).
     2. ``session-title`` customType event.
-    3. Plan name extracted from ``plan-worktree/plan-new-metadata``.
+    3. Plan name extracted from ``implementation-engine/plan-new-metadata``.
     4. First user message text (first 60 chars).
 
     Role: last model_change event; null/undefined coalesces to "default" (mirrors
@@ -312,7 +312,7 @@ def _parse_omp_session_file(file_path: Path, lines: list[str]) -> tuple[str, str
                             title = obj.get("data", {}).get("title", "")
                             if title:
                                 break
-                        if ct == "plan-worktree/plan-new-metadata" and not plan_name:
+                        if ct == "implementation-engine/plan-new-metadata" and not plan_name:
                             plan_path = obj.get("data", {}).get("planFilePath", "")
                             if plan_path:
                                 stem = Path(plan_path).stem

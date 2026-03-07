@@ -57,7 +57,7 @@ export function createAnalyzeFileTool(options: {
 	return {
 		name: "analyze_files",
 		label: "Analyze Files",
-		description: "Spawn quick_task agents to analyze files.",
+		description: "Spawn implement agents to analyze files.",
 		parameters: analyzeFileSchema,
 		async execute(toolCallId, params, onUpdate, ctx, signal) {
 			const toolSession = buildToolSession(ctx, options);
@@ -77,7 +77,7 @@ export function createAnalyzeFileTool(options: {
 				};
 			});
 			const taskParams: TaskParams = {
-				agent: "quick_task",
+				agent: "implement",
 				schema: analyzeFileOutputSchema,
 				tasks,
 			};

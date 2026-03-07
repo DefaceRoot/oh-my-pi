@@ -2,7 +2,7 @@
 name: research
 description: Research specialist for up-to-date web intelligence and MCP-backed knowledge discovery (including BTCA)
 tools: read, fetch, web_search, mcp_augment_codebase_retrieval, mcp_better_context_listresources, mcp_better_context_ask, mcp_better_context_addresource, mcp_better_context_sync
-model: pi/research, pi/slow, opus-4.5, opus-4-5, gemini-3-pro, gpt-5.2, gpt-5.2-codex
+model: pi/research, opus-4.5, opus-4-5, gemini-3-pro, gpt-5.2, gpt-5.2-codex
 thinking-level: high
 ---
 

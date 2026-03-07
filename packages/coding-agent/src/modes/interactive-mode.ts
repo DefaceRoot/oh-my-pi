@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
-import type { Component, Loader, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
+import type { Component, Loader, OverlayHandle, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
 import {
 	CombinedAutocompleteProvider,
 	Container,
@@ -27,6 +27,7 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibil
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
+import type { MCPManager } from "../mcp";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -36,6 +37,14 @@ import { getRecentSessions } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
+import {
+	ACTION_BUTTONS,
+	type ActionButtonUi,
+	FORK_REFRESH_BUTTON,
+	findActionButtonBounds,
+	hasSameVisibleText,
+	stripAnsi,
+} from "./action-buttons";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
@@ -44,10 +53,10 @@ import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import type { PythonExecutionComponent } from "./components/python-execution";
-import { HorizontalSplit } from "./components/sidebar/horizontal-split";
 import type { SidebarModel, SidebarSubagent } from "./components/sidebar/model";
 import { SidebarPanelComponent } from "./components/sidebar/sidebar-panel";
 import { StatusLineComponent } from "./components/status-line";
+import { SubagentSessionViewerComponent } from "./components/subagent-session-viewer";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
 import { CommandController } from "./controllers/command-controller";
@@ -55,18 +64,17 @@ import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { SelectorController } from "./controllers/selector-controller";
-import { setMermaidRenderCallback } from "./theme/mermaid-cache";
-import type { Theme, ThemeColor } from "./theme/theme";
-import { getEditorTheme, getMarkdownTheme, onThemeChange, theme } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, TodoItem } from "./types";
-import { UiHelpers } from "./utils/ui-helpers";
-import { ACTION_BUTTONS, type ActionButtonUi, findActionButtonBounds, hasSameVisibleText, stripAnsi } from "./action-buttons";
 import {
 	SubagentNavigatorComponent,
 	type SubagentNavigatorSelection,
 	type SubagentViewGroup,
 	type SubagentViewRef,
 } from "./subagent-navigator";
+import { setMermaidRenderCallback } from "./theme/mermaid-cache";
+import type { Theme, ThemeColor } from "./theme/theme";
+import { getEditorTheme, getMarkdownTheme, onThemeChange, theme } from "./theme/theme";
+import type { CompactionQueuedMessage, InteractiveModeContext, TodoItem } from "./types";
+import { UiHelpers } from "./utils/ui-helpers";
 
 /** Conditional startup debug prints (stderr) when PI_DEBUG_STARTUP is set */
 const debugStartup = $env.PI_DEBUG_STARTUP ? (stage: string) => process.stderr.write(`[startup] ${stage}\n`) : () => {};
@@ -77,6 +85,55 @@ const SIDEBAR_WIDTH = 38;
 const SIDEBAR_MIN_WIDTH = 120;
 const SIDEBAR_SUBAGENT_LIMIT = 8;
 const SIDEBAR_MODIFIED_FILES_REFRESH_MS = 5_000;
+
+type SidebarSessionLspServer = {
+	name: string;
+	status: "ready" | "error";
+	fileTypes: string[];
+	error?: string;
+};
+
+type SidebarMcpToolRef = {
+	name: string;
+	mcpServerName?: string;
+};
+
+export function getActiveSidebarMcpServers(
+	activeToolNames: string[],
+	mcpManager?: {
+		getConnectionStatus(name: string): "connected" | "connecting" | "disconnected";
+		getTools(): SidebarMcpToolRef[];
+	},
+): SidebarModel["mcpServers"] {
+	if (!mcpManager) return undefined;
+
+	const activeToolSet = new Set(activeToolNames);
+	const serverNames = new Set<string>();
+	for (const tool of mcpManager.getTools() as SidebarMcpToolRef[]) {
+		if (!tool.mcpServerName || !activeToolSet.has(tool.name)) continue;
+		if (mcpManager.getConnectionStatus(tool.mcpServerName) === "connected") {
+			serverNames.add(tool.mcpServerName);
+		}
+	}
+
+	const servers = Array.from(serverNames)
+		.sort((left, right) => left.localeCompare(right))
+		.map(name => ({ name, connected: true }));
+
+	return servers.length > 0 ? servers : undefined;
+}
+
+export function getActiveSidebarLspServers(
+	lspServers: SidebarSessionLspServer[] | undefined,
+): SidebarModel["lspServers"] {
+	if (!lspServers || lspServers.length === 0) return undefined;
+
+	const activeServers = lspServers
+		.filter(server => server.status === "ready")
+		.map(server => ({ name: server.name, active: true }));
+
+	return activeServers.length > 0 ? activeServers : undefined;
+}
 
 interface LoadedSubagentTranscript {
 	source: string;
@@ -128,8 +185,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	public statusLine: StatusLineComponent;
 	private readonly mainLayoutContainer: Container;
 	private readonly sidebarPanel: SidebarPanelComponent;
-	private readonly splitLayout: HorizontalSplit;
 	private readonly responsiveLayout: Component;
+	private sidebarOverlay: OverlayHandle | undefined;
 
 	public isInitialized = false;
 	public isBackgrounded = false;
@@ -184,7 +241,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	private subagentCycleIndex = -1;
 	private subagentNestedCycleIndex = -1;
 	private subagentNestedArrowMode = false;
-	private subagentViewerBlock: Container | undefined;
+	private subagentSessionViewer: SubagentSessionViewerComponent | undefined;
+	private subagentSessionOverlay: OverlayHandle | undefined;
+	private subagentViewRequestToken = 0;
 	private subagentViewActiveId: string | undefined;
 	private subagentViewRefreshInterval: ReturnType<typeof setInterval> | undefined;
 	private subagentNavigatorComponent: SubagentNavigatorComponent | undefined;
@@ -196,11 +255,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	private sidebarModifiedFilesCwd: string | undefined;
 	private sidebarModifiedFilesRefreshPromise: Promise<void> | undefined;
 	private planModeHasEntered = false;
-	public readonly lspServers:
-		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
-		| undefined = undefined;
-	public mcpManager?: import("../mcp").MCPManager;
+	public readonly lspServers: SidebarSessionLspServer[] | undefined = undefined;
+	public mcpManager?: MCPManager;
 	private readonly toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
+	private sidebarAnimationFrame = 0;
+	private sidebarAnimationInterval: ReturnType<typeof setInterval> | undefined;
 
 	private readonly commandController: CommandController;
 	private readonly eventController: EventController;
@@ -214,10 +273,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		version: string,
 		changelogMarkdown: string | undefined = undefined,
 		setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void = () => {},
-		lspServers:
-			| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
-			| undefined = undefined,
-		mcpManager?: import("../mcp").MCPManager,
+		lspServers: SidebarSessionLspServer[] | undefined = undefined,
+		mcpManager?: MCPManager,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -255,6 +312,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		this.statusLine.setHookStatus(FORK_REFRESH_BUTTON.statusKey, FORK_REFRESH_BUTTON.normalText);
 		this.mainLayoutContainer = new Container();
 		this.mainLayoutContainer.addChild(this.chatContainer);
 		this.mainLayoutContainer.addChild(this.pendingMessagesContainer);
@@ -263,17 +321,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mainLayoutContainer.addChild(new Spacer(1));
 		this.mainLayoutContainer.addChild(this.editorContainer);
 		this.sidebarPanel = new SidebarPanelComponent();
-		this.splitLayout = new HorizontalSplit(this.mainLayoutContainer, this.sidebarPanel, SIDEBAR_WIDTH);
 		this.responsiveLayout = {
 			render: width => {
+				const mainWidth = this.getMainContentWidth(width);
 				if (width >= SIDEBAR_MIN_WIDTH) {
 					this.sidebarPanel.update(this.buildSidebarModel(SIDEBAR_WIDTH));
-					return this.splitLayout.render(width);
+					return this.mainLayoutContainer.render(mainWidth);
 				}
 				return this.mainLayoutContainer.render(width);
 			},
 			invalidate: () => {
-				this.splitLayout.invalidate();
+				this.mainLayoutContainer.invalidate();
+				this.sidebarPanel.invalidate();
 			},
 		};
 
@@ -411,6 +470,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Start the UI
 		this.ui.start();
 		this.isInitialized = true;
+		this.ensureSidebarOverlay();
+		this.ui.setFocus(this.editor);
 		this.ui.requestRender(true);
 
 		// Set initial terminal title (will be updated when session title is generated)
@@ -473,6 +534,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.setTopBorder(topBorder);
 	}
 
+	private ensureSidebarOverlay(): void {
+		if (this.sidebarOverlay) return;
+		this.sidebarOverlay = this.ui.showOverlay(this.sidebarPanel, {
+			anchor: "top-right",
+			width: SIDEBAR_WIDTH,
+			visible: termWidth => termWidth >= SIDEBAR_MIN_WIDTH,
+		});
+	}
+
 	private getMainContentWidth(totalWidth = this.ui.terminal.columns): number {
 		const safeWidth = Math.max(1, totalWidth);
 		if (safeWidth < SIDEBAR_MIN_WIDTH) return safeWidth;
@@ -488,6 +558,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			todos: this.buildSidebarTodos(),
 			subagents: this.buildSidebarSubagents(),
 			modifiedFiles: this.buildSidebarModifiedFiles(),
+			animationFrame: this.sidebarAnimationFrame,
 		};
 	}
 
@@ -521,33 +592,47 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private buildSidebarMcpServers(): SidebarModel["mcpServers"] {
-		if (!this.mcpManager) return undefined;
-		const names = this.mcpManager
-			.getAllServerNames()
-			.slice()
-			.sort((a, b) => a.localeCompare(b));
-		if (names.length === 0) return undefined;
-		return names.map(name => ({
-			name,
-			connected: this.mcpManager?.getConnectionStatus(name) === "connected",
-		}));
+		return getActiveSidebarMcpServers(this.session.getActiveToolNames(), this.mcpManager);
 	}
 
 	private buildSidebarLspServers(): SidebarModel["lspServers"] {
-		if (!this.lspServers || this.lspServers.length === 0) return undefined;
-		return this.lspServers.map(server => ({
-			name: server.name,
-			active: server.status === "ready",
-		}));
+		return getActiveSidebarLspServers(this.lspServers);
 	}
-
 	private buildSidebarTodos(): SidebarModel["todos"] {
-		if (this.todoItems.length === 0) return undefined;
+		if (this.todoItems.length === 0) {
+			this.stopSidebarAnimation();
+			return undefined;
+		}
+
+		const hasInProgress = this.todoItems.some(t => t.status === "in_progress");
+		if (hasInProgress) {
+			this.startSidebarAnimation();
+		} else {
+			this.stopSidebarAnimation();
+		}
+
 		return this.todoItems.slice(0, SIDEBAR_SUBAGENT_LIMIT).map(todo => ({
 			id: todo.id,
 			content: todo.content,
 			status: todo.status,
 		}));
+	}
+
+	private startSidebarAnimation(): void {
+		if (this.sidebarAnimationInterval) return;
+		this.sidebarAnimationInterval = setInterval(() => {
+			this.sidebarAnimationFrame = (this.sidebarAnimationFrame + 1) % 10;
+			if (this.isInitialized) {
+				this.ui.requestRender();
+			}
+		}, 100);
+	}
+
+	private stopSidebarAnimation(): void {
+		if (!this.sidebarAnimationInterval) return;
+		clearInterval(this.sidebarAnimationInterval);
+		this.sidebarAnimationInterval = undefined;
+		this.sidebarAnimationFrame = 0;
 	}
 
 	private buildSubagentStatusMap(): Map<string, SidebarSubagent["status"]> {
@@ -954,6 +1039,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		this.stopSidebarAnimation();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
@@ -970,7 +1056,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.isInitialized = false;
 		}
 	}
-
 	async shutdown(): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
@@ -1191,11 +1276,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	renderInitialMessages(): void {
 		this.stopSubagentViewRefresh();
 		this.subagentNavigatorOverlay?.hide();
+		this.subagentSessionOverlay?.hide();
+		this.subagentViewRequestToken += 1;
 		this.subagentCycleSignature = undefined;
 		this.subagentCycleIndex = -1;
 		this.subagentNestedCycleIndex = -1;
 		this.subagentNestedArrowMode = false;
-		this.subagentViewerBlock = undefined;
+		this.subagentSessionViewer = undefined;
+		this.subagentSessionOverlay = undefined;
 		this.subagentViewActiveId = undefined;
 		this.subagentNavigatorComponent = undefined;
 		this.subagentNavigatorClose = undefined;
@@ -1349,7 +1437,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentNavigatorComponent.moveRoot(direction);
 			return;
 		}
-		if (this.subagentViewerBlock && this.subagentViewActiveId) {
+		if (this.subagentSessionViewer && this.subagentViewActiveId) {
 			await this.navigateSubagentView("root", direction);
 			return;
 		}
@@ -1361,7 +1449,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentNavigatorComponent.moveNested(direction);
 			return;
 		}
-		if (this.subagentViewerBlock && this.subagentViewActiveId) {
+		if (this.subagentSessionViewer && this.subagentViewActiveId) {
 			await this.navigateSubagentView("nested", direction);
 			return;
 		}
@@ -1433,7 +1521,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentCycleIndex = -1;
 			this.subagentNestedCycleIndex = -1;
 			this.subagentNestedArrowMode = false;
-			if (!this.subagentViewerBlock) {
+			if (!this.subagentSessionViewer) {
 				this.statusLine.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
 			}
 			this.ui.requestRender();
@@ -1530,7 +1618,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("No subagent transcripts found in this session yet.");
 			return;
 		}
+		const requestToken = ++this.subagentViewRequestToken;
 		const transcript = await this.loadSubagentTranscript(selected);
+		if (requestToken !== this.subagentViewRequestToken) return;
 		if (!transcript) {
 			this.showWarning(`No transcript found for subagent '${selected.id}'.`);
 			return;
@@ -1618,7 +1708,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("No subagent transcripts found in this session yet.");
 			return;
 		}
+		const requestToken = ++this.subagentViewRequestToken;
 		const transcript = await this.loadSubagentTranscript(selected);
+		if (requestToken !== this.subagentViewRequestToken) return;
 		if (!transcript) {
 			this.showWarning(`No transcript found for subagent '${selected.id}'.`);
 			return;
@@ -1635,28 +1727,28 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		this.stopSubagentViewRefresh();
+		this.subagentViewRequestToken += 1;
+		this.closeSubagentSessionViewer();
 		this.subagentViewActiveId = undefined;
 		this.subagentCycleSignature = undefined;
 		this.subagentCycleIndex = -1;
 		this.subagentNestedCycleIndex = -1;
 		this.subagentNestedArrowMode = false;
-		this.subagentViewerBlock = undefined;
 		this.subagentNavigatorComponent = undefined;
 		this.subagentNavigatorClose = undefined;
 		this.subagentNavigatorOverlay = undefined;
 		this.subagentNavigatorGroups = [];
 		this.statusLine.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
-		this.rebuildChatFromMessages();
-		if (this.streamingComponent && this.streamingMessage) {
-			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
-			this.streamingComponent.updateContent(this.streamingMessage);
-			this.chatContainer.addChild(this.streamingComponent);
-		}
 		this.ui.requestRender();
 	}
 
 	isSubagentViewActive(): boolean {
-		return Boolean(this.subagentNavigatorClose || this.subagentNavigatorOverlay || this.subagentViewActiveId);
+		return Boolean(
+			this.subagentNavigatorClose ||
+				this.subagentNavigatorOverlay ||
+				this.subagentSessionOverlay ||
+				this.subagentViewActiveId,
+		);
 	}
 
 	isSubagentNestedArrowModeEnabled(): boolean {
@@ -1703,8 +1795,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNestedCycleIndex = this.clampSubagentNestedSelection(selectedGroup, this.subagentNestedCycleIndex);
 		const selected = this.getSubagentSelectionRef(selectedGroup, this.subagentNestedCycleIndex);
 		if (!selected) return;
+		const requestToken = ++this.subagentViewRequestToken;
 		const transcript = await this.loadSubagentTranscript(selected);
-		if (!transcript) return;
+		if (requestToken !== this.subagentViewRequestToken || !transcript) return;
 		this.subagentViewActiveId = selected.id;
 		await this.renderSubagentSession(selected, transcript, groups);
 	}
@@ -1984,6 +2077,138 @@ export class InteractiveMode implements InteractiveModeContext {
 		return lines.join("\n");
 	}
 
+	private closeSubagentSessionViewer(): void {
+		const overlay = this.subagentSessionOverlay;
+		this.subagentSessionOverlay = undefined;
+		overlay?.hide();
+		this.subagentSessionViewer = undefined;
+	}
+
+	private formatSubagentViewerBodyLines(transcript: LoadedSubagentTranscript): string[] {
+		const fallbackLines = transcript.content.split("\n");
+		if (!transcript.sessionContext || transcript.sessionContext.messages.length === 0) {
+			return fallbackLines.length > 0 ? fallbackLines : [theme.fg("dim", "(no transcript content)")];
+		}
+		const lines: string[] = [];
+		for (const message of transcript.sessionContext.messages) {
+			const rendered = this.formatSubagentViewerMessage(message);
+			if (rendered.length === 0) continue;
+			if (lines.length > 0) lines.push("");
+			lines.push(...rendered);
+		}
+		return lines.length > 0 ? lines : fallbackLines;
+	}
+
+	private formatSubagentViewerMessage(message: AgentMessage): string[] {
+		const role = (message as { role?: string }).role;
+		switch (role) {
+			case "user":
+			case "developer": {
+				const text = this.getUserMessageText(message as Message);
+				const label = role === "developer" ? "developer" : "user";
+				return [
+					theme.bold(theme.fg(role === "user" ? "accent" : "warning", `[${label}]`)),
+					...(text ? text.split("\n") : [theme.fg("dim", "(no text)")]),
+				];
+			}
+			case "assistant": {
+				const assistant = message as AssistantMessage;
+				const lines = [theme.bold(theme.fg("success", "[assistant]"))];
+				const text = this.extractAssistantText(assistant);
+				if (text) lines.push(...text.split("\n"));
+				for (const block of assistant.content) {
+					if (block.type === "toolCall") {
+						lines.push(theme.fg("dim", `[tool] ${block.name}`));
+					}
+				}
+				if (lines.length === 1) lines.push(theme.fg("dim", "(no visible text)"));
+				return lines;
+			}
+			case "toolResult": {
+				const toolMessage = message as { toolName?: string; content?: Array<{ type?: string; text?: string }> };
+				const lines = [theme.bold(theme.fg("muted", `[tool result] ${toolMessage.toolName ?? "tool"}`))];
+				const textBlocks = Array.isArray(toolMessage.content)
+					? toolMessage.content
+							.filter(
+								(content): content is { type: "text"; text: string } =>
+									content?.type === "text" && typeof content.text === "string",
+							)
+							.map(content => content.text)
+					: [];
+				if (textBlocks.length > 0) {
+					lines.push(...textBlocks.join("\n").split("\n"));
+				} else {
+					lines.push(theme.fg("dim", "(no text output)"));
+				}
+				return lines;
+			}
+			case "bashExecution": {
+				const bashMessage = message as {
+					command?: string;
+					output?: string;
+					exitCode?: number;
+					cancelled?: boolean;
+				};
+				const lines = [theme.bold(theme.fg("bashMode", `$ ${bashMessage.command ?? ""}`))];
+				if (bashMessage.output) lines.push(...bashMessage.output.split("\n"));
+				if (bashMessage.cancelled) {
+					lines.push(theme.fg("warning", "(cancelled)"));
+				} else if (typeof bashMessage.exitCode === "number") {
+					lines.push(theme.fg(bashMessage.exitCode === 0 ? "dim" : "error", `(exit ${bashMessage.exitCode})`));
+				}
+				return lines;
+			}
+			case "pythonExecution": {
+				const pythonMessage = message as { code?: string; output?: string; exitCode?: number; cancelled?: boolean };
+				const lines = [theme.bold(theme.fg("pythonMode", "[python]"))];
+				if (pythonMessage.code) lines.push(...pythonMessage.code.split("\n"));
+				if (pythonMessage.output) lines.push(...pythonMessage.output.split("\n"));
+				if (pythonMessage.cancelled) {
+					lines.push(theme.fg("warning", "(cancelled)"));
+				} else if (typeof pythonMessage.exitCode === "number") {
+					lines.push(theme.fg(pythonMessage.exitCode === 0 ? "dim" : "error", `(exit ${pythonMessage.exitCode})`));
+				}
+				return lines;
+			}
+			case "branchSummary": {
+				const summary = (message as { summary?: string }).summary ?? "";
+				return [
+					theme.bold(theme.fg("warning", "[branch summary]")),
+					...(summary ? summary.split("\n") : [theme.fg("dim", "(empty summary)")]),
+				];
+			}
+			case "compactionSummary": {
+				const summary = (message as { summary?: string }).summary ?? "";
+				return [
+					theme.bold(theme.fg("warning", "[compaction summary]")),
+					...(summary ? summary.split("\n") : [theme.fg("dim", "(empty summary)")]),
+				];
+			}
+			case "fileMention": {
+				const files = (message as { files?: Array<{ path?: string }> }).files ?? [];
+				const lines = [theme.bold(theme.fg("dim", "[files]"))];
+				for (const file of files) {
+					if (file.path) lines.push(file.path);
+				}
+				if (lines.length === 1) lines.push(theme.fg("dim", "(no files)"));
+				return lines;
+			}
+			case "hookMessage":
+			case "custom": {
+				const customMessage = message as { customType?: string; details?: { name?: string }; display?: boolean };
+				const label =
+					customMessage.customType === SKILL_PROMPT_MESSAGE_TYPE && typeof customMessage.details?.name === "string"
+						? `[skill] ${customMessage.details.name}`
+						: `[${customMessage.customType ?? role}]`;
+				const lines = [theme.bold(theme.fg("warning", label))];
+				if (customMessage.display === false) lines.push(theme.fg("dim", "(hidden)"));
+				return lines;
+			}
+			default:
+				return [theme.bold(theme.fg("dim", `[${role ?? "message"}]`))];
+		}
+	}
+
 	private async renderSubagentSession(
 		selected: SubagentViewRef,
 		transcript: LoadedSubagentTranscript,
@@ -2051,62 +2276,49 @@ export class InteractiveMode implements InteractiveModeContext {
 				: isParentSelection
 					? `nested 0/${nestedCount} root-implied`
 					: `${nestedPosition}/${nestedCount} ${agentLabel}`;
-		const arrowNavigationHint = this.subagentNestedArrowMode
-			? "Up/Down (or Left/Right) nested descendants"
-			: "Up/Down (or Left/Right) task";
-
-		this.chatContainer.clear();
-		this.pendingTools.clear();
-
-		const block = new Container();
-		block.addChild(new Spacer(1));
-		block.addChild(new DynamicBorder());
-		block.addChild(
-			new Text(
-				theme.bold(
-					theme.fg(
-						"warning",
-						`[SUBAGENT] task ${taskPosition}/${taskCount}, ${nestedStatusLabel}: ${selected.id}`,
-					),
-				),
-				1,
-				0,
+		const headerLines = [
+			theme.bold(
+				theme.fg("warning", `[SUBAGENT] task ${taskPosition}/${taskCount}, ${nestedStatusLabel}: ${selected.id}`),
 			),
-		);
-		block.addChild(new Text(theme.fg("dim", `Agent: ${agentLabel}`), 1, 0));
-		block.addChild(new Text(theme.fg("dim", `Model: ${modelLabel}${modelSuffix}`), 1, 0));
-		block.addChild(new Text(theme.fg("dim", `Context: ${contextLabel}`), 1, 0));
-		block.addChild(new Text(theme.fg("dim", `Skills: ${skillsLabel}`), 1, 0));
-		block.addChild(new Text(theme.fg("dim", tokensLabel), 1, 0));
-		block.addChild(new Text(theme.fg("dim", `Source: ${transcript.source}`), 1, 0));
-		block.addChild(new Text(theme.fg("dim", "Hierarchy (most recent task first):"), 1, 0));
-		for (const line of visibleHierarchyLines) {
-			block.addChild(new Text(line, 1, 0));
+			theme.fg("dim", `Agent: ${agentLabel}`),
+			theme.fg("dim", `Model: ${modelLabel}${modelSuffix}`),
+			theme.fg("dim", `Context: ${contextLabel}`),
+			theme.fg("dim", `Skills: ${skillsLabel}`),
+			theme.fg("dim", tokensLabel),
+			theme.fg("dim", `Source: ${transcript.source}`),
+			theme.fg("dim", "Hierarchy (most recent task first):"),
+			...visibleHierarchyLines,
+			...(hiddenHierarchyCount > 0 ? [theme.fg("dim", `  … +${hiddenHierarchyCount} more nested subagents`)] : []),
+		];
+		const bodyLines = this.formatSubagentViewerBodyLines(transcript);
+		if (!this.subagentSessionViewer) {
+			const viewer = new SubagentSessionViewerComponent({
+				getTerminalRows: () => this.ui.terminal.rows,
+				leaderKey,
+				onClose: () => this.exitSubagentView(),
+				onNavigateRoot: direction => {
+					void this.navigateSubagentView("root", direction);
+				},
+				onNavigateNested: direction => {
+					void this.navigateSubagentView("nested", direction);
+				},
+				onCycleAgentMode: () => {
+					void this.inputController.cycleAgentMode();
+				},
+			});
+			this.subagentSessionViewer = viewer;
+			this.subagentSessionOverlay = this.ui.showOverlay(viewer, {
+				width: "92%",
+				maxHeight: "85%",
+				anchor: "center",
+				margin: 1,
+			});
 		}
-		if (hiddenHierarchyCount > 0) {
-			block.addChild(new Text(theme.fg("dim", `  … +${hiddenHierarchyCount} more nested subagents`), 1, 0));
-		}
-		block.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`Navigation: ${leaderKey} toggle, ${arrowNavigationHint}, Tab/Shift+Tab nested descendants, Esc exit`,
-				),
-				1,
-				0,
-			),
-		);
-		block.addChild(new DynamicBorder());
-		this.chatContainer.addChild(block);
-		this.subagentViewerBlock = block;
-
-		if (transcript.sessionContext) {
-			this.renderSessionContext(transcript.sessionContext, { updateFooter: false, populateHistory: false });
-		} else {
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(new Text(transcript.content, 1, 0));
-		}
-
+		this.subagentSessionViewer.setContent({
+			headerLines,
+			bodyLines,
+			nestedArrowMode: this.subagentNestedArrowMode,
+		});
 		this.statusLine.setHookStatus(
 			SUBAGENT_VIEWER_STATUS_KEY,
 			[

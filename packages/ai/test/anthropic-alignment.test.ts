@@ -18,6 +18,7 @@ import {
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
@@ -68,7 +69,12 @@ async function withEnv(overrides: Record<string, string | undefined>, fn: () => 
 function captureAnthropicPayload(
 	model: Model<"anthropic-messages">,
 	context: Context,
-	options?: { isOAuth?: boolean; metadata?: { user_id?: string } },
+	options?: {
+		isOAuth?: boolean;
+		metadata?: { user_id?: string };
+		reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+		thinkingEnabled?: boolean;
+	},
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamAnthropic(model, context, {
@@ -76,6 +82,8 @@ function captureAnthropicPayload(
 		isOAuth: options?.isOAuth ?? true,
 		signal: createAbortedSignal(),
 		metadata: options?.metadata,
+		reasoning: options?.reasoning,
+		thinkingEnabled: options?.thinkingEnabled,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -227,6 +235,34 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(systemBlocks[0]?.text).toBe("Stay concise.");
 	});
 
+	it("clamps Sonnet 4.6 xhigh reasoning requests to high for direct Anthropic payloads", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-6") as Model<"anthropic-messages">;
+		const payload = (await captureAnthropicPayload(
+			model,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ isOAuth: false, reasoning: "xhigh", thinkingEnabled: true },
+		)) as { output_config?: { effort?: string }; thinking?: { type?: string } };
+		expect(payload.thinking?.type).toBe("adaptive");
+		expect(payload.output_config?.effort).toBe("high");
+	});
+
+	it("keeps Opus 4.6 xhigh reasoning requests at max for direct Anthropic payloads", async () => {
+		const model = getBundledModel("anthropic", "claude-opus-4-6") as Model<"anthropic-messages">;
+		const payload = (await captureAnthropicPayload(
+			model,
+			{
+				systemPrompt: "Stay concise.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ isOAuth: false, reasoning: "xhigh", thinkingEnabled: true },
+		)) as { output_config?: { effort?: string }; thinking?: { type?: string } };
+		expect(payload.thinking?.type).toBe("adaptive");
+		expect(payload.output_config?.effort).toBe("max");
+	});
+
 	it("accepts uppercase hex in the user hash segment", () => {
 		const userId =
 			"user_ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD_account_12345678-1234-1234-1234-1234567890ab_session_abcdefab-cdef-abcd-efab-cdefabcdef12";
@@ -287,18 +323,20 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
 		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
 	});
-	it("drops fine-grained tool-streaming beta from default Anthropic client options", () => {
+	it("keeps context-1m beta alongside default Anthropic beta headers", () => {
 		const options = buildAnthropicClientOptions({
 			model: ANTHROPIC_MODEL,
 			apiKey: "sk-ant-oat-test",
-			extraBetas: [],
+			extraBetas: ["context-1m-2025-08-07"],
 			stream: true,
 			interleavedThinking: false,
 			dynamicHeaders: {},
 		});
 
-		const beta = options.defaultHeaders["Anthropic-Beta"];
+		const beta = options.defaultHeaders["Anthropic-Beta"] ?? options.defaultHeaders["anthropic-beta"] ?? "";
 		expect(beta).toContain("context-management-2025-06-27");
+		expect(beta).toContain("prompt-caching-scope-2026-01-05");
+		expect(beta).toContain("context-1m-2025-08-07");
 		expect(beta).not.toContain("fine-grained-tool-streaming-2025-05-14");
 	});
 

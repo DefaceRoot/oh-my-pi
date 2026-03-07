@@ -18,7 +18,7 @@ import { runChangelogFlow } from "./changelog";
 import { ControlledGit } from "./git";
 import { runMapReduceAnalysis, shouldUseMapReduce } from "./map-reduce";
 import { formatCommitMessage } from "./message";
-import { resolvePrimaryModel, resolveSmolModel } from "./model-selection";
+import { resolveCommitRoleModel, resolvePrimaryModel } from "./model-selection";
 import summaryRetryPrompt from "./prompts/summary-retry.md" with { type: "text" };
 import typesDescriptionPrompt from "./prompts/types-description.md" with { type: "text" };
 import type { CommitCommandArgs, ConventionalAnalysis } from "./types";
@@ -50,7 +50,7 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 		settings,
 		modelRegistry,
 	);
-	const { model: smolModel, apiKey: smolApiKey } = await resolveSmolModel(
+	const { model: commitModel, apiKey: commitApiKey } = await resolveCommitRoleModel(
 		settings,
 		modelRegistry,
 		primaryModel,
@@ -101,8 +101,8 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 		userContext: args.context,
 		primaryModel,
 		primaryApiKey,
-		smolModel,
-		smolApiKey,
+		commitModel,
+		commitApiKey,
 		commitSettings,
 	});
 
@@ -144,8 +144,8 @@ async function generateAnalysis(input: {
 	userContext?: string;
 	primaryModel: Model<Api>;
 	primaryApiKey: string;
-	smolModel: Model<Api>;
-	smolApiKey: string;
+	commitModel: Model<Api>;
+	commitApiKey: string;
 	commitSettings: {
 		mapReduceEnabled: boolean;
 		mapReduceMinFiles: number;
@@ -166,8 +166,8 @@ async function generateAnalysis(input: {
 		return runMapReduceAnalysis({
 			model: input.primaryModel,
 			apiKey: input.primaryApiKey,
-			smolModel: input.smolModel,
-			smolApiKey: input.smolApiKey,
+			analysisModel: input.commitModel,
+			analysisApiKey: input.commitApiKey,
 			diff: input.diff,
 			stat: input.stat,
 			scopeCandidates: input.scopeCandidates,

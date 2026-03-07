@@ -149,7 +149,7 @@ Structured code review with priority-based findings:
 
 Parallel execution framework with specialized agents and real-time streaming:
 
-- **6 bundled agents**: explore, plan, designer, reviewer, task, quick_task
+- **Bundled specialists**: explore, implement, plan, research, designer, code-reviewer, lint, commit, merge, curator, verifier, worktree-setup, and ask-mode scouts
 - **Parallel exploration**: Reviewer agent can spawn explore agents for large codebase analysis
 - **Real-time artifact streaming**: Task outputs stream as they're created, not just at completion
 - **Full output access**: Read complete subagent output via `agent://<id>` resources when previews truncate
@@ -168,10 +168,10 @@ Parallel execution framework with specialized agents and real-time streaming:
 
 Configure different models for different purposes with automatic discovery:
 
-- **Role-based routing**: `default`, `smol`, `slow`, `plan`, and `commit` roles
+- **Role-based routing**: `default`, `orchestrator`, `explore`, `implement`, `plan`, plus specialist roles (`commit`, `lint`, `merge`, etc.)
 - **Configurable discovery**: Role defaults are auto-resolved and can be overridden per role
-- **Role-based selection**: Task tool agents can use `model: pi/smol` for cost-effective exploration
-- CLI args (`--smol`, `--slow`, `--plan`) and env vars (`PI_SMOL_MODEL`, `PI_SLOW_MODEL`, `PI_PLAN_MODEL`)
+- **Role-based selection**: Task tool agents can use `model: pi/explore` for cost-effective reconnaissance
+- CLI args (`--explore`, `--orchestrator`, `--plan`) and env vars (`PI_EXPLORE_MODEL`, `PI_ORCHESTRATOR_MODEL`, `PI_PLAN_MODEL`)
 - Configure roles interactively via `/model` selector and persist assignments to settings
 
 ### + Todo Tool (Task Tracking)
@@ -311,7 +311,7 @@ Create images directly from the agent:
 
 Modern terminal interface with smart session management:
 
-- **Auto session titles**: Sessions automatically titled based on first message using smol model
+- **Auto session titles**: Sessions automatically titled based on first message using the configured curator model
 - **Welcome screen**: Logo, tips, recent sessions with selection
 - **Powerline footer**: Model, cwd, git branch/status, token usage, context %
 - **LSP status**: Shows which language servers are active and ready
@@ -575,8 +575,9 @@ This is the practical onboarding flow for new users.
 Use `/model` in the TUI and assign role models:
 
 - `default` → normal implementation work
-- `smol` → fast/cheap exploration and lightweight tasks
-- `slow` → deep reasoning for complex debugging/refactors
+- `orchestrator` → deep reasoning and coordination for complex debugging/refactors
+- `explore` → fast/cheap reconnaissance and lightweight discovery
+- `implement` → delegated implementation subagent execution
 - `plan` → model used while plan mode is active (`/plan`)
 - `commit` → model used by commit/changelog workflows
 
@@ -685,7 +686,7 @@ Bundled custom slash commands include `/review` (interactive code review launche
 | Ctrl+D                | Exit (when editor is empty)                               |
 | Ctrl+Z                | Suspend to background (use `fg` in shell to resume)       |
 | Shift+Tab             | Cycle thinking level                                      |
-| Ctrl+P / Shift+Ctrl+P | Cycle role models (slow/default/smol), temporary on shift |
+| Ctrl+P / Shift+Ctrl+P | Cycle role models (orchestrator/default/explore), temporary on shift |
 | Alt+P                 | Select model temporarily                                  |
 | Ctrl+L                | Open model selector                                       |
 | Alt+Shift+P           | Toggle plan mode                                          |
@@ -875,8 +876,8 @@ theme:
 
 modelRoles:
   default: anthropic/claude-sonnet-4-20250514
-  plan: anthropic/claude-opus-4-1:high
-  smol: anthropic/claude-sonnet-4-20250514
+  orchestrator: anthropic/claude-opus-4-1:high
+  explore: anthropic/claude-sonnet-4-20250514
 defaultThinkingLevel: high
 enabledModels:
   - anthropic/*
@@ -1097,8 +1098,8 @@ omp <command> [args] [flags]
 | ------------------------------------- | ------------------------------------------------------------------ |
 | `--provider <name>`                   | Provider hint (legacy; prefer `--model`)                           |
 | `--model <id>`                        | Model ID (supports fuzzy match)                                    |
-| `--smol <id>`                         | Override the `smol` role model for this run                        |
-| `--slow <id>`                         | Override the `slow` role model for this run                        |
+| `--explore <id>`                      | Override the `explore` role model for this run                     |
+| `--orchestrator <id>`                 | Override the `orchestrator` role model for this run                |
 | `--plan <id>`                         | Override the `plan` role model for this run                        |
 | `--models <patterns>`                 | Comma-separated model patterns for role cycling                    |
 | `--list-models [pattern]`             | List available models (optional fuzzy filter)                      |
@@ -1184,7 +1185,7 @@ omp --export session.jsonl output.html
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.       | Provider credentials                                    |
 | `PI_CODING_AGENT_DIR`                             | Override agent data directory (default: `~/.omp/agent`) |
 | `PI_PACKAGE_DIR`                                  | Override package directory resolution                   |
-| `PI_SMOL_MODEL`, `PI_SLOW_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
+| `PI_EXPLORE_MODEL`, `PI_ORCHESTRATOR_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
 | `PI_NO_PTY`                                       | Disable PTY-based bash execution                        |
 | `VISUAL`, `EDITOR`                                | External editor for Ctrl+G                              |
 

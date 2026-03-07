@@ -159,6 +159,18 @@ describe("generated model policies", () => {
 				contextWindow: 400000,
 				maxTokens: 32000,
 			},
+			{
+				id: "gpt-5.4-codex",
+				name: "GPT-5.4 Codex",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1050000,
+				maxTokens: 128000,
+			},
 		];
 
 		applyGeneratedModelPolicies(models);
@@ -179,6 +191,44 @@ describe("generated model policies", () => {
 		expect(models[1]?.cost.cacheWrite).toBe(6.25);
 		expect(models[1]?.contextWindow).toBe(200000);
 		expect(models[2]?.contextWindow).toBe(272000);
+		expect(models[3]?.contextWindow).toBe(1050000);
+	});
+
+	it("falls back to 200K for Anthropic 4.6 without the context-1m beta header", () => {
+		const models: Model<Api>[] = [
+			{
+				id: "claude-sonnet-4-6",
+				name: "Claude Sonnet 4.6",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1000000,
+				maxTokens: 64000,
+			},
+			{
+				id: "claude-opus-4-6",
+				name: "Claude Opus 4.6",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1000000,
+				maxTokens: 64000,
+				headers: {
+					"Anthropic-Beta": "context-management-2025-06-27, context-1m-2025-08-07",
+				},
+			},
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(200000);
+		expect(models[1]?.contextWindow).toBe(1000000);
 	});
 
 	it("links spark variants to their base models", () => {
@@ -236,6 +286,25 @@ describe("model thinking runtime helpers", () => {
 
 		expect(clampThinkingLevelForModel(model, Effort.High)).toBeUndefined();
 	});
+
+	it("infers supported efforts for known reasoning models when metadata is missing", () => {
+		const model = {
+			id: "gpt-5.4",
+			name: "GPT-5.4",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_050_000,
+			maxTokens: 128_000,
+		} as Model<"openai-codex-responses">;
+
+		expect(clampThinkingLevelForModel(model, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
 
 	it("rejects reasoning models that are missing thinking metadata at runtime", () => {
 		const model = {

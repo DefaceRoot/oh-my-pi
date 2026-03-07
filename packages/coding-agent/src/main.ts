@@ -564,13 +564,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	logger.time("initializeWithSettings", () => initializeWithSettings(settings));
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
-	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;
-	const slowModel = parsedArgs.slow ?? $env.PI_SLOW_MODEL;
+	const exploreModel = parsedArgs.explore ?? $env.PI_EXPLORE_MODEL;
+	const orchestratorModel = parsedArgs.orchestrator ?? $env.PI_ORCHESTRATOR_MODEL;
 	const planModel = parsedArgs.plan ?? $env.PI_PLAN_MODEL;
-	if (smolModel || slowModel || planModel) {
+	if (exploreModel || orchestratorModel || planModel) {
 		settings.overrideModelRoles({
-			smol: smolModel,
-			slow: slowModel,
+			explore: exploreModel,
+			orchestrator: orchestratorModel,
 			plan: planModel,
 		});
 	}

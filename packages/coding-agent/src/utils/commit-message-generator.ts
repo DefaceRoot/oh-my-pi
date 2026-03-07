@@ -1,6 +1,6 @@
 /**
- * Generate commit messages from diffs using a smol, fast model.
- * Follows the same pattern as title-generator.ts.
+ * Generate commit messages from diffs using a commit-role fast model.
+ * Follows the same candidate ordering pattern as title-generator.ts.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
@@ -8,7 +8,6 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { parseModelString } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
 
 const COMMIT_SYSTEM_PROMPT = renderPromptTemplate(commitSystemPrompt);
@@ -32,7 +31,7 @@ function filterDiffNoise(diff: string): string {
 	return filtered.join("\n");
 }
 
-function getSmolModelCandidates(registry: ModelRegistry, savedSmolModel?: string): Model<Api>[] {
+function getCommitModelCandidates(registry: ModelRegistry, savedCommitModel?: string): Model<Api>[] {
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return [];
 
@@ -43,18 +42,12 @@ function getSmolModelCandidates(registry: ModelRegistry, savedSmolModel?: string
 		candidates.push(model);
 	};
 
-	if (savedSmolModel) {
-		const parsed = parseModelString(savedSmolModel);
+	if (savedCommitModel) {
+		const parsed = parseModelString(savedCommitModel);
 		if (parsed) {
 			const match = availableModels.find(m => m.provider === parsed.provider && m.id === parsed.id);
 			addCandidate(match);
 		}
-	}
-
-	for (const pattern of MODEL_PRIO.smol) {
-		const needle = pattern.toLowerCase();
-		addCandidate(availableModels.find(m => m.id.toLowerCase() === needle));
-		addCandidate(availableModels.find(m => m.id.toLowerCase().includes(needle)));
 	}
 
 	for (const model of availableModels) {
@@ -71,12 +64,12 @@ function getSmolModelCandidates(registry: ModelRegistry, savedSmolModel?: string
 export async function generateCommitMessage(
 	diff: string,
 	registry: ModelRegistry,
-	savedSmolModel?: string,
+	savedCommitModel?: string,
 	sessionId?: string,
 ): Promise<string | null> {
-	const candidates = getSmolModelCandidates(registry, savedSmolModel);
+	const candidates = getCommitModelCandidates(registry, savedCommitModel);
 	if (candidates.length === 0) {
-		logger.debug("commit-msg-generator: no smol model found");
+		logger.debug("commit-msg-generator: no candidate model found");
 		return null;
 	}
 

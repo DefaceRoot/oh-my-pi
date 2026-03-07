@@ -2,7 +2,7 @@
 name: lint
 description: Project-aware quality checker that discovers and runs all available lint, type-check, and test tooling on modified files
 tools: bash, read, find
-model: pi/lint, pi/smol, haiku-4.5, gemini-3-flash, flash, mini
+model: pi/lint, haiku-4.5, gemini-3-flash, flash, mini
 thinking-level: minimal
 output:
   properties:

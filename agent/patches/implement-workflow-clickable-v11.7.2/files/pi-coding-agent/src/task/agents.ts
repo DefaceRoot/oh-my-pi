@@ -44,26 +44,15 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{
 		fileName: "task.md",
 		frontmatter: {
-			name: "task",
+			name: "implement",
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
 			spawns: "*",
 			model: "default",
-				thinkingLevel: "high",
-		},
-		template: taskMd,
-		},
-	{
-		fileName: "quick_task.md",
-		frontmatter: {
-			name: "quick_task",
-			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
-			model: "pi/smol",
-			thinkingLevel: "minimal",
+			thinkingLevel: "high",
 		},
 		template: taskMd,
 	},
 ];
-
 const EMBEDDED_AGENTS: { name: string; content: string }[] = EMBEDDED_AGENT_DEFS.map(def => ({
 	name: def.fileName,
 	content: buildAgentContent(def),

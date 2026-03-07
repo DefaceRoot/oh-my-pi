@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
+import { BUILTIN_SLASH_COMMANDS } from "../../extensibility/slash-commands";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
@@ -25,6 +26,8 @@ type QueuedMessages = {
 	steering: string[];
 	followUp: string[];
 };
+
+const BUILTIN_SLASH_COMMAND_NAMES = new Set(BUILTIN_SLASH_COMMANDS.map(command => command.name));
 
 export class UiHelpers {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -474,6 +477,10 @@ export class UiHelpers {
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		if (!commandName) return false;
+
+		if (BUILTIN_SLASH_COMMAND_NAMES.has(commandName)) {
+			return true;
+		}
 
 		if (this.ctx.session.extensionRunner?.getCommand(commandName)) {
 			return true;

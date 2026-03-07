@@ -319,12 +319,12 @@ describe("parseModelPattern", () => {
 });
 
 describe("resolveModelRoleValue", () => {
-	test("resolves pi/<role>:<thinking> by expanding role alias before parsing thinking", () => {
+	test("resolves pi/explore:<thinking> by expanding role alias before parsing thinking", () => {
 		const settings = {
-			getModelRole: (role: string) => (role === "smol" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
+			getModelRole: (role: string) => (role === "explore" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
 		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
 
-		const result = resolveModelRoleValue("pi/smol:high", allModels, { settings });
+		const result = resolveModelRoleValue("pi/explore:high", allModels, { settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
@@ -368,6 +368,32 @@ describe("resolveModelRoleValue", () => {
 		expect(result.thinkingLevel).toBe(Effort.High);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
+	test("keeps explicit xhigh for known GPT models even when runtime metadata is missing", () => {
+		const modelsWithMissingMetadata = [
+			...allModels,
+			{
+				id: "gpt-5.4",
+				name: "GPT-5.4",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://chatgpt.com/backend-api",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_050_000,
+				maxTokens: 128_000,
+			} as unknown as Model<"anthropic-messages">,
+		];
+
+		const result = resolveModelRoleValue("openai-codex/gpt-5.4:xhigh", modelsWithMissingMetadata);
+
+		expect(result.model?.provider).toBe("openai-codex");
+		expect(result.model?.id).toBe("gpt-5.4");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+
 });
 describe("resolveModelFromString", () => {
 	test("falls back to pattern parsing for provider/model:thinking when strict provider+id miss", () => {

@@ -463,8 +463,8 @@ export class CommandController {
 		| \`Ctrl+D\` | Exit (when editor is empty) |
 		| \`Ctrl+Z\` | Suspend to background |
 		| \`Shift+Tab\` | Cycle thinking level |
-		| \`Ctrl+P\` | Cycle role models (slow/default/smol) |
-		| \`Shift+Ctrl+P\` | Cycle role models (temporary) |
+		| \`Ctrl+P\` | Cycle role models (orchestrator/default/explore) |
+		| \`Shift+Ctrl+P\` | Cycle role models temporarily (orchestrator/default/explore) |
 		| \`Alt+P\` | Select model (temporary) |
 		| \`Ctrl+L\` | Select model (set roles) |
 		| \`${agentModeKey}\` | Cycle agent mode (Default/Orchestrator/Plan/Ask) |

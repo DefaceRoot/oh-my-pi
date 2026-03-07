@@ -64,97 +64,97 @@ describe("AgentSession role model thinking behavior", () => {
 
 	it("re-applies explicit role thinking each time that role is selected", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const orchestratorModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
 		await createSession({
 			initialModelId: defaultModel.id,
 			initialThinkingLevel: Effort.High,
 			modelRoles: {
 				default: `${defaultModel.provider}/${defaultModel.id}`,
-				slow: `${slowModel.provider}/${slowModel.id}:off`,
+				orchestrator: `${orchestratorModel.provider}/${orchestratorModel.id}:off`,
 			},
 		});
 
-		const firstSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(firstSwitch?.role).toBe("slow");
-		expect(firstSwitch?.model.id).toBe(slowModel.id);
+		const firstSwitch = await session.cycleRoleModels(["default", "orchestrator"]);
+		expect(firstSwitch?.role).toBe("orchestrator");
+		expect(firstSwitch?.model.id).toBe(orchestratorModel.id);
 		expect(firstSwitch?.thinkingLevel).toBe("off");
 		expect(session.thinkingLevel).toBe("off");
 
 		session.setThinkingLevel(Effort.High);
 		expect(session.thinkingLevel).toBe(Effort.High);
 
-		const secondSwitch = await session.cycleRoleModels(["default", "slow"]);
+		const secondSwitch = await session.cycleRoleModels(["default", "orchestrator"]);
 		expect(secondSwitch?.role).toBe("default");
 		expect(secondSwitch?.model.id).toBe(defaultModel.id);
 		expect(session.thinkingLevel).toBe(Effort.High);
 
-		const thirdSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(thirdSwitch?.role).toBe("slow");
-		expect(thirdSwitch?.model.id).toBe(slowModel.id);
+		const thirdSwitch = await session.cycleRoleModels(["default", "orchestrator"]);
+		expect(thirdSwitch?.role).toBe("orchestrator");
+		expect(thirdSwitch?.model.id).toBe(orchestratorModel.id);
 		expect(thirdSwitch?.thinkingLevel).toBe("off");
 		expect(session.thinkingLevel).toBe("off");
 	});
 
 	it("preserves current thinking when switching into default/no-suffix role", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const orchestratorModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
 		await createSession({
 			initialModelId: defaultModel.id,
 			initialThinkingLevel: Effort.Low,
 			modelRoles: {
 				default: `${defaultModel.provider}/${defaultModel.id}`,
-				slow: `${slowModel.provider}/${slowModel.id}:high`,
+				orchestrator: `${orchestratorModel.provider}/${orchestratorModel.id}:high`,
 			},
 		});
 
-		const toSlow = await session.cycleRoleModels(["default", "slow"]);
-		expect(toSlow?.role).toBe("slow");
-		expect(toSlow?.thinkingLevel).toBe(Effort.High);
+		const toOrchestrator = await session.cycleRoleModels(["default", "orchestrator"]);
+		expect(toOrchestrator?.role).toBe("orchestrator");
+		expect(toOrchestrator?.thinkingLevel).toBe(Effort.High);
 		expect(session.thinkingLevel).toBe(Effort.High);
 
 		session.setThinkingLevel(Effort.Minimal);
 		expect(session.thinkingLevel).toBe(Effort.Minimal);
 
-		const toDefault = await session.cycleRoleModels(["default", "slow"]);
+		const toDefault = await session.cycleRoleModels(["default", "orchestrator"]);
 		expect(toDefault?.role).toBe("default");
 		expect(toDefault?.model.id).toBe(defaultModel.id);
 		expect(toDefault?.thinkingLevel).toBe(Effort.Minimal);
 		expect(session.thinkingLevel).toBe(Effort.Minimal);
 	});
 
-	it("applies slow role thinking even when plan shares the same model", async () => {
+	it("applies orchestrator role thinking even when plan shares the same model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
-		const slowPlanModel = getAnthropicModelOrThrow("claude-opus-4-5");
+		const exploreModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const orchestratorPlanModel = getAnthropicModelOrThrow("claude-opus-4-5");
 
 		await createSession({
 			initialModelId: defaultModel.id,
 			initialThinkingLevel: Effort.Medium,
 			modelRoles: {
 				default: `${defaultModel.provider}/${defaultModel.id}`,
-				smol: `${smolModel.provider}/${smolModel.id}:low`,
-				slow: `${slowPlanModel.provider}/${slowPlanModel.id}:high`,
-				plan: `${slowPlanModel.provider}/${slowPlanModel.id}:off`,
+				explore: `${exploreModel.provider}/${exploreModel.id}:low`,
+				orchestrator: `${orchestratorPlanModel.provider}/${orchestratorPlanModel.id}:high`,
+				plan: `${orchestratorPlanModel.provider}/${orchestratorPlanModel.id}:off`,
 			},
 		});
 
-		const toSmol = await session.cycleRoleModels(["slow", "default", "smol"]);
-		expect(toSmol?.role).toBe("smol");
-		expect(toSmol?.thinkingLevel).toBe(Effort.Low);
+		const toExplore = await session.cycleRoleModels(["orchestrator", "default", "explore"]);
+		expect(toExplore?.role).toBe("explore");
+		expect(toExplore?.thinkingLevel).toBe(Effort.Low);
 		expect(session.thinkingLevel).toBe(Effort.Low);
 
-		const toSlow = await session.cycleRoleModels(["slow", "default", "smol"]);
-		expect(toSlow?.role).toBe("slow");
-		expect(toSlow?.model.id).toBe(slowPlanModel.id);
-		expect(toSlow?.thinkingLevel).toBe(Effort.High);
+		const toOrchestrator = await session.cycleRoleModels(["orchestrator", "default", "explore"]);
+		expect(toOrchestrator?.role).toBe("orchestrator");
+		expect(toOrchestrator?.model.id).toBe(orchestratorPlanModel.id);
+		expect(toOrchestrator?.thinkingLevel).toBe(Effort.High);
 		expect(session.thinkingLevel).toBe(Effort.High);
 	});
 
 	it("preserves explicit role thinking when updating default model despite unresolved previous model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const updatedModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
 		await createSession({
 			initialModelId: defaultModel.id,
@@ -164,9 +164,9 @@ describe("AgentSession role model thinking behavior", () => {
 			},
 		});
 
-		await session.setModel(slowModel);
+		await session.setModel(updatedModel);
 
-		expect(sessionSettings.getModelRole("default")).toBe(`${slowModel.provider}/${slowModel.id}:off`);
+		expect(sessionSettings.getModelRole("default")).toBe(`${updatedModel.provider}/${updatedModel.id}:off`);
 	});
 
 	it("clamps unsupported selections from model metadata", async () => {

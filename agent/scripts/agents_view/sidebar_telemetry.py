@@ -253,6 +253,18 @@ def _task_text_color(status: str) -> str:
     return _ANSI_DIM
 
 
+def _status_heading_color(status: str) -> str:
+    if status == "in_progress":
+        return _ANSI_ACTIVE
+    if status == "pending":
+        return _ANSI_PENDING
+    if status == "done":
+        return _ANSI_DONE
+    if status == "abandoned":
+        return _ANSI_ABANDONED
+    return _ANSI_DIM
+
+
 def _sidebar_wrap_width(default: int = 80) -> int:
     columns = max(40, int(default))
     try:
@@ -269,10 +281,11 @@ def _wrap_task_content(content: str, *, width: int) -> list[str]:
     wrapped = textwrap.wrap(
         raw,
         width=max(20, int(width)),
-        break_long_words=False,
+        break_long_words=True,
         break_on_hyphens=False,
     )
     return wrapped or [raw]
+
 
 def _extract_task_reference(value: Any) -> str:
     text = str(value or "").strip()
@@ -296,6 +309,88 @@ def _child_task_association(child: Any) -> str:
     return ""
 
 
+def _bucket_tasks_by_status(todo_tasks: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    buckets: dict[str, list[dict[str, str]]] = {
+        "in_progress": [],
+        "pending": [],
+        "done": [],
+        "abandoned": [],
+    }
+    for task in todo_tasks:
+        status = _normalize_task_status(task.get("status"))
+        if status not in buckets:
+            status = "pending"
+        buckets[status].append(task)
+    return buckets
+
+
+def _append_wrapped_task_label(
+    lines: list[str],
+    *,
+    marker: str,
+    text: str,
+    color: str,
+    wrap_width: int,
+    continuation_prefix: str = "  ",
+) -> None:
+    segments = _wrap_task_content(text, width=max(12, wrap_width - len(continuation_prefix)))
+    if not segments:
+        lines.append(f"{marker} {_colorize('(unnamed task)', color)}")
+        return
+
+    lines.append(f"{marker} {_colorize(segments[0], color)}")
+    for segment in segments[1:]:
+        lines.append(f"{continuation_prefix}{_colorize(segment, color)}")
+
+
+def _append_child_lines(
+    lines: list[str],
+    child: Any,
+    *,
+    frame_index: int,
+    wrap_width: int,
+    branch_prefix: str = "   └─ ",
+) -> None:
+    child_title = str(getattr(child, "title", "") or getattr(child, "session_id", "") or "(subagent)").strip()
+    if not child_title:
+        child_title = "(subagent)"
+    child_status_raw = str(getattr(child, "status", "") or "unknown").strip().lower() or "unknown"
+    child_status = _normalize_task_status(child_status_raw)
+    child_marker = _status_marker(child_status, frame_index)
+    child_color = _task_text_color(child_status)
+
+    title_segments = _wrap_task_content(child_title, width=max(12, wrap_width - 8))
+    if not title_segments:
+        title_segments = ["(subagent)"]
+    lines.append(f"{branch_prefix}{child_marker} {_colorize(title_segments[0], child_color)}")
+    for segment in title_segments[1:]:
+        lines.append(f"      {_colorize(segment, child_color)}")
+
+    tokens_in = _normalize_optional_tokens(getattr(child, "total_tokens_in", None))
+    tokens_out = _normalize_optional_tokens(getattr(child, "total_tokens_out", None))
+    role = str(getattr(child, "role", "") or "").strip().lower() or "(unknown)"
+    model = str(getattr(child, "model", "") or "").strip() or "(unknown)"
+    pct = _normalize_context_pct(
+        getattr(child, "context_usage_pct", None)
+        if getattr(child, "context_usage_pct", None) is not None
+        else getattr(child, "context_pct", None)
+    )
+    context_label = f"{pct}%" if pct is not None else "—"
+    child_task = _child_task_association(child) or "(unlinked)"
+
+    detail_line = (
+        f"task:{child_task} "
+        f"status:{child_status_raw} "
+        f"tok:{_format_tokens(tokens_in)}/{_format_tokens(tokens_out)} "
+        f"role:{role} "
+        f"model:{model} "
+        f"ctx:{context_label}"
+    )
+    detail_segments = _wrap_task_content(detail_line, width=max(12, wrap_width - 6))
+    for segment in detail_segments:
+        lines.append(f"      {_colorize(segment, _ANSI_DIM)}")
+
+
 def render_live_sidebar_lines(
     todo_text: str,
     todo_tasks: list[dict[str, str]],
@@ -303,8 +398,8 @@ def render_live_sidebar_lines(
     *,
     frame_index: int = 0,
 ) -> list[str]:
-    if not todo_tasks:
-        raw_lines = [line.rstrip() for line in todo_text.splitlines() if line.strip()]
+    raw_lines = [line.rstrip() for line in todo_text.splitlines() if line.strip()]
+    if not todo_tasks and not child_sessions:
         if not raw_lines:
             return ["(no active task list)"]
         preview_lines = raw_lines[:12]
@@ -313,85 +408,95 @@ def render_live_sidebar_lines(
         return preview_lines
 
     lines: list[str] = []
-    summary_line = next((line.strip() for line in todo_text.splitlines() if line.strip()), "")
-    if summary_line:
-        lines.append(summary_line)
+    if not todo_tasks and not raw_lines:
+        lines.append("(no active task list)")
+    else:
+        summary_line = next((line.strip() for line in raw_lines if line.strip()), "")
+        if summary_line:
+            lines.append(summary_line)
+
+    buckets = _bucket_tasks_by_status(todo_tasks)
+    lines.append(
+        _colorize(
+            "states: "
+            f"active {len(buckets['in_progress'])} · "
+            f"pending {len(buckets['pending'])} · "
+            f"completed {len(buckets['done'])} · "
+            f"abandoned {len(buckets['abandoned'])}",
+            _ANSI_DIM,
+        )
+    )
+    lines.append("")
 
     active_task_ids: list[str] = []
     task_children: dict[str, list[Any]] = {}
-    for task in todo_tasks:
+    for task in buckets["in_progress"]:
         task_id = str(task.get("id") or "task").strip().lower() or "task"
-        if _normalize_task_status(task.get("status")) == "in_progress":
-            active_task_ids.append(task_id)
-            task_children[task_id] = []
+        active_task_ids.append(task_id)
+        task_children[task_id] = []
 
-    unlinked_children: list[Any] = []
+    orphan_children: list[Any] = []
     for child in child_sessions:
         association = _child_task_association(child)
         if association and association in task_children:
             task_children[association].append(child)
         else:
-            unlinked_children.append(child)
+            orphan_children.append(child)
 
-    if active_task_ids and unlinked_children:
-        task_children[active_task_ids[0]].extend(unlinked_children)
+    if active_task_ids and orphan_children:
+        task_children[active_task_ids[0]].extend(orphan_children)
+        orphan_children = []
 
     wrap_width = _sidebar_wrap_width()
-    for task in todo_tasks:
-        status = _normalize_task_status(task.get("status"))
-        task_id = str(task.get("id") or "task").strip() or "task"
-        content = str(task.get("content") or "").strip()
-        marker = _status_marker(status, frame_index)
-        text_color = _task_text_color(status)
+    sections = [
+        ("in_progress", "ACTIVE NOW", "(no active tasks)"),
+        ("pending", "UP NEXT", "(no queued tasks)"),
+        ("done", "COMPLETED", "(nothing completed yet)"),
+        ("abandoned", "ABANDONED", "(no abandoned items)"),
+    ]
 
-        # Combine ID and content on one line; wrap as a unit so the
-        # entire label (not just the symbol) carries the status color.
-        label = f"{task_id}  {content}".strip() if content else task_id
-        segments = _wrap_task_content(label, width=max(20, wrap_width - 2))
-        for i, segment in enumerate(segments):
-            if i == 0:
-                lines.append(f"{marker} {_colorize(segment, text_color)}")
-            else:
-                lines.append(f"  {_colorize(segment, text_color)}")
+    for index, (status, label, empty_placeholder) in enumerate(sections):
+        section_tasks = buckets[status]
+        lines.append(_colorize(f"{label} ({len(section_tasks)})", _status_heading_color(status)))
 
-        if status != "in_progress":
+        if not section_tasks:
+            lines.append(f"  {_colorize(empty_placeholder, _ANSI_DIM)}")
+            if status == "in_progress" and orphan_children:
+                lines.append(f"  {_colorize('unlinked subagents', _ANSI_DIM)}")
+                for child in orphan_children:
+                    _append_child_lines(lines, child, frame_index=frame_index, wrap_width=wrap_width, branch_prefix="   ├─ ")
+            if index < len(sections) - 1:
+                lines.append("")
             continue
 
-        children = task_children.get(task_id.lower(), [])
-        if not children:
-            lines.append("   └─ (no active subagents)")
-            continue
+        for task in section_tasks:
+            task_id = str(task.get("id") or "task").strip() or "task"
+            content = str(task.get("content") or "").strip()
+            marker = _status_marker(status, frame_index)
+            text_color = _task_text_color(status)
+            label_text = f"{task_id}  {content}".strip() if content else task_id
 
-        for child in children:
-            child_title = str(getattr(child, "title", "") or getattr(child, "session_id", "") or "(subagent)").strip()
-            if not child_title:
-                child_title = "(subagent)"
-            child_status_raw = str(getattr(child, "status", "") or "unknown").strip().lower() or "unknown"
-            child_status = _normalize_task_status(child_status_raw)
-            child_marker = _status_marker(child_status, frame_index)
-            tokens_in = _normalize_optional_tokens(getattr(child, "total_tokens_in", None))
-            tokens_out = _normalize_optional_tokens(getattr(child, "total_tokens_out", None))
-            role = str(getattr(child, "role", "") or "").strip().lower() or "(unknown)"
-            model = str(getattr(child, "model", "") or "").strip() or "(unknown)"
-            pct = _normalize_context_pct(
-                getattr(child, "context_usage_pct", None)
-                if getattr(child, "context_usage_pct", None) is not None
-                else getattr(child, "context_pct", None)
+            _append_wrapped_task_label(
+                lines,
+                marker=marker,
+                text=label_text,
+                color=text_color,
+                wrap_width=max(20, wrap_width - 2),
             )
-            context_label = f"{pct}%" if pct is not None else "—"
-            child_task = _child_task_association(child) or "(unlinked)"
 
-            lines.append(
-                "   └─ "
-                f"{child_marker} "
-                f"task:{child_task} "
-                f"{child_title} "
-                f"status:{child_status_raw} "
-                f"tok:{_format_tokens(tokens_in)}/{_format_tokens(tokens_out)} "
-                f"role:{role} "
-                f"model:{model} "
-                f"ctx:{context_label}"
-            )
+            if status != "in_progress":
+                continue
+
+            children = task_children.get(task_id.lower(), [])
+            if not children:
+                lines.append("   └─ (no active subagents)")
+                continue
+
+            for child in children:
+                _append_child_lines(lines, child, frame_index=frame_index, wrap_width=wrap_width)
+
+        if index < len(sections) - 1:
+            lines.append("")
 
     return lines
 

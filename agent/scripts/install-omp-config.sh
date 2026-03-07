@@ -83,15 +83,9 @@ else
   info "settings.json already exists, skipping."
 fi
 
-# ─── 5. Apply patches ─────────────────────────────────────────────────────
-info "Applying patches..."
-for patch_script in "$AGENT_DIR"/patches/*/manage.sh; do
-  [ -f "$patch_script" ] || continue
-  patch_name=$(dirname "$patch_script" | xargs basename)
-  echo "    Applying: $patch_name"
-  bash "$patch_script" apply 2>&1 || bash "$patch_script" apply --force 2>&1 || \
-    warn "Patch failed for $patch_name — run manually: bash $patch_script apply"
-done
+# ─── 5. Runtime workflow files ──────────────────────────────────────────
+info "Skipping archived workflow patch bundles; reinstall:fork now ships the live runtime changes directly from package source."
+
 
 # ─── 6. Tmux session browser keybinding ────────────────────────────────────
 # oh-my-tmux users: write to .tmux.conf.local (NOT .tmux.conf which uses cut -c3- shell embedding)

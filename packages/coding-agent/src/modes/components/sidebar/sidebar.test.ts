@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
+import { getActiveSidebarLspServers, getActiveSidebarMcpServers } from "../../interactive-mode";
 import type { SidebarModel } from "./model";
 import { renderSidebar } from "./render";
 
@@ -63,7 +64,8 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("MCP");
-		expect(output).toContain("filesystem · connected");
+		expect(output).toContain("● filesystem");
+		expect(output).not.toContain("filesystem · connected");
 		expect(output).toContain("github · disconnected");
 	});
 
@@ -78,8 +80,35 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("LSP");
-		expect(output).toContain("typescript · active");
+		expect(output).toContain("● typescript");
+		expect(output).not.toContain("typescript · active");
 		expect(output).toContain("rust-analyzer · inactive");
+	});
+
+	test("filters MCP sidebar entries to active connected session tools", () => {
+		const servers = getActiveSidebarMcpServers(["read", "mcp_augment_search", "mcp_chrome_devtools_click"], {
+			getTools: () =>
+				[
+					{ name: "mcp_augment_search", mcpServerName: "augment" },
+					{ name: "mcp_better_context_ask", mcpServerName: "better-context" },
+					{ name: "mcp_chrome_devtools_click", mcpServerName: "chrome-devtools" },
+				] as Array<{ name: string; mcpServerName?: string }>,
+			getConnectionStatus: name => (name === "augment" || name === "chrome-devtools" ? "connected" : "disconnected"),
+		});
+
+		expect(servers).toEqual([
+			{ name: "augment", connected: true },
+			{ name: "chrome-devtools", connected: true },
+		]);
+	});
+
+	test("filters LSP sidebar entries to ready servers only", () => {
+		const servers = getActiveSidebarLspServers([
+			{ name: "typescript", status: "ready", fileTypes: ["ts", "tsx"] },
+			{ name: "rust-analyzer", status: "error", fileTypes: ["rs"], error: "startup failed" },
+		]);
+
+		expect(servers).toEqual([{ name: "typescript", active: true }]);
 	});
 
 	test("todos section renders all status icons", () => {
@@ -95,7 +124,7 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("○ Pending item");
-		expect(output).toContain("→ In progress item");
+		expect(output).toContain("⠋ In progress item");
 		expect(output).toContain("✓ Completed item");
 		expect(output).toContain("× Abandoned item");
 	});
@@ -121,7 +150,7 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
-		expect(output).toContain("Modified Files");
+		expect(output).toContain("Session");
 		expect(output).toContain("(clean)");
 	});
 

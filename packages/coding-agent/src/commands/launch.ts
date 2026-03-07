@@ -24,11 +24,11 @@ export default class Index extends Command {
 		model: Flags.string({
 			description: 'Model to use (fuzzy match: "opus", "gpt-5.2", or "p-openai/gpt-5.2")',
 		}),
-		smol: Flags.string({
-			description: "Smol/fast model for lightweight tasks (or PI_SMOL_MODEL env)",
+		explore: Flags.string({
+			description: "Explore/fast model for lightweight tasks (or PI_EXPLORE_MODEL env)",
 		}),
-		slow: Flags.string({
-			description: "Slow/reasoning model for thorough analysis (or PI_SLOW_MODEL env)",
+		orchestrator: Flags.string({
+			description: "Orchestrator/reasoning model for thorough analysis (or PI_ORCHESTRATOR_MODEL env)",
 		}),
 		plan: Flags.string({
 			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",

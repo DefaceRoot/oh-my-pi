@@ -2,7 +2,7 @@
 name: worktree-setup
 description: Sets up isolated git worktree for plan implementation with automatic dependency installation
 tools: read, bash, find
-model: pi/smol, haiku-4.5, gemini-3-flash, gpt-5.1-codex-mini, flash, mini
+model: pi/worktree-setup, haiku-4.5, gemini-3-flash, gpt-5.1-codex-mini, flash, mini
 thinking-level: minimal
 output:
   properties:

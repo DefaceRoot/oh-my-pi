@@ -4,7 +4,7 @@
 
 **Goal:** Replace the single `[Worktree ▾]` dropdown button with three direct-action footer buttons (`[Freeform]`, `[Planned]`, `[Cleanup]`) that each provide a streamlined, reliable worktree workflow with auto-cleanup on failure, curator-powered name suggestions, and simplified orchestrator kickoff prompts.
 
-**Architecture:** The `plan-worktree` extension (`extensions/plan-worktree/index.ts`) is the single source of truth for worktree lifecycle, footer buttons, session switching, and orchestrator setup. Supporting files include `cleanup.ts` (cleanup logic), `git-utils.ts` (git abstractions), and `scripts/menu-popup.sh` (tmux/fzf popup menus). All changes are scoped to these files.
+**Architecture:** The `implementation-engine` extension (`extensions/implementation-engine/index.ts`) is the single source of truth for worktree lifecycle, footer buttons, session switching, and orchestrator setup. Supporting files include `cleanup.ts` (cleanup logic), `git-utils.ts` (git abstractions), and `scripts/menu-popup.sh` (tmux/fzf popup menus). All changes are scoped to these files.
 
 **Tech Stack:** TypeScript (Bun runtime), tmux/fzf for popup UI, git CLI for worktree operations, OMP extension API (`ctx.ui.*`, `ctx.newSession`, `pi.registerCommand`, `pi.sendUserMessage`).
 
@@ -31,7 +31,7 @@
 Reduce the worktree category list to 8 essentials and add a robust cleanup function that automatically removes partial state when worktree creation fails.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: `WORKTREE_CATEGORY_OPTIONS` array (line ~3493), `setupWorktreeFromTopic` catch block (line ~1760)
+- `extensions/implementation-engine/index.ts`: `WORKTREE_CATEGORY_OPTIONS` array (line ~3493), `setupWorktreeFromTopic` catch block (line ~1760)
 
 **Non-goals**
 - Do not change the footer button layout yet.
@@ -58,7 +58,7 @@ Extend the tmux/fzf popup menu system to support multi-select mode, needed by th
 
 **Scope / touchpoints**
 - `scripts/menu-popup.sh`: Add `--multi` flag support.
-- `extensions/plan-worktree/index.ts`: Add `showMultiSelectPopupMenu()` function near existing `showPopupMenu()` (line ~66).
+- `extensions/implementation-engine/index.ts`: Add `showMultiSelectPopupMenu()` function near existing `showPopupMenu()` (line ~66).
 
 **Non-goals**
 - Do not wire this to the cleanup command yet.
@@ -82,7 +82,7 @@ Extend the tmux/fzf popup menu system to support multi-select mode, needed by th
 Replace the single `[Worktree ▾]` dropdown with three separate footer buttons: `[Freeform]`, `[Planned]`, `[Cleanup]`. Each button maps to a new command.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`:
+- `extensions/implementation-engine/index.ts`:
   - Status key constants (add `FREEFORM_STATUS_KEY`, `PLANNED_STATUS_KEY`, `CLEANUP_STATUS_KEY`; remove or repurpose `PLAN_WORKFLOW_STATUS_KEY`).
   - Action text constants (add `FREEFORM_ACTION_TEXT`, `PLANNED_ACTION_TEXT`, `CLEANUP_ACTION_TEXT`; remove `WORKTREE_MENU_ACTION_TEXT`).
   - `setActionButton` function (line ~314): update to render three buttons when no active worktree.
@@ -114,7 +114,7 @@ Replace the single `[Worktree ▾]` dropdown with three separate footer buttons:
 Implement the `freeform-worktree` command handler with a streamlined flow: category → name → base branch → create → switch session → pre-fill freeform template.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: `freeform-worktree` command handler (replace stub from Phase 3), `setupWorktreeFromTopic`, `launchImplement` freeform path.
+- `extensions/implementation-engine/index.ts`: `freeform-worktree` command handler (replace stub from Phase 3), `setupWorktreeFromTopic`, `launchImplement` freeform path.
 
 **Non-goals**
 - Do not change the planned worktree flow.
@@ -141,7 +141,7 @@ Implement the `freeform-worktree` command handler with a streamlined flow: categ
 Implement the first half of the `planned-worktree` command: link a plan file using the chat input's existing `@` mention system, then extract the file path from the user's message.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: `planned-worktree` command handler (replace stub from Phase 3), `input` event hook for intercepting the plan file message.
+- `extensions/implementation-engine/index.ts`: `planned-worktree` command handler (replace stub from Phase 3), `input` event hook for intercepting the plan file message.
 
 **Non-goals**
 - Do not implement curator name suggestion yet (Phase 6).
@@ -168,7 +168,7 @@ Implement the first half of the `planned-worktree` command: link a plan file usi
 After the plan file is linked (Phase 5), prompt for category, spawn the `curator` agent to generate a branch name suggestion from plan content, show the suggestion as the default in a text input, and complete the name selection flow.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: Continue the `planned-worktree` flow after plan file extraction. Curator agent spawning for name generation.
+- `extensions/implementation-engine/index.ts`: Continue the `planned-worktree` flow after plan file extraction. Curator agent spawning for name generation.
 
 **Non-goals**
 - Do not create the session or pre-fill the kickoff prompt yet (Phase 7).
@@ -183,7 +183,7 @@ After the plan file is linked (Phase 5), prompt for category, spawn the `curator
 **Success criteria**
 - After linking a plan file, the user sees: category picker → name input (pre-filled with curator suggestion) → base branch picker.
 - The curator suggestion is a concise kebab-case slug derived from the plan content.
-- If the curator fails or is slow (>10s timeout), the fallback slug from the plan file path is used instead.
+- If the curator fails or takes longer than 10s, the fallback slug from the plan file path is used instead.
 - The user can accept the suggestion by pressing Enter or type their own name.
 
 ---
@@ -194,7 +194,7 @@ After the plan file is linked (Phase 5), prompt for category, spawn the `curator
 After category, name, and base branch are selected (Phase 6), create the worktree, switch the session, and pre-fill the input box with a short orchestrator kickoff prompt.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: Worktree creation, session creation, kickoff prompt pre-fill. Also simplify the existing long kickoff templates.
+- `extensions/implementation-engine/index.ts`: Worktree creation, session creation, kickoff prompt pre-fill. Also simplify the existing long kickoff templates.
 
 **Non-goals**
 - Do not change the freeform template (keep as-is for now, simplification is Phase 8).
@@ -229,8 +229,8 @@ Rules: Split each phase into small subtasks for individual subagents — never a
 Wire the `[Cleanup]` button to a direct fzf multi-select popup (no `/cleanup` text command), simplify the freeform kickoff template, and remove all dead code from the old worktree menu.
 
 **Scope / touchpoints**
-- `extensions/plan-worktree/index.ts`: `cleanup-worktrees` command handler (replace stub), freeform kickoff template simplification, dead code removal.
-- `extensions/plan-worktree/cleanup.ts`: Reuse existing cleanup logic.
+- `extensions/implementation-engine/index.ts`: `cleanup-worktrees` command handler (replace stub), freeform kickoff template simplification, dead code removal.
+- `extensions/implementation-engine/cleanup.ts`: Reuse existing cleanup logic.
 
 **Non-goals**
 - Do not change the existing `/cleanup` slash command behavior (it should still work if typed manually).
@@ -268,10 +268,10 @@ Wire the `[Cleanup]` button to a direct fzf multi-select popup (no `/cleanup` te
 
 | File | Role |
 |---|---|
-| `extensions/plan-worktree/index.ts` | Main extension: commands, UI buttons, worktree lifecycle, session switching |
-| `extensions/plan-worktree/cleanup.ts` | Cleanup logic: worktree discovery, removal, branch deletion |
-| `extensions/plan-worktree/git-utils.ts` | Git abstractions: repo root, worktree list, branch detection |
-| `extensions/plan-worktree/orchestrator-guard.ts` | Orchestrator mode enforcement |
+| `extensions/implementation-engine/index.ts` | Main extension: commands, UI buttons, worktree lifecycle, session switching |
+| `extensions/implementation-engine/cleanup.ts` | Cleanup logic: worktree discovery, removal, branch deletion |
+| `extensions/implementation-engine/git-utils.ts` | Git abstractions: repo root, worktree list, branch detection |
+| `extensions/implementation-engine/orchestrator-guard.ts` | Orchestrator mode enforcement |
 | `scripts/menu-popup.sh` | tmux/fzf popup menu (single-select, extended to multi-select in Phase 2) |
 
 ## Current Category List (to be trimmed in Phase 1)

@@ -12,13 +12,17 @@ No subagent delegation required (though still beneficial for large tasks).
 Spawn via Task tool with `agent: "<name>"`:
 - `explore`: Read-only codebase scout (structured findings handoff)
 - `research`: Web + BTCA research specialist
-- `implement`: General implementation worker (can fan out explore agents)
+- `implement`: General implementation worker (can fan out explore; hands off via lint -> code-reviewer -> commit)
 - `designer`: Frontend/UI specialist (uses chrome-devtools MCP for verification)
 - `lint`: Quality gate runner (lint/typecheck/tests)
-- `verifier`: Post-task QA (go/no_go verdict)
-- `merge`: Git rebase and conflict resolution
-- `curator`: Branch/session/phase naming
-- `plan`: Software architect (brainstorming → phased plan)
+- `code-reviewer`: Evidence-first reviewer for assigned changed files
+- `verifier`: Phase-end verification specialist (anchored on verification-before-completion expectations)
+- `coderabbit`: CodeRabbit CLI verifier for asynchronous review gating
+- `commit`: Git-only commit specialist (stages atomic commits and pushes branch updates)
+- `merge`: Git rebase and conflict resolution specialist
+- `curator`: Branch/session naming specialist
+- `plan`: Plan authoring architect (brainstorming -> phased plan; authoring context only)
+- `plan-verifier`: Plan-only verifier for implementation-plan quality
 - `worktree-setup`: Git worktree creation + dependency install
 
 ## BTCA (Better Context)
@@ -27,10 +31,21 @@ Use `mcp_better_context_*` tools for semantic codebase search before manual grep
 Available resources: `oh-my-pi`, `dragonglass`. Pattern: `listresources` → `ask` → fallback to grep.
 Read `rule://btca-usage` for detailed patterns.
 
-## Skills Reference
+## Context Loading Discipline
 
-- `superpowers:brainstorming` - Collaborative design through one-question-at-a-time dialogue
+- Planning-only catalogs (`superpowers:brainstorming`, repo-local `writing-plans` supplement, and plan-verifier workflow guidance) are for plan authoring/verification only.
+- Implementation, review, and other lightweight agents must consume existing finished plans directly and MUST NOT preload planning catalogs by default.
+- Load additional skills on demand per task; keep baseline context lean.
+
+## Skills Reference (on-demand)
+
 - `superpowers:using-git-worktrees` - Git worktree creation and management
+- `superpowers:brainstorming` - Collaborative design through one-question-at-a-time dialogue (planning conversations only)
+## Persistent Artifact Writing Policy
+
+When creating or editing persistent repository artifacts (source, tests, configs, prompts, rules, durable docs, filenames, headings, comments, inline notes), apply `rule://persistent-artifact-language`.
+
+Ephemeral implementation plans and transient planning artifacts may use planning scaffolding terms; persistent repository artifacts must not.
 
 <critical>
 ## Summary & Handoff Format — ALL Modes (Default and Orchestrator)

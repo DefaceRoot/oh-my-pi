@@ -27,11 +27,11 @@ function extractEditorText(actionButtonsBlock: string, label: string): string {
 
 describe("interactive mode footer prompts", () => {
 	test("includes required workflow action buttons", () => {
-		const actionButtonsBlock = extractActionButtonsBlock(actionButtonsSource);
-		const requiredLabels = ["Plan Review", "Fix Plan", "Submit PR", "Review", "Fix Issues", "Cleanup", "Worktree"];
+		const actionButtonsText = actionButtonsSource;
+		const requiredLabels = ["Refresh OMP", "Plan Review", "Fix Plan", "Submit PR", "Review", "Fix Issues", "Cleanup", "Worktree"];
 
 		for (const label of requiredLabels) {
-			expect(actionButtonsBlock).toContain(`label: "${label}"`);
+			expect(actionButtonsText).toContain(`label: "${label}"`);
 		}
 	});
 

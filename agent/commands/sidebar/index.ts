@@ -6,15 +6,15 @@ import type { CustomCommandFactory } from "@oh-my-pi/pi-coding-agent";
 
 const MIN_WIDTH = 20;
 const MAX_WIDTH = 120;
-const DEFAULT_MODE = "split" as const;
+const DEFAULT_MODE = "telemetry" as const;
 const DEFAULT_LEFT_WIDTH = 39;
 const DEFAULT_RIGHT_WIDTH = 39;
 const DEFAULT_OPEN = true;
 
-const VALID_MODES = new Set(["explorer", "telemetry", "split"] as const);
+const VALID_MODES = new Set(["telemetry"] as const);
 const VALID_SIDES = new Set(["left", "right"] as const);
 
-type SidebarMode = "explorer" | "telemetry" | "split";
+type SidebarMode = "telemetry";
 type SidebarSide = "left" | "right";
 
 interface SidebarSettings {
@@ -58,7 +58,7 @@ const USAGE = [
 	"  /sidebar open",
 	"  /sidebar close",
 	"  /sidebar toggle",
-	"  /sidebar mode <explorer|telemetry|split>",
+	"  /sidebar mode <telemetry>",
 	`  /sidebar width <left|right> <${MIN_WIDTH}-${MAX_WIDTH}>`,
 ].join("\n");
 
@@ -260,7 +260,6 @@ async function applyTmuxDefaults(
 	windowId?: string,
 ): Promise<void> {
 	await tmuxSetOption(api, "global", "@sidebar_layout", sidebar.mode);
-	await tmuxSetOption(api, "global", "@sidebar_mode", sidebar.mode);
 	await tmuxSetOption(api, "global", "@sidebar_left_width", String(sidebar.left_width));
 	await tmuxSetOption(api, "global", "@sidebar_right_width", String(sidebar.right_width));
 	await tmuxSetOption(api, "global", "@sidebar_default_open", sidebar.default_open ? "1" : "0");
@@ -302,8 +301,7 @@ async function resolveStatus(
 
 	if (tmux.windowId) {
 		const modeOverride = normalizeMode(await tmuxGetOption(api, "@sidebar_layout"));
-		const modeLegacy = normalizeMode(await tmuxGetOption(api, "@sidebar_mode"));
-		mode = modeOverride ?? modeLegacy ?? mode;
+		mode = modeOverride ?? mode;
 
 		const leftOpt = normalizeWidth(await tmuxGetOption(api, "@sidebar_left_width"));
 		const rightOpt = normalizeWidth(await tmuxGetOption(api, "@sidebar_right_width"));

@@ -31,6 +31,8 @@ const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effo
 const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic";
 
+const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+
 type SemVer = {
 	major: number;
 	minor: number;
@@ -162,17 +164,23 @@ export function linkSparkPromotionTargets(models: ApiModel<Api>[]): void {
  * Returns supported thinking efforts from canonical model rules constrained by
  * explicit model metadata.
  *
- * @throws Error when a reasoning-capable model is missing thinking metadata
+ * When metadata is missing for a known model family, we fall back to inferred
+ * canonical capabilities so startup/model resolution remains resilient.
+ *
+ * @throws Error when a reasoning-capable unknown model is missing thinking metadata
  */
 export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly Effort[] {
 	if (!model.reasoning) {
 		return [];
 	}
+	const parsedModel = parseKnownModel(model.id);
 	if (!model.thinking) {
-		throw new Error(`Model ${model.provider}/${model.id} is missing thinking metadata`);
+		if (parsedModel.family === "unknown") {
+			throw new Error(`Model ${model.provider}/${model.id} is missing thinking metadata`);
+		}
+		return inferSupportedEfforts(parsedModel, model);
 	}
 	const configuredEfforts = expandEffortRange(model.thinking);
-	const parsedModel = parseKnownModel(model.id);
 	if (parsedModel.family === "unknown") {
 		return configuredEfforts;
 	}
@@ -214,6 +222,22 @@ export function clampThinkingLevelForModel<TApi extends Api>(
 	}
 
 	return clamped ?? levels[0];
+}
+
+
+/**
+ * Resolves an explicitly requested thinking level using model capability metadata.
+ *
+ * Returns `undefined` when reasoning is not requested or the model does not support thinking.
+ */
+export function resolveRequestedEffort<TApi extends Api>(
+	model: ApiModel<TApi> | undefined,
+	requested: Effort | undefined,
+): Effort | undefined {
+	if (requested === undefined) {
+		return undefined;
+	}
+	return clampThinkingLevelForModel(model, requested);
 }
 
 export function requireSupportedEffort<TApi extends Api>(model: ApiModel<TApi>, effort: Effort): Effort {
@@ -275,6 +299,27 @@ function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
 	}
 }
 
+function resolveHeaderValueCaseInsensitive(
+	headers: Record<string, string> | undefined,
+	headerName: string,
+): string | undefined {
+	if (!headers) return undefined;
+	const normalizedHeaderName = headerName.toLowerCase();
+	for (const [key, value] of Object.entries(headers)) {
+		if (key.toLowerCase() === normalizedHeaderName) return value;
+	}
+	return undefined;
+}
+
+function hasAnthropicContext1MBeta(model: ApiModel<Api>): boolean {
+	const headerValue = resolveHeaderValueCaseInsensitive(model.headers, "anthropic-beta");
+	if (!headerValue) return false;
+	return headerValue
+		.split(",")
+		.map(beta => beta.trim())
+		.includes(ANTHROPIC_CONTEXT_1M_BETA);
+}
+
 function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: AnthropicModel): void {
 	// Claude Opus 4.5: models.dev reports 3x the correct cache pricing.
 	if (model.provider === "anthropic" && parsedModel.kind === "opus" && semverEqual(parsedModel.version, "4.5")) {
@@ -288,8 +333,8 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 		model.cost.cacheWrite = 6.25;
 	}
 
-	// Opus 4.6 / Sonnet 4.6: 1M context is beta; clamp to 200K.
-	if (semverEqual(parsedModel.version, "4.6")) {
+	// Opus 4.6 / Sonnet 4.6: 1M context is beta; clamp to 200K when metadata does not opt in.
+	if (semverEqual(parsedModel.version, "4.6") && !hasAnthropicContext1MBeta(model)) {
 		model.contextWindow = 200000;
 	}
 
@@ -304,8 +349,12 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 }
 
 function applyOpenAICatalogPolicy(model: ApiModel<Api>, parsedModel: OpenAIModel): void {
-	// Codex models: 400K figure includes output budget; input window is 272K.
-	if (parsedModel.variant.startsWith("codex") && parsedModel.variant !== "codex-spark") {
+	// Legacy Codex models: 400K figure includes output budget; input window is 272K.
+	if (
+		parsedModel.variant.startsWith("codex") &&
+		parsedModel.variant !== "codex-spark" &&
+		!semverGte(parsedModel.version, "5.4")
+	) {
 		model.contextWindow = 272000;
 	}
 }

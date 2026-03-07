@@ -24,15 +24,12 @@ Options:
   --source-home <path>      Source home directory (default: remote $HOME)
   --target-home <path>      Target home directory (default: local $HOME)
   --exclude-secrets         Do not copy secret-bearing files (~/.omp/agent/settings.json, ~/.omp/mcp.json)
-  --skip-patch              Skip patch validation/apply step
-  --force-patch             If patch apply is needed, pass --force
   --dry-run                 Show what would be copied without writing files
   --help                    Show this help
 
 Examples:
   ./migrate-workflow-from-ssh.sh --source colin@source-box
   ./migrate-workflow-from-ssh.sh --source colin@source-box --exclude-secrets
-  ./migrate-workflow-from-ssh.sh --source colin@source-box --force-patch
 EOF
 }
 
@@ -55,8 +52,6 @@ SOURCE_HOST=""
 SOURCE_HOME=""
 TARGET_HOME="${HOME}"
 INCLUDE_SECRETS=true
-SKIP_PATCH=false
-FORCE_PATCH=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -75,14 +70,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--exclude-secrets)
 			INCLUDE_SECRETS=false
-			shift
-			;;
-		--skip-patch)
-			SKIP_PATCH=true
-			shift
-			;;
-		--force-patch)
-			FORCE_PATCH=true
 			shift
 			;;
 		--dry-run)
@@ -236,32 +223,9 @@ else
 	log_warn "Secrets excluded. You must set API keys on the target machine manually."
 fi
 
-rewrite_paths_in_file "${TARGET_HOME}/.omp/agent/extensions/plan-worktree/index.ts"
-rewrite_paths_in_file "${TARGET_HOME}/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh"
+rewrite_paths_in_file "${TARGET_HOME}/.omp/agent/extensions/implementation-engine/index.ts"
 
-PATCH_SCRIPT="${TARGET_HOME}/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh"
-if [[ "$SKIP_PATCH" == false && -f "$PATCH_SCRIPT" ]]; then
-	log_info "Checking OMP workflow patch status"
-	if [[ "$DRY_RUN" == true ]]; then
-		log_info "Dry-run: skipping patch status/apply"
-	else
-		if bash "$PATCH_SCRIPT" status; then
-			log_info "Patch already installed"
-		else
-			log_warn "Patch not fully installed; applying now"
-			if [[ "$FORCE_PATCH" == true ]]; then
-				bash "$PATCH_SCRIPT" apply --force
-			else
-				bash "$PATCH_SCRIPT" apply
-			fi
-			bash "$PATCH_SCRIPT" status
-		fi
-	fi
-elif [[ "$SKIP_PATCH" == true ]]; then
-	log_warn "Patch step skipped by --skip-patch"
-else
-	log_warn "Patch script not found: ${PATCH_SCRIPT}"
-fi
+log_info "Skipping archived workflow patch bundle migration; reinstall:fork now carries the live runtime changes directly from package source."
 
 if [[ "$DRY_RUN" == false ]]; then
 	log_info "Migration complete"
@@ -273,7 +237,6 @@ if [[ "$DRY_RUN" == false ]]; then
 	echo "  bun --version"
 	echo "  tmux -V"
 	echo "  ghostty --version"
-	echo "  bash ~/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh status"
 else
 	log_info "Dry-run complete (no files changed)"
 fi

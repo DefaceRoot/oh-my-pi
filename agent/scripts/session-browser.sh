@@ -73,7 +73,7 @@ PY
 
 	branch=""
 	worktree_path=""
-	branch_line=$(grep -F '"plan-worktree/state"' "$file" | tail -n 1 || true)
+	branch_line=$(grep -F '"implementation-engine/state"' "$file" | tail -n 1 || true)
 	if [[ -n "$branch_line" ]]; then
 		if command -v jq >/dev/null 2>&1; then
 			parse_out=$(printf '%s\n' "$branch_line" | jq -r '[(.data.branchName // ""), (.data.worktreePath // "")] | @tsv' 2>/dev/null || true)
@@ -136,7 +136,7 @@ PY
 
 	if [[ -n "$branch" ]]; then
 		session_type="worktree"
-	elif grep -qF '"plan-worktree/' "$file"; then
+	elif grep -qE '"(implementation-engine|implement-worktree)/' "$file"; then
 		session_type="planning"
 	else
 		session_type="general"

@@ -31,7 +31,7 @@
 
 ### Phase 2: Slim Down AGENTS.md + Create Role-Scoped Rules (R3, R4, R7) — 100%
 
-All 8 requirements PASS. AGENTS.md reduced from 242 to 61 lines (75% reduction). Contains only universal content. All 5 rule files created with exact frontmatter matching plan. Old `plan-worktree.md` deleted. No content lost.
+All 8 requirements PASS. AGENTS.md reduced from 242 to 61 lines (75% reduction). Contains only universal content. All 5 rule files created with exact frontmatter matching plan. Old single-workflow rule file deleted. No content lost.
 
 ### Phase 3: MCP Server Filtering Extension (R2) — 100%
 

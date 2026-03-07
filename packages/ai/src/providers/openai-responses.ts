@@ -11,6 +11,7 @@ import type {
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
+import { type Effort, resolveRequestedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -507,9 +508,10 @@ function buildParams(
 		// See: https://github.com/can1357/oh-my-pi/issues/41
 		params.include = ["reasoning.encrypted_content"];
 
-		if (options?.reasoning || options?.reasoningSummary) {
+		const reasoningEffort = resolveRequestedEffort(model, options?.reasoning as Effort | undefined);
+		if (reasoningEffort) {
 			params.reasoning = {
-				effort: options?.reasoning || "medium",
+				effort: reasoningEffort,
 				summary: options?.reasoningSummary || "auto",
 			};
 		} else if (model.name.startsWith("gpt-5")) {

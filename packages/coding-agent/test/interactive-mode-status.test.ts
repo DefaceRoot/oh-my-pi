@@ -59,3 +59,31 @@ describe("InteractiveMode.showStatus", () => {
 		expect(renderLastLine(ctx.chatContainer)).toContain("STATUS_TWO");
 	});
 });
+
+describe("UiHelpers.isKnownSlashCommand", () => {
+	test("treats builtin slash commands as known", () => {
+		const ctx: any = {
+			session: {
+				extensionRunner: { getCommand: () => undefined },
+				customCommands: [],
+			},
+			fileSlashCommands: new Set<string>(),
+		};
+		const helpers = new UiHelpers(ctx);
+
+		expect(helpers.isKnownSlashCommand("/refresh-fork")).toBe(true);
+	});
+
+	test("returns false for unknown slash commands", () => {
+		const ctx: any = {
+			session: {
+				extensionRunner: { getCommand: () => undefined },
+				customCommands: [],
+			},
+			fileSlashCommands: new Set<string>(),
+		};
+		const helpers = new UiHelpers(ctx);
+
+		expect(helpers.isKnownSlashCommand("/not-a-command")).toBe(false);
+	});
+});

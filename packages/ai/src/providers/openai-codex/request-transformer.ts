@@ -1,5 +1,5 @@
 import type { Effort } from "../../model-thinking";
-import { requireSupportedEffort } from "../../model-thinking";
+import { resolveRequestedEffort } from "../../model-thinking";
 import type { Api, Model } from "../../types";
 
 export interface ReasoningConfig {
@@ -51,10 +51,18 @@ export interface RequestBody {
 	[key: string]: unknown;
 }
 
-function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
+function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig | undefined {
+	if (options.reasoningEffort === "none") {
+		return { effort: "none", summary: options.reasoningSummary ?? "detailed" };
+	}
+
+	const effort = resolveRequestedEffort(model, options.reasoningEffort as Effort | undefined);
+	if (!effort) {
+		return undefined;
+	}
+
 	return {
-		effort:
-			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
+		effort,
 		summary: options.reasoningSummary ?? "detailed",
 	};
 }
@@ -134,10 +142,14 @@ export async function transformRequestBody(
 
 	if (options.reasoningEffort !== undefined) {
 		const reasoningConfig = getReasoningConfig(model, options);
-		body.reasoning = {
-			...body.reasoning,
-			...reasoningConfig,
-		};
+		if (reasoningConfig) {
+			body.reasoning = {
+				...body.reasoning,
+				...reasoningConfig,
+			};
+		} else {
+			delete body.reasoning;
+		}
 	} else {
 		delete body.reasoning;
 	}

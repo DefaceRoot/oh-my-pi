@@ -9,11 +9,12 @@
   "explore": "minimal",
   "default": "high",
   "ask": "high",
-  "smol": "minimal",
-  "slow": "high",
   "verifier": "xhigh",
   "plan": "xhigh",
+  "worktree-setup": "medium",
+  "code-reviewer": "xhigh",
+  "plan-verifier": "xhigh",
+  "coderabbit": "high",
   "frontend": "high",
-  "designer": "medium",
-  "subagent": "high"
+  "designer": "medium"
 }

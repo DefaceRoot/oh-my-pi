@@ -3,7 +3,7 @@ name: merge
 description: Git rebase and conflict resolution specialist. Handles branch divergence, mid-rebase conflict resolution, and full rebase lifecycle.
 tools: bash, read
 spawns: ""
-model: pi/merge, pi/slow, claude-sonnet-4-6, anthropic/claude-sonnet-4-6, gpt-5.2
+model: pi/merge, claude-sonnet-4-6, anthropic/claude-sonnet-4-6, gpt-5.2
 thinking-level: low
 output:
   properties:

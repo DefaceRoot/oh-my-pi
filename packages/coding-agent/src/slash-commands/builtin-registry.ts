@@ -1,4 +1,5 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { FORK_REINSTALL_COMMAND } from "../cli/update-cli";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import type { InteractiveModeContext } from "../modes/types";
@@ -455,6 +456,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		handle: (_command, runtime) => {
 			runtime.ctx.showSessionSelector();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "refresh-fork",
+		description: "Reinstall the local OMP fork globally (restart current session to load package changes)",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			runtime.ctx.showStatus(
+				"Running fork reinstall. This session keeps its current loaded package code until you restart omp.",
+			);
+			await runtime.ctx.handleBashCommand(FORK_REINSTALL_COMMAND, true);
 		},
 	},
 	{

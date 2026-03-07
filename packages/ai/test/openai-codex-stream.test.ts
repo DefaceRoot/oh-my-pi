@@ -485,7 +485,7 @@ describe("openai-codex streaming", () => {
 		await streamResult.result();
 	});
 
-	it("rejects gpt-5.3-codex minimal reasoning effort instead of clamping", async () => {
+	it("clamps gpt-5.3-codex minimal reasoning effort to low", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
@@ -579,8 +579,8 @@ describe("openai-codex streaming", () => {
 			reasoning: "minimal",
 		});
 		const response = await streamResult.result();
-		expect(response.stopReason).toBe("error");
-		expect(response.errorMessage).toContain("Supported efforts: low, medium, high, xhigh");
+		expect(response.stopReason).toBe("stop");
+		expect(response.errorMessage).toBeUndefined();
 	});
 
 	it("does not set conversation_id/session_id headers when sessionId is not provided", async () => {

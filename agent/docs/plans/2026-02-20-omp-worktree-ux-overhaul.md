@@ -14,7 +14,7 @@ The status line reads `state.thinkingLevel` at render time but this value is onl
 - `shouldHotApply` in patched `selector-controller.ts` depends on `getLastModelChangeRole()` which may not match
 
 ### Fix (Extension + Patch)
-1. **Extension (plan-worktree/index.ts):**
+1. **Extension (implementation-engine/index.ts):**
    - `session_start` and `session_switch`: detect current role, read JSON, call `pi.setThinkingLevel()`
    - `before_agent_start`: add thinking level sync path for non-worktree sessions
    - `input` event: detect `/model` completion, re-read JSON, re-apply thinking level
@@ -24,7 +24,7 @@ The status line reads `state.thinkingLevel` at render time but this value is onl
    - After `writeModelRoleThinkingLevel()`, always call `ctx.session.setThinkingLevel()` and `ctx.statusLine.invalidate()`
 
 ### Files
-- `/home/colin/.omp/agent/extensions/plan-worktree/index.ts` (lines 1791-1812, 2234-2262)
+- `/home/colin/.omp/agent/extensions/implementation-engine/index.ts` (lines 1791-1812, 2234-2262)
 - `/home/colin/.omp/agent/patches/.../selector-controller.ts` (lines 550-580)
 
 ---
@@ -32,7 +32,7 @@ The status line reads `state.thinkingLevel` at render time but this value is onl
 ## Feature 2: /model All-Roles Display + Summary Header
 
 ### Problem
-MENU_ACTIONS in model-selector.ts hardcodes 4 roles (default/smol/slow/plan). MODEL_ROLES defines 12. Badge rendering also only checks 4. Users can't see all role assignments at a glance.
+MENU_ACTIONS in model-selector.ts hardcodes 4 roles (default/explore/implement/plan). MODEL_ROLES defines 12. Badge rendering also only checks 4. Users can't see all role assignments at a glance.
 
 ### Fix (Patch model-selector.ts)
 1. Replace `MENU_ACTIONS` with all 12 roles from `MODEL_ROLE_IDS`
@@ -48,7 +48,7 @@ MENU_ACTIONS in model-selector.ts hardcodes 4 roles (default/smol/slow/plan). MO
 ```
  Model Roles:
  DEFAULT     gpt-5.3-codex [high]     ORCHESTRATOR  claude-opus-4.6 [med]
- SMOL        gemini-3-flash           SLOW          UNASSIGNED!
+ EXPLORE     gemini-3-flash           IMPLEMENT     UNASSIGNED!
  PLAN        claude-opus-4.6          COMMIT        glm-5 [med]
  SUBAGENT    gpt-5.3-codex [high]     EXPLORE       gemini-3-flash [min]
  LINT        glm-5 [med]              MERGE         gpt-5.3-codex [xhi]
@@ -74,7 +74,7 @@ Register `/resume` via `pi.registerCommand()`. Extension commands checked before
 For each session file:
 - Parse `cwd` to detect worktree (git-native .git file check with directory walk-up)
 - Extract worktree name, branch, repo from path
-- Read custom entries for agent mode (plan-worktree extension entries)
+- Read custom entries for agent mode (implementation-engine extension entries)
 - Classify: worktree name or "main" or "non-git"
 - Classify: active (<7d) or archived (>=7d)
 
@@ -103,7 +103,7 @@ Shows sessions >7 days old. Same tabs, filtering, navigation.
 - Re-evaluate button state after resume
 
 ### Files
-- Extension: plan-worktree/index.ts (new /resume command handler)
+- Extension: implementation-engine/index.ts (new /resume command handler)
 - Uses: ctx.ui.custom(), TabBar, Container, Text, Input from pi-tui
 - Uses: SessionManager.collectSessionsFromFiles() for session data
 
@@ -114,7 +114,7 @@ Shows sessions >7 days old. Same tabs, filtering, navigation.
 ### Problem
 `isWorktreePath()` checks for `.worktrees` in CWD path — fragile, misses standard git worktrees, breaks on /resume and /handoff.
 
-### Fix (Extension-only, plan-worktree)
+### Fix (Extension-only, implementation-engine)
 1. **Git-native detection:**
    ```typescript
    async function findGitRoot(dir: string): Promise<{ root: string; isWorktree: boolean } | null> {
@@ -148,7 +148,7 @@ Shows sessions >7 days old. Same tabs, filtering, navigation.
    - Tertiary: `git rev-parse --git-common-dir` (subprocess, only if inconclusive)
 
 ### Files
-- Extension: plan-worktree/index.ts (setActionButton, session_start, session_switch, tryRestoreWorktreeState)
+- Extension: implementation-engine/index.ts (setActionButton, session_start, session_switch, tryRestoreWorktreeState)
 
 ---
 

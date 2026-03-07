@@ -8,6 +8,7 @@ import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
+	resolveRequestedEffort,
 } from "./model-thinking";
 import { type BedrockOptions, streamBedrock } from "./providers/amazon-bedrock";
 import { type AnthropicOptions, streamAnthropic } from "./providers/anthropic";
@@ -388,9 +389,7 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
 ): Effort | undefined {
-	const reasoning = options?.reasoning;
-	if (!reasoning) return undefined;
-	return requireSupportedEffort(model, reasoning);
+	return resolveRequestedEffort(model, options?.reasoning);
 }
 
 const castApi = <TApi extends Api>(api: OptionsForApi<TApi>): OptionsForApi<Api> => api as OptionsForApi<Api>;
@@ -422,8 +421,9 @@ function mapOptionsForApi<TApi extends Api>(
 
 	switch (model.api) {
 		case "anthropic-messages": {
-			// Explicitly disable thinking when reasoning is not specified
-			const reasoning = options?.reasoning;
+			// Explicitly disable thinking when reasoning is not specified.
+			// Unsupported requests are clamped to model capabilities.
+			const reasoning = resolveRequestedEffort(model, options?.reasoning);
 			if (!reasoning) {
 				return castApi<"anthropic-messages">({
 					...base,
@@ -432,7 +432,7 @@ function mapOptionsForApi<TApi extends Api>(
 				});
 			}
 
-			let thinkingBudget = options.thinkingBudgets?.[reasoning] ?? ANTHROPIC_THINKING[reasoning];
+			let thinkingBudget = options?.thinkingBudgets?.[reasoning] ?? ANTHROPIC_THINKING[reasoning];
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,

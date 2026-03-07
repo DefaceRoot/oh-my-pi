@@ -103,6 +103,50 @@ def test_render_live_sidebar_lines_color_codes_task_status_markers() -> None:
     assert "✗" in rendered
 
 
+def test_render_live_sidebar_lines_groups_sections_by_state() -> None:
+    todo_tasks = [
+        {"status": "in_progress", "id": "task-1", "content": "Active"},
+        {"status": "pending", "id": "task-2", "content": "Pending"},
+        {"status": "completed", "id": "task-3", "content": "Done"},
+        {"status": "abandoned", "id": "task-4", "content": "Abandoned"},
+    ]
+
+    rendered = _strip_ansi(_flatten(render_live_sidebar_lines("", todo_tasks, [], frame_index=0)))
+
+    assert "states: active 1 · pending 1 · completed 1 · abandoned 1" in rendered
+    assert "ACTIVE NOW (1)" in rendered
+    assert "UP NEXT (1)" in rendered
+    assert "COMPLETED (1)" in rendered
+    assert "ABANDONED (1)" in rendered
+    assert rendered.index("ACTIVE NOW") < rendered.index("UP NEXT") < rendered.index("COMPLETED") < rendered.index("ABANDONED")
+
+
+def test_render_live_sidebar_lines_handles_narrow_width_and_stalled_child(monkeypatch) -> None:
+    import agents_view.sidebar_telemetry as sidebar
+
+    child = SimpleNamespace(
+        role="default",
+        title="A very long worker title that should wrap cleanly in narrow sidebars",
+        status="stalled",
+        total_tokens_in=11_200,
+        total_tokens_out=420,
+        context_usage_pct=77,
+        model="gpt-5-mini",
+        task_id="task-1",
+    )
+
+    monkeypatch.setattr(sidebar, "_sidebar_wrap_width", lambda default=80: 34)
+    rendered_lines = sidebar.render_live_sidebar_lines(TODO_TEXT, TODO_TASKS, [child], frame_index=0)
+    plain_lines = [_strip_ansi(line) for line in rendered_lines]
+
+    assert any("ACTIVE NOW (1)" in line for line in plain_lines)
+    assert any("✗" in line for line in plain_lines)
+    detail_lines = [line for line in plain_lines if line.startswith("      ")]
+    assert len(detail_lines) >= 2
+    assert any("task:task-1" in line for line in detail_lines)
+    assert any("ctx:77%" in line for line in detail_lines)
+
+
 def test_render_live_sidebar_lines_animation_frame_advances_deterministically() -> None:
     child = SimpleNamespace(
         role="default",
@@ -121,6 +165,28 @@ def test_render_live_sidebar_lines_animation_frame_advances_deterministically() 
     assert "⠋" in frame_zero
     assert "⠙" in frame_one
     assert frame_zero != frame_one
+
+
+def test_render_live_sidebar_lines_preserves_child_rows_without_todo_tasks() -> None:
+    child = SimpleNamespace(
+        role="default",
+        title="Orphan telemetry worker",
+        status="running",
+        total_tokens_in=320,
+        total_tokens_out=140,
+        context_usage_pct=31,
+        model="gpt-5-mini",
+        task_id="",
+    )
+
+    rendered = _flatten(render_live_sidebar_lines("", [], [child], frame_index=0))
+    plain = _strip_ansi(rendered)
+
+    assert "(no active task list)" in plain.lower()
+    assert "ACTIVE NOW (0)" in plain
+    assert "unlinked subagents" in plain.lower()
+    assert "Orphan telemetry worker" in plain
+    assert "task:(unlinked)" in plain.lower()
 
 
 def test_render_live_sidebar_lines_shows_task_placeholder_without_todo() -> None:

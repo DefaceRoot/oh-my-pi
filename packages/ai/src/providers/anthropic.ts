@@ -8,7 +8,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
-import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import { mapEffortToAnthropicAdaptiveEffort, resolveRequestedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -1272,7 +1272,7 @@ function buildParams(
 
 	if (options?.thinkingEnabled && model.reasoning) {
 		const mode = model.thinking?.mode;
-		const requestedEffort = options.reasoning;
+		const requestedEffort = resolveRequestedEffort(model, options.reasoning);
 		const effort =
 			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
 

@@ -64,11 +64,20 @@ const assistantSnapshotContext: Context = {
 	],
 };
 
-function captureResponsesPayload(model: Model<"openai-responses">, context: Context): Promise<unknown> {
+function captureResponsesPayload(
+	model: Model<"openai-responses">,
+	context: Context,
+	options?: {
+		reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+		reasoningSummary?: "auto" | "detailed" | "concise" | null;
+	},
+): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAIResponses(model, context, {
 		apiKey: "test-key",
 		signal: createAbortedSignal(),
+		reasoning: options?.reasoning,
+		reasoningSummary: options?.reasoningSummary,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -174,6 +183,37 @@ describe("OpenAI responses history payload", () => {
 			...incrementalItems2,
 			{ role: "user", content: [{ type: "input_text", text: "third question" }] },
 		]);
+	});
+
+	it("keeps reasoning off by default for gpt-5-mini responses payloads", async () => {
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const context: Context = {
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+		};
+		const payload = (await captureResponsesPayload(model, context)) as { reasoning?: unknown };
+		expect(payload.reasoning).toBeUndefined();
+	});
+
+	it("clamps explicit unsupported reasoning effort for gpt-5-mini responses payloads", async () => {
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const context: Context = {
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+		};
+		const payload = (await captureResponsesPayload(model, context, { reasoning: "xhigh" })) as {
+			reasoning?: { effort?: string; summary?: string | null };
+		};
+		expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
+	});
+
+	it("preserves xhigh reasoning for gpt-5.4 responses payloads", async () => {
+		const model = getBundledModel("openai", "gpt-5.4") as Model<"openai-responses">;
+		const context: Context = {
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+		};
+		const payload = (await captureResponsesPayload(model, context, { reasoning: "xhigh" })) as {
+			reasoning?: { effort?: string; summary?: string | null };
+		};
+		expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
 	});
 
 	it("backward compat: old full-snapshot payloads still replace history", async () => {

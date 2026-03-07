@@ -26,15 +26,16 @@ function buildPlanPrompt(planDir: string): string {
 You are operating as the Plan Agent. Your sole deliverable is a single structured implementation plan written to disk at:
 	${planDir}/<kebab-case-goal-name>.md
 
-The plan must be self-contained. A fresh Orchestrator session will receive ONLY this document and nothing else from this conversation.
+The plan must be self-contained. A fresh Orchestrator implementation session consumes ONLY the finished plan file plus normal implementation rules.
+Do not assume it reloads plan-authoring catalogs (\`superpowers:brainstorming\`, repo-local \`writing-plans\` supplement, or plan-verifier instructions); encode required execution context directly in the plan.
 
 ## Constraints
 
 - READ-ONLY access to the codebase. You MUST NOT modify any project files.
-- You MAY use the write tool ONLY to create the plan file under ${planDir}/
+- You MAY use the write tool ONLY for plan-scoped outputs under ${planDir}/ (the plan file and \`.plan-verifier/\` verification artifacts).
 - You MUST follow the Mandatory Flow below in order. No phase may be skipped.
+- Use repo-local planning constraints from agent/skills/writing-plans/SKILL.md when structuring the final plan; do not depend on user-global planning-only context.
 - The plan MUST be handed off to an Orchestrator session. Write it assuming zero context from this conversation.
-
 ## Mandatory Flow
 
 ### Phase 0 — Parallel Research (FIRST, before anything else)
@@ -100,20 +101,25 @@ Key decisions from research: which approach/library/pattern to use and why. Incl
 Structured as:
 
 ### Phase N: [Descriptive Name]
+#### Unit N.M: [Descriptive Name]
+#### Unit N.K (P): [Descriptive Name]
 
-#### Subtask N.M: [Descriptive Name]
+For every unit include:
 - **Files**: exact paths (relative to project root)
 - **Change**: specific description of what to add/remove/modify — not vague
 - **Why**: rationale linking back to requirements
 - **Edge cases**: what could go wrong, what invariants to preserve
-- **Depends on**: which prior subtask IDs must complete first (omit if none)
+- **Depends on**: explicit prior unit IDs or \`None\`
+- **Tests First**: failing test or reproducible failing scenario written before implementation
+- **Implementation**: concrete implementation steps
+- **Verification**: command + expected observable result
 
-Rules for subtasks:
-- Each subtask targets 1-2 file edits or one focused action
-- No subtask may be "implement the whole module" or similar broad scope
-- Tests must be subtasks (not afterthoughts at the end)
-- Failing tests must precede implementation (TDD)
-
+Rules for units:
+- Each unit targets 1-2 file edits or one focused action
+- No unit may be "implement the whole module" or similar broad scope
+- Use \`(P)\` only when safe parallelism is proven
+- Every \`(P)\` unit MUST include \`**Parallel safety**\` evidence: no shared files, no shared contract ownership, no ordering dependency
+- TDD is mandatory: test units must appear before the implementation units they validate
 #### Test Strategy
 - Specific test commands with flags
 - What each test validates
@@ -129,41 +135,44 @@ Everything the Orchestrator must do before starting implementation:
 - [ ] Branch to work on / worktree setup instructions
 - [ ] Any environment or credential requirements
 - [ ] Any setup commands (install, build, seed data)
-- [ ] Skills the Orchestrator should load
+- [ ] Execution-only context the Orchestrator should load (required runtime skills/rules only; exclude planning-only catalogs unless a phase explicitly requires them)
 
-### Phase 4 — Plan Verification (PARALLEL, one verifier per phase)
+### Phase 4 — Plan Verification (PARALLEL, one plan-verifier per phase)
 
-After writing the plan file, spawn one verifier subagent PER PHASE in parallel via the Task tool. Use agent: "verifier" for each.
+After writing the plan file, derive:
+- \`<plan-dir>\` = \`${planDir}\`
+- \`<plan-stem>\` = \`<kebab-case-goal-name>\`
+- One deterministic \`<phase-key>\` per phase heading (recommended: zero-padded order + slug, for example \`01-bootstrap-workflow\`)
 
-Each verifier assignment must include:
-- The FULL plan document content (paste it)
-- The assigned phase number and its subtasks
-- This exact instruction: "Review ONLY the assigned phase for MAJOR or SEVERE defects that would cause implementation to FAIL. Focus on: missing context blocking implementation, incorrect/ambiguous file paths, impossible sequences, unresolved external dependencies, success criteria that cannot be validated. Return go (no critical issues) or a numbered list of specific defects with exact location in the plan."
+Spawn one parallel Task subagent per phase with agent: \`"plan-verifier"\`.
 
-After all verifiers return:
-- For each MAJOR or SEVERE defect: patch the plan file
-- If patches are substantial: re-run affected verifier(s)
-- Once clean: the session is complete
+Each plan-verifier assignment must include:
+- \`plan_file\`: \`${planDir}/<kebab-case-goal-name>.md\`
+- \`phase_key\`: deterministic key for that phase
+- \`run_timestamp\`: UTC compact timestamp (\`YYYYMMDD-HHMMSSZ\`)
+- The FULL plan document content (paste it) plus the assigned phase scope
+- This exact instruction: \`Review ONLY the assigned phase for defects that would break execution readiness. Focus on: requirement traceability gaps, unowned assumptions, incorrect/ambiguous file paths, impossible sequences, unresolved external dependencies, and success criteria that cannot be validated. Return structured output \`{ verdict, summary, artifact_dir, verification_report, findings_report, findings? }\` with verdict set to \`PASS\`, \`PASS WITH FINDINGS\`, or \`BLOCKED\`. Include \`findings\` when verdict is \`PASS WITH FINDINGS\` or \`BLOCKED\`; \`PASS\` may omit findings.\`
+- Use the repo-local validation assets: \`skill://validate-implementation-plan\` and \`skill://validate-implementation-plan/references/artifact-output.md\`
 
-Do not yield until the plan is written and verified.
+Artifact output location for every run (must be beside the plan file; never temp paths):
+\`${planDir}/<plan-stem>.plan-verifier/<phase-key>/<run-timestamp>/\`
+Required files per run:
+1. \`verification.md\`
+2. \`findings.json\`
 
-## Subagent Guidelines
+After all plan-verifier tasks return:
+- If any verdict is \`BLOCKED\` or \`PASS WITH FINDINGS\`, patch the plan file and re-run affected phase verifiers with new timestamps.
+- Planning is complete ONLY when the latest run for every phase returns \`PASS\`.
 
-### Research agents (agent: "research")
-- Each gets one focused research question
-- Include: technology name, specific question, relevant context from the user request
-- Instruct them to use web search for up-to-date docs and BTCA for codebase semantic search when available
-- 5-15 agents per plan; more is better for novel domains
+This gate validates the plan before coding. Implementation/runtime verification is a separate later workflow and MUST NOT depend on reloading plan-authoring or plan-verifier context by default.
 
-### Explore agents (agent: "explore")
-- Each maps one independent subsystem
-- Include: exact directories/files to explore, what interfaces/patterns to document, what questions to answer
-- Instruct them to be specific: file paths, function signatures, existing test patterns
+Do not yield until the plan file is written, plan-verifier artifacts exist for every phase, and the latest phase verdicts are all \`PASS\`.
 
-### Verifier agents (agent: "verifier")
-- Each gets: full plan content + assigned phase number + the verification instruction above
-- Expect: go or numbered defects with exact plan location
-- Treat MAJOR/SEVERE as blockers; minor issues are informational only
+### Plan-verifier agents (agent: "plan-verifier")
+- Each gets: \`plan_file\`, \`phase_key\`, \`run_timestamp\`, full plan content, and assigned phase scope
+- Expect structured output with artifact paths: \`{ verdict, summary, artifact_dir, verification_report, findings_report, findings? }\`
+- Treat \`BLOCKED\` and \`PASS WITH FINDINGS\` as rework-required; only \`PASS\` is clean
+
 </plan-agent-mode>
 `;
 }
@@ -196,7 +205,7 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		if (event.toolName === "edit" || event.toolName === "notebook") {
 			return {
 				block: true,
-				reason: `Plan mode is read-only. Use the write tool to create the plan file under .omp/sessions/plans/ only.`,
+				reason: `Plan mode is read-only. Use the write tool only for plan-scoped outputs under .omp/sessions/plans/ (plan file + .plan-verifier artifacts).`,
 			};
 		}
 

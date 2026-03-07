@@ -12,7 +12,7 @@ import AjvModule from "ajv";
 import type { ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage } from "../session/auth-storage";
 
-export type ModelRole = "default" | "orchestrator" | "smol" | "slow" | "plan" | "commit" | "subagent" | "explore" | "lint" | "merge" | "curator" | "research" | "verifier" | "designer";
+export type ModelRole = "default" | "orchestrator" | "plan" | "commit" | "implement" | "explore" | "lint" | "merge" | "curator" | "research" | "verifier" | "designer";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -23,11 +23,9 @@ export interface ModelRoleInfo {
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	default: { tag: "DEFAULT", name: "Default", color: "success" },
 	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent" },
-	smol: { tag: "SMOL", name: "Fast", color: "warning" },
-	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	commit: { name: "Commit" },
-	subagent: { tag: "IMPL", name: "Phase Agent", color: "error" },
+	implement: { tag: "IMPL", name: "Implementation Agent", color: "error" },
 	explore: { tag: "EXPLORE", name: "Explore", color: "warning" },
 	lint: { tag: "LINT", name: "Lint", color: "muted" },
 	merge: { tag: "MERGE", name: "Merge", color: "warning" },
@@ -37,7 +35,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	designer: { tag: "DESIGN", name: "Frontend", color: "accent" },
 };
 
-export const MODEL_ROLE_IDS: ModelRole[] = ["default", "orchestrator", "smol", "slow", "plan", "commit", "subagent", "explore", "lint", "merge", "curator", "research", "verifier", "designer"];
+export const MODEL_ROLE_IDS: ModelRole[] = ["default", "orchestrator", "plan", "commit", "implement", "explore", "lint", "merge", "curator", "research", "verifier", "designer"];
 
 const _Ajv = (AjvModule as any).default || AjvModule;
 

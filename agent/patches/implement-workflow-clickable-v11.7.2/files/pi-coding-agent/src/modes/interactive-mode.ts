@@ -364,7 +364,6 @@ class SubagentNavigatorComponent extends Container {
 			research: "research",
 			lint: "lint",
 			verifier: "verifier",
-			quick_task: "quick",
 			merge: "merge",
 			designer: "designer",
 			plan: "plan",

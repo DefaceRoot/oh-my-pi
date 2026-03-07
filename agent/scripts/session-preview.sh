@@ -172,7 +172,7 @@ for index, line in enumerate(raw_lines):
         if isinstance(entry_ts, str) and entry_ts:
             started_iso = entry_ts
 
-    if entry.get("customType") == "plan-worktree/state":
+    if entry.get("customType") == "implementation-engine/state":
         data = entry.get("data")
         if isinstance(data, dict):
             candidate_branch = data.get("branchName")

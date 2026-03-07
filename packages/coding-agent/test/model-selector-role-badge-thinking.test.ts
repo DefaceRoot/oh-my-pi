@@ -29,8 +29,8 @@ describe("ModelSelector role badge thinking display", () => {
 		const settings = Settings.isolated({
 			modelRoles: {
 				default: `${model.provider}/${model.id}`,
-				smol: `${model.provider}/${model.id}:minimal`,
-				slow: `${model.provider}/${model.id}`,
+				explore: `${model.provider}/${model.id}:minimal`,
+				orchestrator: `${model.provider}/${model.id}`,
 				plan: `${model.provider}/${model.id}:high`,
 				commit: `${model.provider}/${model.id}:medium`,
 			},
@@ -57,8 +57,8 @@ describe("ModelSelector role badge thinking display", () => {
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("DEFAULT (inherit)");
-		expect(rendered).toContain("SMOL (min)");
-		expect(rendered).toContain("SLOW (inherit)");
+		expect(rendered).toContain("EXPLORE (min)");
+		expect(rendered).toContain("ORCHESTRATOR (inherit)");
 		expect(rendered).toContain("PLAN (high)");
 		expect(rendered).toContain("COMMIT (medium)");
 		expect(rendered).not.toContain("Role Thinking:");
@@ -66,9 +66,10 @@ describe("ModelSelector role badge thinking display", () => {
 		selector.handleInput("\n");
 		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(menuRendered).toContain("Set as DEFAULT (Default)");
-		expect(menuRendered).toContain("Set as SMOL (Fast)");
-		expect(menuRendered).toContain("Set as SLOW (Thinking)");
+		expect(menuRendered).toContain("Set as EXPLORE (Explore)");
+		expect(menuRendered).toContain("Set as ORCHESTRATOR (Orchestrator)");
 		expect(menuRendered).toContain("Set as PLAN (Architect)");
 		expect(menuRendered).toContain("Set as COMMIT (Commit)");
+		expect(menuRendered).toContain("Set as IMPL (Implementation Agent)");
 	});
 });

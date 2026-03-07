@@ -21,8 +21,8 @@ export interface MapReduceSettings {
 export interface MapReduceInput {
 	model: Model<Api>;
 	apiKey: string;
-	smolModel: Model<Api>;
-	smolApiKey: string;
+	analysisModel: Model<Api>;
+	analysisApiKey: string;
 	diff: string;
 	stat: string;
 	scopeCandidates: string;
@@ -42,14 +42,14 @@ export function shouldUseMapReduce(diff: string, settings?: MapReduceSettings): 
 }
 
 /**
- * Run map-reduce analysis for large diffs using smol + primary models.
+ * Run map-reduce analysis for large diffs using analysis + primary models.
  */
 
 export async function runMapReduceAnalysis(input: MapReduceInput): Promise<ConventionalAnalysis> {
 	const fileDiffs = parseFileDiffs(input.diff).filter(file => !isExcludedFile(file.filename));
 	const observations = await runMapPhase({
-		model: input.smolModel,
-		apiKey: input.smolApiKey,
+		model: input.analysisModel,
+		apiKey: input.analysisApiKey,
 		files: fileDiffs,
 		config: input.settings,
 	});

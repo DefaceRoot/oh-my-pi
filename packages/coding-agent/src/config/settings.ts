@@ -507,14 +507,22 @@ export class Settings {
 		}
 
 		// modelRoles.subagent -> modelRoles.implement
+		// modelRoles.smol -> modelRoles.explore
+		// modelRoles.slow -> modelRoles.orchestrator
 		const modelRoles = raw.modelRoles;
 		if (modelRoles && typeof modelRoles === "object" && !Array.isArray(modelRoles)) {
 			const roles = modelRoles as Record<string, unknown>;
-			if ("subagent" in roles) {
-				if (!("implement" in roles)) {
-					roles.implement = roles.subagent;
+			const roleMigrations: Array<{ from: string; to: string }> = [
+				{ from: "subagent", to: "implement" },
+				{ from: "smol", to: "explore" },
+				{ from: "slow", to: "orchestrator" },
+			];
+			for (const { from, to } of roleMigrations) {
+				if (!(from in roles)) continue;
+				if (!(to in roles)) {
+					roles[to] = roles[from];
 				}
-				delete roles.subagent;
+				delete roles[from];
 			}
 		}
 		// Migrate old flat "theme" string to nested theme.dark/theme.light

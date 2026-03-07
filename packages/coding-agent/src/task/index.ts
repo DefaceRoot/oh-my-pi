@@ -76,10 +76,19 @@ const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
 	"research",
 	"verifier",
 	"designer",
+	"worktree-setup",
+	"code-reviewer",
+	"plan-verifier",
+	"coderabbit",
 ]);
 
+const SUBAGENT_MODEL_ROLE_ALIASES: Readonly<Record<string, ModelRole>> = {
+	reviewer: "code-reviewer",
+};
 
 function resolveSubagentRole(agentName: string): ModelRole {
+	const aliasRole = SUBAGENT_MODEL_ROLE_ALIASES[agentName];
+	if (aliasRole) return aliasRole;
 	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "implement";
 }
 
@@ -874,11 +883,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							const commitMsg =
 								commitStyle === "ai" && this.session.modelRegistry
 									? async (diff: string) => {
-											const smolModel = this.session.settings.getModelRole("smol");
+											const commitModel = this.session.settings.getModelRole("commit");
 											return generateCommitMessage(
 												diff,
 												this.session.modelRegistry!,
-												smolModel,
+												commitModel,
 												this.session.getSessionId?.() ?? undefined,
 											);
 										}
@@ -1121,11 +1130,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const commitMsg =
 							commitStyle === "ai" && this.session.modelRegistry
 								? async (diff: string) => {
-										const smolModel = this.session.settings.getModelRole("smol");
+										const commitModel = this.session.settings.getModelRole("commit");
 										return generateCommitMessage(
 											diff,
 											this.session.modelRegistry!,
-											smolModel,
+											commitModel,
 											this.session.getSessionId?.() ?? undefined,
 										);
 									}

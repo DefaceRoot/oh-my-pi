@@ -1,11 +1,4 @@
-import {
-	Container,
-	matchesKey,
-	Spacer,
-	Text,
-	truncateToWidth,
-	visibleWidth,
-} from "@oh-my-pi/pi-tui";
+import { Container, matchesKey, Spacer, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { DynamicBorder } from "./components/dynamic-border";
 import { theme } from "./theme/theme";
 
@@ -290,7 +283,6 @@ export class SubagentNavigatorComponent extends Container {
 			research: "research",
 			lint: "lint",
 			verifier: "verifier",
-			quick_task: "quick",
 			merge: "merge",
 			designer: "designer",
 			plan: "plan",

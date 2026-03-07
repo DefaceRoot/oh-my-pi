@@ -11,14 +11,14 @@ All 7 recommendations approved for implementation:
 1. **R1**: Fix AGENTS.md double-loading bug
 2. **R2**: MCP server filtering by agent role — **via a new OMP extension**
 3. **R3**: Split AGENTS.md into role-scoped rules — **using OMP rules (not multiple AGENTS files)**
-4. **R4**: Split plan-worktree rule into modular rules
+4. **R4**: Split the legacy single workflow rule into modular rules
 5. **R5**: Filter skills per agent role (via extension or in conjunction with R2 extension)
 6. **R6**: Deduplicate shared blocks between task.md and designer.md
 7. **R7**: Compress verbose agent descriptions (done as part of R3)
 
 **Architecture decision**: Use OMP's **rules system** for role-scoped content. AGENTS.md stays as the single auto-loaded file but is slimmed to only universal content. Role-specific behavior goes into rules with clear `description` frontmatter so agents only read what applies to their session type.
 
-**IMPORTANT**: Use the slow/thinking model role subagent to write any system prompts, rules, or agent definition content. That model is optimized for writing.
+**IMPORTANT**: Use the plan/thinking model role subagent to write any system prompts, rules, or agent definition content. That model is optimized for writing.
 
 ---
 
@@ -39,7 +39,7 @@ Currently auto-loaded into ALL agent contexts. Contains:
 
 **Bug**: AGENTS.md appears TWICE in the `<context>` section injected into prompts. This is caused by the dir-context system — `extensions-disabled/core-memory/AGENTS.md` and `skills/vercel-react-best-practices/AGENTS.md` may be triggering additional loads. Investigate and fix.
 
-### `~/.omp/agent/rules/plan-worktree.md` (97 lines)
+### Legacy single workflow rule file (97 lines)
 
 Currently the only rule file. Has `alwaysApply: false` but its description is vague ("Planning session context - worktree information"), causing agents to read it even in non-worktree sessions. Contains:
 
@@ -162,9 +162,9 @@ Remove entirely from AGENTS.md:
 - Planning Protocol (moves to rule)
 - Full agent descriptions with "How to use" / "Model role" subsections (already in agents/*.md)
 
-#### 2b. Create new rules (replace `rules/plan-worktree.md`)
+#### 2b. Create new rules (replace the legacy single workflow rule file)
 
-Delete `rules/plan-worktree.md` and create these rules:
+Delete the legacy single workflow rule file and create these rules:
 
 **`rules/orchestrator-mode.md`**
 ```yaml
@@ -213,9 +213,9 @@ Content: Available BTCA resources, query pattern (listresources → ask → fall
 
 **Acceptance**:
 - AGENTS.md is ≤80 lines
-- `rules/plan-worktree.md` is deleted
+- Legacy single workflow rule file is deleted
 - 5 new rule files exist with clear domain descriptions
-- All content from the old AGENTS.md and plan-worktree.md is preserved in the appropriate new location (nothing lost)
+- All content from the old AGENTS.md and legacy workflow rule is preserved in the appropriate new location (nothing lost)
 - Rule descriptions are specific enough that agents can determine relevance without reading the full content
 
 ---
@@ -248,11 +248,11 @@ Content: Available BTCA resources, query pattern (listresources → ask → fall
 4. Remove MCP tool descriptions from the tools list for agents that don't need them
 5. Reference existing extensions for patterns:
    - `extensions/plan-mode/index.ts` — example of tool blocking per mode
-   - `extensions/plan-worktree/index.ts` — example of mode detection and tool guards
+   - `extensions/implementation-engine/index.ts` — example of mode detection and tool guards
    - `extensions/research-agent.ts` — example of dynamic capability injection
 6. Read `skill://oh-my-pi-customization` for extension API documentation
 
-**Key question for implementer**: Investigate whether OMP supports filtering MCP tools at the extension level. The `plan-worktree` extension already blocks MCP tools for orchestrator via `tool_call` hooks — but that blocks execution, not the tool descriptions in the system prompt. The goal here is to prevent the descriptions from being injected at all, saving tokens. If OMP doesn't expose a hook for this, the extension may need to use `before_agent_start` to modify the system prompt directly, or we document this as requiring an OMP upstream change.
+**Key question for implementer**: Investigate whether OMP supports filtering MCP tools at the extension level. The `implementation-engine` extension already blocks MCP tools for orchestrator via `tool_call` hooks — but that blocks execution, not the tool descriptions in the system prompt. The goal here is to prevent the descriptions from being injected at all, saving tokens. If OMP doesn't expose a hook for this, the extension may need to use `before_agent_start` to modify the system prompt directly, or we document this as requiring an OMP upstream change.
 
 **Acceptance**:
 - Orchestrator sessions don't include any MCP tool descriptions in system prompt
@@ -341,13 +341,13 @@ Phase 5 depends on Phase 3 findings.
 | Path | Purpose |
 |------|---------|
 | `~/.omp/agent/AGENTS.md` | Main file to slim down |
-| `~/.omp/agent/rules/plan-worktree.md` | Rule to delete (replaced by modular rules) |
+| `~/.omp/agent/rules/<legacy-workflow-rule>.md` | Rule to delete (replaced by modular rules) |
 | `~/.omp/agent/rules/` | Directory for new rules |
 | `~/.omp/agent/agents/task.md` | Deduplicate shared blocks |
 | `~/.omp/agent/agents/designer.md` | Deduplicate shared blocks |
 | `~/.omp/agent/extensions/` | Directory for new MCP filter extension |
 | `~/.omp/agent/extensions/plan-mode/index.ts` | Reference: tool blocking pattern |
-| `~/.omp/agent/extensions/plan-worktree/index.ts` | Reference: mode detection, tool guards |
+| `~/.omp/agent/extensions/implementation-engine/index.ts` | Reference: mode detection, tool guards |
 | `~/.omp/agent/extensions/research-agent.ts` | Reference: dynamic capability injection |
 | `~/.omp/agent/mcp.json` | MCP server configuration |
 | `~/.omp/agent/config.yml` | Model roles and settings |
@@ -379,4 +379,4 @@ After implementation, verify by:
 2. Starting an orchestrator/implementation session — confirm orchestrator-mode rule is read, MCP tools are absent
 3. Spawning a task subagent — confirm it has full MCP tools, reads worker-protocol rule
 4. Spawning an explore subagent — confirm it only has augment MCP, no skills
-5. Check that no content was lost — all original AGENTS.md and plan-worktree.md content exists in the new rule files
+5. Check that no content was lost — all original AGENTS.md and legacy workflow-rule content exists in the new rule files

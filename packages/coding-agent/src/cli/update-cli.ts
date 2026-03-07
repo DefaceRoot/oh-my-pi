@@ -14,9 +14,9 @@ import { theme } from "../modes/theme/theme";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
-const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
-const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
-const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} run reinstall:fork`;
+export const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
+export const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
+export const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} run reinstall:fork`;
 
 interface ReleaseInfo {
 	tag: string;

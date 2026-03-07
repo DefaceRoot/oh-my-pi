@@ -69,6 +69,70 @@ export const CURSOR_MARKER = "\x1b_pi:c\x07";
 
 export { visibleWidth };
 
+export type TerminalMouseAction = "press" | "release" | "drag" | "move";
+export type TerminalMouseButton = "left" | "middle" | "right" | "wheel-up" | "wheel-down" | "none";
+
+export interface TerminalMouseEvent {
+	raw: string;
+	x: number;
+	y: number;
+	action: TerminalMouseAction;
+	button: TerminalMouseButton;
+	shift: boolean;
+	alt: boolean;
+	ctrl: boolean;
+	lineIndex: number;
+	lineText: string;
+}
+
+function parseSgrMouseEvent(data: string): Omit<TerminalMouseEvent, "lineIndex" | "lineText"> | null {
+	const match = data.match(/^\x1b\[<(\d+);(\d+);(\d+)([mM])$/);
+	if (!match) return null;
+
+	const code = Number.parseInt(match[1], 10);
+	const x = Number.parseInt(match[2], 10);
+	const y = Number.parseInt(match[3], 10);
+	const suffix = match[4];
+
+	if (Number.isNaN(code) || Number.isNaN(x) || Number.isNaN(y)) return null;
+
+	const shift = (code & 4) !== 0;
+	const alt = (code & 8) !== 0;
+	const ctrl = (code & 16) !== 0;
+	const drag = (code & 32) !== 0;
+	const wheel = (code & 64) !== 0;
+
+	let button: TerminalMouseButton;
+	if (wheel) {
+		button = (code & 1) === 0 ? "wheel-up" : "wheel-down";
+	} else {
+		switch (code & 3) {
+			case 0:
+				button = "left";
+				break;
+			case 1:
+				button = "middle";
+				break;
+			case 2:
+				button = "right";
+				break;
+			default:
+				button = "none";
+		}
+	}
+
+	let action: TerminalMouseAction;
+	if (suffix === "m") {
+		action = "release";
+	} else if (drag) {
+		action = button === "none" ? "move" : "drag";
+	} else {
+		action = "press";
+	}
+
+	return { raw: data, x, y, action, button, shift, alt, ctrl };
+}
+
 /**
  * Anchor position for overlays
  */
@@ -209,6 +273,8 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
+	/** Global callback for parsed mouse events (SGR mode). Return true when handled. */
+	onMouse?: (event: TerminalMouseEvent) => boolean | void;
 	#renderRequested = false;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
@@ -596,6 +662,17 @@ export class TUI extends Container {
 			const filtered = this.#parseCellSizeResponse();
 			if (filtered.length === 0) return;
 			data = filtered;
+		}
+
+		const mouseEvent = parseSgrMouseEvent(data);
+		if (mouseEvent) {
+			const lineIndex = this.#viewportTopRow + Math.max(0, mouseEvent.y - 1);
+			const lineText = lineIndex >= 0 && lineIndex < this.#previousLines.length ? this.#previousLines[lineIndex] : "";
+			const handled = this.onMouse?.({ ...mouseEvent, lineIndex, lineText });
+			if (handled) {
+				this.requestRender();
+			}
+			return;
 		}
 
 		// Global debug key handler (Shift+Ctrl+D)
@@ -1087,6 +1164,30 @@ export class TUI extends Container {
 			}
 			lastChanged = newLines.length - 1;
 		}
+		const previousContentViewportTop = Math.max(0, this.#previousLines.length - height);
+		// When the visible tail can advance by natural terminal scrolling, avoid replaying the
+		// entire pane just because older offscreen lines also changed. The tail stays correct
+		// without the destructive clear-and-repaint path that makes tmux visibly jump.
+
+		const canAdvanceViewportByAppend = (() => {
+			if (!appendedLines || firstChanged < 0 || firstChanged >= previousContentViewportTop) return false;
+			const appendedCount = newLines.length - this.#previousLines.length;
+			if (appendedCount <= 0 || appendedCount > height) return false;
+			const newContentViewportTop = Math.max(0, newLines.length - height);
+			const viewportShift = newContentViewportTop - previousContentViewportTop;
+			if (viewportShift !== appendedCount || viewportShift <= 0 || viewportShift > height) return false;
+			const overlapCount = height - viewportShift;
+			for (let i = 0; i < overlapCount; i++) {
+				const prevLine = this.#previousLines[previousContentViewportTop + viewportShift + i];
+				const nextLine = newLines[newContentViewportTop + i];
+				if (prevLine !== nextLine) return false;
+			}
+			return true;
+		})();
+		if (canAdvanceViewportByAppend) {
+			firstChanged = this.#previousLines.length;
+			lastChanged = newLines.length - 1;
+		}
 		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
 
 		// No changes - but still need to update hardware cursor position if it moved
@@ -1139,7 +1240,6 @@ export class TUI extends Container {
 
 		// Check if firstChanged is above what was previously visible
 		// Use previousLines.length (not maxLinesRendered) to avoid false positives after content shrinks
-		const previousContentViewportTop = Math.max(0, this.#previousLines.length - height);
 		if (firstChanged < previousContentViewportTop) {
 			// First change is above previous viewport - need full re-render
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${previousContentViewportTop})`);

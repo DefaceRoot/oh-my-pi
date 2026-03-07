@@ -370,9 +370,9 @@ export class CommandController {
 | \`Ctrl+D\` | Exit (when editor is empty) |
 | \`Ctrl+Z\` | Suspend to background |
 | \`Shift+Tab\` | Cycle thinking level |
-| \`Ctrl+P\` | Cycle role models (slow/default/smol) |
-| \`Shift+Ctrl+P\` | Cycle role models (temporary) |
-| \`${cycleAgentHint}\` | Toggle agent mode (default/orchestrator) |
+| \`Ctrl+P\` | Cycle role models (orchestrator/default/explore) |
+| \`Shift+Ctrl+P\` | Cycle role models temporarily (orchestrator/default/explore) |
+| \`${cycleAgentHint}\` | Cycle agent mode (Default/Orchestrator/Plan) |
 | \`Alt+P\` | Select model (temporary) |
 | \`Ctrl+L\` | Select model (set roles) |
 | \`${planModeKey}\` | Toggle plan mode |
@@ -384,7 +384,7 @@ export class CommandController {
 | \`${expandToolsKey}\` | Toggle tool output expansion |
 | \`Ctrl+T\` | Toggle todo list expansion |
 | \`Ctrl+G\` | Edit message in external editor |
-| \`/agent [toggle|default|orchestrator|status]\` | Agent mode command fallback |
+| \`/agent [toggle|default|orchestrator|plan|status]\` | Agent mode command fallback |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |

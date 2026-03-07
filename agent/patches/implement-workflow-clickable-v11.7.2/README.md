@@ -21,7 +21,7 @@ And adds orchestration-focused delegation/model controls:
 - Dedicated `/model` role badge/action for `Orchestrator`
 - Dedicated `/model` role badge/action for `Explore`
 - Task runtime model resolver that prioritizes the session's active `/model` selection for subagents, with role-specific fallback (`Explore`/`Subagent`) only when no active session model is available
-- plan-worktree extension runtime defaults that pin parent implementation turns to `Orchestrator` role (fallback `Default`)
+- implementation-engine extension runtime defaults that pin parent implementation turns to `Orchestrator` role (fallback `Default`)
 - User-level `task` / `explore` agent overrides in `~/.omp/agent/agents` to push 1-5 parallel explore fan-out before cross-module implementation work
 - Enforced explore fan-out cap: max 5 explore tasks per Task tool call
 
@@ -79,33 +79,22 @@ And adds orchestration-focused delegation/model controls:
 
 ## Included scripts
 
-- `manage.sh status` — verify patch markers are currently installed
-- `manage.sh apply [--force]` — apply packaged files into global OMP install (runs a post-apply smoke check and auto-restores on failure)
-- `manage.sh restore` — restore latest backup from previous apply
+- `manage.sh status` inspects whether this archived snapshot matches the current global install.
+- `manage.sh apply [--force]` and `manage.sh restore` are historical recovery tools for this archived snapshot only.
 
 ## Usage
 
-```bash
-# Check patch status
-~/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh status
+Do not use this bundle as part of normal fork refresh or upgrade flows.
+Current fork runtime changes ship through the packaged source under `packages/` and are installed by `bun --cwd=<fork-root> run reinstall:fork`.
 
-# Reapply after an OMP upgrade (checks version unless --force)
-~/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh apply
-
-# Roll back to last backup
-~/.omp/agent/patches/implement-workflow-clickable-v11.7.2/manage.sh restore
-```
+Use this bundle only if you are intentionally recovering the older archived snapshot and understand it can overwrite newer runtime code.
 
 ## Notes
 
 - Target version: `12.9.0`
-- OMP upgrades may overwrite runtime files; `plan-worktree` now runs a startup patch-guard check and auto-reapplies this bundle on drift (best effort).
-- Patch-guard env controls:
-	- `OMP_IMPLEMENT_PATCH_GUARD=0` disables patch drift checks
-	- `OMP_IMPLEMENT_PATCH_AUTO_APPLY=0` disables automatic reapply (warn-only)
-	- `OMP_IMPLEMENT_PATCH_AUTO_FORCE=1` allows `manage.sh apply --force` during auto-reapply
+- This bundle is archived. Startup auto-apply has been retired because it can overwrite newer fork runtime changes after reinstall.
 - Your implementation launcher extension is configured separately at:
-  - `~/.omp/agent/extensions/plan-worktree/index.ts`
+  - `~/.omp/agent/extensions/implementation-engine/index.ts`
 			  - Initial footer state shows both `Plan` and `Implement`.
 				- `Plan` runs `/plan-new` to bootstrap planning in the primary checkout.
 				- `Implement` runs `/implement` in manual mode when no metadata exists (creates/switches worktree, then waits for user to attach plan with `@`).

@@ -41,4 +41,5 @@ export interface SidebarModel {
 	subagents?: SidebarSubagent[];
 	modifiedFiles?: SidebarModifiedFile[];
 	width: number;
+	animationFrame?: number;
 }

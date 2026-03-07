@@ -148,7 +148,7 @@ class OmpAdapter(BaseAdapter):
                         title = obj.get("data", {}).get("title", "")
                         if title:
                             break
-                    if ct == "plan-worktree/plan-new-metadata" and not plan_name:
+                    if ct == "implementation-engine/plan-new-metadata" and not plan_name:
                         plan_path = obj.get("data", {}).get("planFilePath", "")
                         if plan_path:
                             stem = Path(plan_path).stem
@@ -183,7 +183,7 @@ class OmpAdapter(BaseAdapter):
             for raw in raw_lines[1:]:
                 try:
                     obj = json.loads(raw)
-                    if obj.get("customType") == "plan-worktree/state":
+                    if obj.get("customType") == "implementation-engine/state":
                         data = obj.get("data")
                         if isinstance(data, dict):
                             branch = data.get("branchName", "") or ""

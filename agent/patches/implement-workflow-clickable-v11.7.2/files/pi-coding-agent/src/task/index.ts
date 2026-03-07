@@ -99,12 +99,8 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.total += cost.total;
 }
 
-const MODEL_ROLE_NAMES = new Set([
-	"smol",
-	"slow",
-	"plan",
-	"commit",
-	"subagent",
+const SUBAGENT_MODEL_ROLES = new Set([
+	"implement",
 	"explore",
 	"lint",
 	"merge",
@@ -124,7 +120,7 @@ function getModelRoleThinkingPath(): string {
 }
 
 function resolveSubagentRole(agentName: string): string {
-	return MODEL_ROLE_NAMES.has(agentName) ? agentName : "subagent";
+	return SUBAGENT_MODEL_ROLES.has(agentName) ? agentName : "implement";
 }
 
 function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
@@ -281,7 +277,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			modelOverride: string | string[] | undefined;
 			thinkingLevelOverride: ThinkingLevel | undefined;
 		}> => {
-			const roleModelLookupOrder = subagentRole === "subagent" ? ["subagent", "default"] : [subagentRole, "subagent", "default"];
+			const roleModelLookupOrder = subagentRole === "implement" ? ["implement", "default"] : [subagentRole, "implement", "default"];
 			const roleModelOverride = roleModelLookupOrder
 				.map(role => normalizeModelOverride(this.session.settings.getModelRole(role)))
 				.find((value): value is string | string[] => value !== undefined);

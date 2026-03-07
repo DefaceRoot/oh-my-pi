@@ -34,7 +34,7 @@ Refresh rules for this fork:
 <fork-root>/agent/                 # Repo-managed source of truth for this fork
 ├── extensions/                    # Extensions (preferred customization mechanism)
 │   ├── my-extension.ts            # Single-file extension
-│   └── plan-worktree/             # Directory extension
+│   └── implementation-engine/       # Directory extension
 │       └── index.ts
 ├── hooks/                         # Legacy hooks
 │   ├── pre/*.ts
@@ -72,7 +72,7 @@ For context-heavy tasks, keep parent/subagent context lean:
 4. Keep `explore` read-only and output-structured for reliable handoff.
 
 Model roles:
-- Set worker model via `/model` -> **Set as Subagent**
+- Set worker model via `/model` -> **Set as Implementation Agent**
 - Set scout model via `/model` -> **Set as Explore**
 
 This split keeps reconnaissance cheap/fast while preserving stronger models for implementation and decisions.
@@ -438,7 +438,7 @@ Custom agent definitions for this fork live in `<fork-root>/agent/agents/*.md`. 
 name: worktree-setup
 description: Sets up isolated git worktree
 tools: read, bash, find
-model: pi/smol, haiku-4.5, gemini-3-flash
+model: pi/explore, haiku-4.5, gemini-3-flash
 thinking-level: minimal
 output:
   properties:
@@ -534,7 +534,7 @@ For workflows where planning writes docs to disk, capture metadata in `pi.on('to
 This is robust even when plan mode internals change, because it keys off actual file writes.
 
 ### 15. Adding a new `/model` role is centralized
-To add a new role like `Subagent`, update `src/config/model-registry.ts` in three places:
+To add a new role like `Implementation Agent`, update `src/config/model-registry.ts` in three places:
 - `ModelRole` union
 - `MODEL_ROLES` (name/tag/color for UI badge + menu label)
 - `MODEL_ROLE_IDS` (drives `/model` action list and badge iteration order)
@@ -542,11 +542,11 @@ To add a new role like `Subagent`, update `src/config/model-registry.ts` in thre
 If you miss `MODEL_ROLE_IDS`, the role will exist in types but not appear correctly in `/model` menus.
 
 ### 16. Task subagent model selection is controlled in `src/task/index.ts`
-Task tool subagent model resolution is determined by `modelOverride` precedence. For Subagent workflows, wire role lookup there (e.g., `settings.getModelRole("subagent")`) between explicit agent model and generic active/default fallback.
+Task tool subagent model resolution is determined by `modelOverride` precedence. For implementation worker workflows, wire role lookup there (e.g., `settings.getModelRole("implement")`) between explicit agent model and generic active/default fallback.
 
 Recommended precedence:
 1. explicit agent frontmatter model
-2. Subagent role model (`/model` -> `Set as Subagent`)
+2. Implementation Agent role model (`/model` -> `Set as Implementation Agent`)
 3. current active session model
 4. session default fallback
 
@@ -647,19 +647,20 @@ For review/audit workflows, be explicit in the kickoff prompt:
 
 If you leave this ambiguous, orchestrators may pick cheaper but incorrect delegation patterns.
 
-### 30. Runtime patch bundles must track moved utility exports
-When OMP moved directory helpers out of `src/config.ts`, patched files still importing `APP_NAME`/`getAgentDir` from `../config` started failing module linking during `manage.sh apply` smoke checks.
+### 30. Runtime workflow changes must live in package source
+
+The live OMP runtime now comes from the packaged source under `packages/`, not from auto-applied snapshots under `agent/patches/`.
 
 Practical guardrails:
-- Import path/directory helpers directly from `@oh-my-pi/pi-utils/dirs` in patch bundle files.
-- Keep `manage.sh` `EXPECTED_VERSION` aligned to the tested OMP release.
-- Keep a Bun module-import smoke check over patched entry files so apply fails fast and auto-restores on export drift.
+- If a workflow/UI change must survive `reinstall:fork` plus relaunches, implement it in the package source that gets packed and installed globally.
+- Treat archived patch bundles as historical recovery artifacts, not as the normal refresh path.
+- Verify durability by reinstalling, launching `omp`, exiting, and launching it again.
 
 ---
 
 ## Reference Implementation
 
-See `<fork-root>/agent/extensions/plan-worktree/index.ts` for a complete, production extension that:
+See `<fork-root>/agent/extensions/implementation-engine/index.ts` for a complete, production extension that:
 - Keeps planning in the primary checkout via `/plan-new`, then launches implementation with `/implement`
 - Captures strict `/plan-new` metadata by observing writes under `docs/plans/**/*.md`
 - Shows dual initial footer actions (`Plan` + `Implement`) and stage-aware lifecycle buttons (`Implement` -> `Submit PR` (+ optional `Review Complete`) -> `Cleanup`)
@@ -676,10 +677,10 @@ See `<fork-root>/agent/extensions/plan-worktree/index.ts` for a complete, produc
 - Persists active plan file path/workspace metadata in worktree state so follow-on workflow actions (like review) use the exact plan bound to that worktree
 - Supports manual review-plan selection via `/review-complete @docs/plans/...md` and UI input fallback when metadata is missing
 - Uses section-aware + deduplicated phase extraction to avoid double-counting phases in review kickoff
-- Includes startup patch-guard logic to detect/reapply runtime patch drift after upgrades
-- Adds a dedicated `Subagent` model role (red badge) and routes phase Task subagents to it by default
+- Keeps workflow runtime changes in package source so `reinstall:fork` remains durable across relaunches
+- Adds a dedicated `Implementation Agent` model role (red badge) and routes implementation Task subagents to it by default
 - Uses high thinking level for bundled `task` subagents, with user override via `<fork-root>/agent/agents/task.md`
-- Resolves `Subagent` model role at per-task launch so `/model` updates apply immediately (no restart required)
+- Resolves `Implementation Agent` model role at per-task launch so `/model` updates apply immediately (no restart required)
 - Shows uncached token counts for subagent progress/view (`input + output`) to avoid cache-inflated metrics
 - Preserves normal OMP message/tool formatting in subagent view even during partial transcript writes (lenient JSONL structured fallback)
 

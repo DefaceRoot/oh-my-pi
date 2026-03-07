@@ -6,7 +6,7 @@ import { detectChangelogBoundaries } from "../../commit/changelog/detect";
 import { parseUnreleasedSection } from "../../commit/changelog/parse";
 import { ControlledGit } from "../../commit/git";
 import { formatCommitMessage } from "../../commit/message";
-import { resolvePrimaryModel, resolveSmolModel } from "../../commit/model-selection";
+import { resolveCommitRoleModel, resolvePrimaryModel } from "../../commit/model-selection";
 import type { CommitCommandArgs, ConventionalAnalysis } from "../../commit/types";
 import { ModelRegistry } from "../../config/model-registry";
 import { renderPromptTemplate } from "../../config/prompt-templates";
@@ -48,7 +48,7 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	const { model: primaryModel, apiKey: primaryApiKey } = primaryModelResult;
 	process.stdout.write(`  └─ ${primaryModel.name}\n`);
 
-	const { model: agentModel } = await resolveSmolModel(settings, modelRegistry, primaryModel, primaryApiKey);
+	const { model: agentModel } = await resolveCommitRoleModel(settings, modelRegistry, primaryModel, primaryApiKey);
 
 	if (stagedFiles.length === 0) {
 		process.stderr.write("No changes to commit.\n");

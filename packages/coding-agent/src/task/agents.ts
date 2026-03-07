@@ -8,9 +8,9 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import { parseAgentFields } from "../discovery/helpers";
 import designerMd from "../prompts/agents/designer.md" with { type: "text" };
 import exploreMd from "../prompts/agents/explore.md" with { type: "text" };
-import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
+import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 import oracleMd from "../prompts/agents/oracle.md" with { type: "text" };
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
@@ -54,16 +54,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			spawns: "*",
 			model: "default",
 			thinkingLevel: Effort.Medium,
-		},
-		template: taskMd,
-	},
-	{
-		fileName: "quick_task.md",
-		frontmatter: {
-			name: "quick_task",
-			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
-			model: "pi/smol",
-			thinkingLevel: Effort.Minimal,
 		},
 		template: taskMd,
 	},

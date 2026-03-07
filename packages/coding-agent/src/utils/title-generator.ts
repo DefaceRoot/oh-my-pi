@@ -1,5 +1,5 @@
 /**
- * Generate session titles using a smol, fast model.
+ * Generate session titles using a curator-selected fast model.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
@@ -7,14 +7,13 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { parseModelString } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
 
 const TITLE_SYSTEM_PROMPT = renderPromptTemplate(titleSystemPrompt);
 
 const MAX_INPUT_CHARS = 2000;
 
-function getTitleModelCandidates(registry: ModelRegistry, savedSmolModel?: string): Model<Api>[] {
+function getTitleModelCandidates(registry: ModelRegistry, savedCuratorModel?: string): Model<Api>[] {
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return [];
 
@@ -27,21 +26,12 @@ function getTitleModelCandidates(registry: ModelRegistry, savedSmolModel?: strin
 		}
 	};
 
-	if (savedSmolModel) {
-		const parsed = parseModelString(savedSmolModel);
+	if (savedCuratorModel) {
+		const parsed = parseModelString(savedCuratorModel);
 		if (parsed) {
 			const match = availableModels.find(model => model.provider === parsed.provider && model.id === parsed.id);
 			addCandidate(match);
 		}
-	}
-
-	for (const pattern of MODEL_PRIO.smol) {
-		const needle = pattern.toLowerCase();
-		const exactMatch = availableModels.find(model => model.id.toLowerCase() === needle);
-		addCandidate(exactMatch);
-
-		const fuzzyMatch = availableModels.find(model => model.id.toLowerCase().includes(needle));
-		addCandidate(fuzzyMatch);
 	}
 
 	for (const model of availableModels) {
@@ -56,18 +46,18 @@ function getTitleModelCandidates(registry: ModelRegistry, savedSmolModel?: strin
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param savedSmolModel Optional saved smol model from settings (provider/modelId format)
+ * @param savedCuratorModel Optional saved curator model from settings (provider/modelId format)
  * @param sessionId Optional session id for sticky API key selection
  */
 export async function generateSessionTitle(
 	firstMessage: string,
 	registry: ModelRegistry,
-	savedSmolModel?: string,
+	savedCuratorModel?: string,
 	sessionId?: string,
 ): Promise<string | null> {
-	const candidates = getTitleModelCandidates(registry, savedSmolModel);
+	const candidates = getTitleModelCandidates(registry, savedCuratorModel);
 	if (candidates.length === 0) {
-		logger.debug("title-generator: no smol model found");
+		logger.debug("title-generator: no candidate model found");
 		return null;
 	}
 

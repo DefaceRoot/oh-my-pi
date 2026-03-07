@@ -1,13 +1,7 @@
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { MODEL_ROLE_IDS } from "../config/model-registry";
-import {
-	expandRoleAlias,
-	parseModelPattern,
-	resolveModelFromSettings,
-	resolveModelFromString,
-} from "../config/model-resolver";
+import { expandRoleAlias, resolveModelFromSettings, resolveModelFromString } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 
 export async function resolvePrimaryModel(
 	override: string | undefined,
@@ -19,7 +13,7 @@ export async function resolvePrimaryModel(
 ): Promise<{ model: Model<Api>; apiKey: string }> {
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
-	const roleOrder = ["commit", "smol", ...MODEL_ROLE_IDS] as const;
+	const roleOrder = ["commit", ...MODEL_ROLE_IDS.filter(role => role !== "commit")] as const;
 	const model = override
 		? resolveModelFromString(expandRoleAlias(override, settings), available, matchPreferences)
 		: resolveModelFromSettings({
@@ -38,7 +32,7 @@ export async function resolvePrimaryModel(
 	return { model, apiKey };
 }
 
-export async function resolveSmolModel(
+export async function resolveCommitRoleModel(
 	settings: Settings,
 	modelRegistry: {
 		getAvailable: () => Model<Api>[];
@@ -49,20 +43,13 @@ export async function resolveSmolModel(
 ): Promise<{ model: Model<Api>; apiKey: string }> {
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
-	const role = settings.getModelRole("smol");
-	const roleModel = role
-		? resolveModelFromString(expandRoleAlias(role, settings), available, matchPreferences)
+	const commitRole = settings.getModelRole("commit");
+	const commitRoleModel = commitRole
+		? resolveModelFromString(expandRoleAlias(commitRole, settings), available, matchPreferences)
 		: undefined;
-	if (roleModel) {
-		const apiKey = await modelRegistry.getApiKey(roleModel);
-		if (apiKey) return { model: roleModel, apiKey };
-	}
-
-	for (const pattern of MODEL_PRIO.smol) {
-		const candidate = parseModelPattern(pattern, available, matchPreferences).model;
-		if (!candidate) continue;
-		const apiKey = await modelRegistry.getApiKey(candidate);
-		if (apiKey) return { model: candidate, apiKey };
+	if (commitRoleModel) {
+		const apiKey = await modelRegistry.getApiKey(commitRoleModel);
+		if (apiKey) return { model: commitRoleModel, apiKey };
 	}
 
 	return { model: fallbackModel, apiKey: fallbackApiKey };

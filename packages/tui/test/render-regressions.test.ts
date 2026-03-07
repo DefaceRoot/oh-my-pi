@@ -20,11 +20,85 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+class RecordingTerminal {
+	#inner: VirtualTerminal;
+	writes: string[] = [];
+
+	constructor(columns = 80, rows = 24) {
+		this.#inner = new VirtualTerminal(columns, rows);
+	}
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
+		this.#inner.start(onInput, onResize);
+	}
+
+	stop(): void {
+		this.#inner.stop();
+	}
+
+	async drainInput(maxMs?: number, idleMs?: number): Promise<void> {
+		await this.#inner.drainInput(maxMs, idleMs);
+	}
+
+	write(data: string): void {
+		this.writes.push(data);
+		this.#inner.write(data);
+	}
+
+	get columns(): number {
+		return this.#inner.columns;
+	}
+
+	get rows(): number {
+		return this.#inner.rows;
+	}
+
+	get kittyProtocolActive(): boolean {
+		return this.#inner.kittyProtocolActive;
+	}
+
+	moveBy(lines: number): void {
+		this.#inner.moveBy(lines);
+	}
+
+	hideCursor(): void {
+		this.#inner.hideCursor();
+	}
+
+	showCursor(): void {
+		this.#inner.showCursor();
+	}
+
+	clearLine(): void {
+		this.#inner.clearLine();
+	}
+
+	clearFromCursor(): void {
+		this.#inner.clearFromCursor();
+	}
+
+	clearScreen(): void {
+		this.#inner.clearScreen();
+	}
+
+	setTitle(title: string): void {
+		this.#inner.setTitle(title);
+	}
+
+	async flush(): Promise<void> {
+		await this.#inner.flush();
+	}
+
+	clearWrites(): void {
+		this.writes = [];
+	}
+}
+
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
 
-async function settle(term: VirtualTerminal): Promise<void> {
+async function settle(term: { flush(): Promise<void> }): Promise<void> {
 	await Bun.sleep(0);
 	await term.flush();
 }
@@ -701,6 +775,34 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("does not clear scrollback on overflow redraws after startup takeover", async () => {
+			const term = new RecordingTerminal(32, 6);
+			const tui = new TUI(term);
+			const logLines = rows("line-", 6);
+			let tick = 0;
+			const component = new MutableLinesComponent([`status-${tick}`, ...logLines]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.writes.join("")).toContain("\x1b[3J");
+				term.clearWrites();
+
+				for (let i = 6; i < 16; i++) {
+					tick += 1;
+					logLines.push(`line-${i}`);
+					component.setLines([`status-${tick}`, ...logLines]);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				expect(term.writes.join("")).not.toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("updates visible tail line when appending during overflow", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

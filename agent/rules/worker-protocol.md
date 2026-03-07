@@ -13,25 +13,29 @@ When codebase context is unclear or spans multiple modules:
 6. If an `explore` child is cancelled/aborted or surfaces submit_result validation/missing-submit_result warnings, immediately rerun that same slice using a read-only `task` child and require the same output shape (including `verdict`/`reason` when requested).
 
 </explore_delegation>
+<implementation_parallelism>
+When coordinating implementation workers:
+1. Use one or more `implement` agents as needed; do not assume a single worker for all assignments.
+2. Parallelize only across independent scopes (non-overlapping files or clearly ordered dependencies).
+3. When scopes share contracts or files, run sequentially and pass explicit handoff context.
+4. Give every worker an explicit file allowlist and acceptance criteria before execution.
+</implementation_parallelism>
 <quality_loop>
-After implementation work for a phase is complete:
-1. Skip the quality loop ONLY when the phase has zero code changes (pure documentation/config edits).
-2. Otherwise ALWAYS run quality gates for: lint rules, type checks, and tests before reporting completion.
-3. Prefer dedicated `lint` / `typecheck` / `test` subagents when available. If dedicated agents are unavailable, invoke the `lint` subagent with explicit scope instructions for each gate.
-4. Require structured output from every quality subagent with at least: `{ passed, failure_count, errors, checks_run, fix_hints }`. Normalize legacy `failureCount` to `failure_count` if encountered.
-5. Treat these as HARD failures (never as pass): missing `submit_result`, non-structured output, `SYSTEM WARNING: Subagent exited without calling submit_result`, or any orchestrator guard/tool-block message.
-6. If any gate fails, spawn a NEW `task` subagent scoped only to the reported quality errors; it must not make unrelated changes.
-7. After each fix task, re-run ALL quality gates (lint + type-check + tests). Allow at most 3 total remediation cycles.
-8. If still failing after 3 cycles, report exactly:
-   `BLOCKED: Quality gate failing after 3 remediation cycles. Phase work is complete but lint/typecheck/tests are not passing. Specific blockers: [list the errors]`
-9. If all gates pass in any cycle, report ONLY: phase completion summary (what was built + files changed), `Quality: PASSED (lint/typecheck/tests)` (include remediation cycle count when >0), and commit hashes pushed.
-10. NEVER include raw lint/type/test tool output in parent-facing success summaries.
+After assigned implementation work is complete (planned or ad hoc):
+1. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
+2. Otherwise spawn a `lint` agent to run lint, typecheck, and tests for the changed scope.
+3. Send changed files to `code-reviewer` for independent evidence-first review.
+4. Treat these as hard failures: missing `submit_result`, non-structured output, `SYSTEM WARNING: Subagent exited without calling submit_result`, or any orchestrator guard/tool-block message.
+5. If lint or review fails, spawn a focused fix task limited to reported issues, then re-run lint and code-reviewer.
+6. Allow at most 3 remediation cycles. If still failing, report blockers and stop.
+7. Never report completion while any required gate is failing.
+8. Never include raw lint/review/test transcripts in success summaries.
 </quality_loop>
 
 <commit_discipline>
 When an assignment mutates repository files:
-1. Finish with atomic commit(s) scoped only to the assigned issue/phase/task.
-2. Run `git status --porcelain` and do not report success until the worktree is clean.
-3. Push commit(s) to the active upstream branch unless the assignment explicitly forbids pushing.
-4. Report commit hash(es) and push outcome in the completion summary.
+1. Workers MUST NOT run `git commit` or `git push` directly.
+2. After quality gates pass, spawn the `commit` agent with explicit file allowlists and commit message/plan.
+3. Documentation/configuration-only updates do not return git ownership to `implement`; commit handoff is still required.
+4. Report commit hash(es) and push outcome from the commit agent before final completion.
 </commit_discipline>

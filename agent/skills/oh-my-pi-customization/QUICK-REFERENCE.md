@@ -127,15 +127,15 @@ globs: ["*.py", "src/**/*"]
 ---
 ```
 
-## Subagent Model + Thinking Controls
+## Implementation Agent Model + Thinking Controls
 
-- `/model` role assignments decide model selection (e.g., `Set as Subagent`, `Set as Explore`).
+- `/model` role assignments decide model selection (e.g., `Set as Implementation Agent`, `Set as Explore`).
 - Add new roles in `src/config/model-registry.ts` by updating `ModelRole`, `MODEL_ROLES`, and `MODEL_ROLE_IDS`.
 - Task subagent model routing is selected in `src/task/index.ts` (`modelOverride` precedence).
 - Resolve subagent model override at per-task launch time so `/model` role changes apply immediately without restarting OMP.
 - Use role-aware routing in task runtime:
   - `explore` agent runs -> `Explore` model role
-  - other worker subagents -> `Subagent` model role
+  - other worker subagents -> `Implementation Agent` (`implement`) model role
 - If task execution mutates agent config for runtime mode behavior, pass `effectiveAgent` to `runSubprocess`.
 - Thinking level is defined in agent frontmatter (`thinking-level`), not in `/model` roles.
 - For persistent local overrides in this fork, edit `<fork-root>/agent/agents/`.
@@ -154,6 +154,6 @@ globs: ["*.py", "src/**/*"]
 | Review kickoff says wrong phase count | Use section-aware phase extraction and dedupe by phase number |
 | Orchestrator picked `explore` for heavy review | Require `agent: "task"` and specify review skills per phase |
 | New `/model` role doesn't appear in selector | Update `ModelRole`, `MODEL_ROLES`, and `MODEL_ROLE_IDS` |
-| Setting `Subagent` model doesn't change reasoning depth | Thinking level comes from agent frontmatter |
+| Setting `Implementation Agent` model doesn't change reasoning depth | Thinking level comes from agent frontmatter |
 | Extension not loading | Restart omp. Check `config.yml` → `disabledExtensions` |
 | `ctx.ui.select()` returns undefined | User cancelled. Always check |

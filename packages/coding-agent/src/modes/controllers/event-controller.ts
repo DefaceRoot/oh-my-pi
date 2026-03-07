@@ -43,19 +43,6 @@ export class EventController {
 			await this.ctx.init();
 		}
 
-		const suppressChatMutationsInSubagentView =
-			this.ctx.isSubagentViewActive() &&
-			(event.type === "message_start" ||
-				event.type === "message_update" ||
-				event.type === "message_end" ||
-				event.type === "tool_execution_start" ||
-				event.type === "tool_execution_update" ||
-				event.type === "tool_execution_end" ||
-				event.type === "ttsr_triggered" ||
-				event.type === "todo_reminder");
-		if (suppressChatMutationsInSubagentView) {
-			return;
-		}
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorTopBorder();

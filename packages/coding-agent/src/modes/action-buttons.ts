@@ -8,6 +8,7 @@ const CLEANUP_WORKFLOW_STATUS_KEY = "eee-wt-cleanup";
 const PLAN_REVIEW_STATUS_KEY = "fff-wt-plan-review";
 const FIX_PLAN_STATUS_KEY = "ggg-wt-fix-plan";
 const DELETE_WORKTREE_STATUS_KEY = "zzzz-wt-delete";
+export const FORK_REFRESH_STATUS_KEY = "yyy-omp-refresh";
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 
 export interface ActionButtonUi {
@@ -19,7 +20,16 @@ export interface ActionButtonUi {
 	editorText?: string;
 }
 
+export const FORK_REFRESH_BUTTON: ActionButtonUi = {
+	label: "Refresh OMP",
+	command: "/refresh-fork",
+	statusKey: FORK_REFRESH_STATUS_KEY,
+	normalText: "\x1b[30;46m Refresh OMP \x1b[0m",
+	hoverText: "\x1b[30;106m Refresh OMP \x1b[0m",
+};
+
 export const ACTION_BUTTONS: ActionButtonUi[] = [
+	FORK_REFRESH_BUTTON,
 	{
 		label: "Worktree",
 		command: "/planned-worktree",

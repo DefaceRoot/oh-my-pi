@@ -65,23 +65,26 @@ describe("openai-codex request transformer", () => {
 });
 
 describe("openai-codex reasoning effort validation", () => {
-	it("rejects gpt-5.1 xhigh when metadata does not list it", async () => {
+	it("clamps gpt-5.1 xhigh to high when metadata excludes xhigh", async () => {
 		const body: RequestBody = { model: "gpt-5.1", input: [] };
-		await expect(
-			transformRequestBody(body, createCodexModel(body.model), { reasoningEffort: "xhigh" }),
-		).rejects.toThrow(/Supported efforts: minimal, low, medium, high/);
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), { reasoningEffort: "xhigh" });
+		expect(transformed.reasoning).toEqual({ effort: "high", summary: "detailed" });
 	});
 
-	it("rejects unsupported Codex mini efforts instead of clamping", async () => {
+	it("clamps unsupported Codex mini efforts to the nearest supported level", async () => {
 		const body: RequestBody = { model: "gpt-5.1-codex-mini", input: [] };
 
-		await expect(
-			transformRequestBody({ ...body }, createCodexModel(body.model), { reasoningEffort: "low" }),
-		).rejects.toThrow(/Supported efforts: medium, high/);
+		const low = await transformRequestBody({ ...body }, createCodexModel(body.model), { reasoningEffort: "low" });
+		expect(low.reasoning).toEqual({ effort: "medium", summary: "detailed" });
 
-		await expect(
-			transformRequestBody({ ...body }, createCodexModel(body.model), { reasoningEffort: "xhigh" }),
-		).rejects.toThrow(/Supported efforts: medium, high/);
+		const xhigh = await transformRequestBody({ ...body }, createCodexModel(body.model), { reasoningEffort: "xhigh" });
+		expect(xhigh.reasoning).toEqual({ effort: "high", summary: "detailed" });
+	});
+
+	it("keeps xhigh for gpt-5.4-codex where the model supports it", async () => {
+		const body: RequestBody = { model: "gpt-5.4-codex", input: [] };
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), { reasoningEffort: "xhigh" });
+		expect(transformed.reasoning).toEqual({ effort: "xhigh", summary: "detailed" });
 	});
 });
 

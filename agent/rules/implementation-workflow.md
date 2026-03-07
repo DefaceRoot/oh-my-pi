@@ -35,10 +35,23 @@ A clickable footer action area is shown with workflow controls:
 - Keep orchestrator reinforcement lightweight: inject orchestrator/worktree prompt once per session (or session switch), not every turn, to avoid context-window churn.
 - Enforce orchestrator behavior primarily through extension hooks/tool guards (`tool_call`, cwd/worktree isolation, mutating-tool blocks, read-budget caps), not repeated prompt restatement.
 
+### Phase-End Verification Round
+
+- Implementation worker completion reports are progress updates, not final workflow gates.
+- After all implementation units in a phase finish, the orchestrator launches verification fan-out:
+  - Spawn one `verifier` task per completed implementation unit and one `coderabbit` task in parallel.
+  - Dispatch `coderabbit` at round start so CodeRabbit runs asynchronously while the unit verifiers execute.
+  - If implementation had to stay sequential because independence checks failed, keep that sequential execution; verifier fan-out runs only after the sequential implementation batch completes.
+- If any verifier returns `verdict: "no_go"` (including `coderabbit`), convert findings into targeted remediation implementation work before advancing.
+- After remediation, rerun the full phase-end verifier round before evaluating advancement again.
+- CodeRabbit is async-friendly: it should not serialize the verifier round, and it only blocks advancement if still running when the other verifiers complete.
+- Never advance while any required verifier is running or after any required verifier reports `no_go`.
+
+
 ### Model Selection
 
 - Parent implementation model is auto-selected from `/model` role `Orchestrator` (fallback: `Default` if unset) at worktree kickoff and before each turn.
-- Phase subagents spawned during implementation use the `/model` role assignment for `Phase Agent` (and only fall back to current active model if `Phase Agent` is not set).
+- Task subagents spawned during implementation use the `/model` role assignment for `Implementation Agent` (`implement` role ID) and only fall back to current active model if `Implementation Agent` is not set.
 
 ### Commit Discipline and Convention
 
@@ -50,15 +63,12 @@ A clickable footer action area is shown with workflow controls:
 - The extension publishes the worktree branch to origin during setup and attempts a remote sync after each Task completion.
 - After Task phase completions, the extension auto-compacts context when usage exceeds threshold (default 45%).
 
-### Patch Guard
+### Runtime Source of Truth
 
-- Startup patch guard verifies the clickable workflow patch bundle is still installed and auto-reapplies it on drift (best effort).
+- Workflow UI/runtime behavior now ships through the packaged source under `packages/`; do not mutate the live Bun global install from `agent/patches/...` during startup or refresh.
 
 ### Environment Variables
 
-- Set `OMP_IMPLEMENT_PATCH_GUARD=0` to disable patch guard checks.
-- Set `OMP_IMPLEMENT_PATCH_AUTO_APPLY=0` to disable automatic reapply and only warn on drift.
-- Set `OMP_IMPLEMENT_PATCH_AUTO_FORCE=1` to allow guard-triggered `manage.sh apply --force` on version mismatch.
 - Set `OMP_IMPLEMENT_AUGGIE_INDEX=0` to disable automatic Auggie warmup.
 - Set `OMP_ORCHESTRATOR_THINKING_LEVEL=<off|minimal|low|medium|high|xhigh>` to override orchestrator thinking level (default: `medium`).
 - Set `OMP_ORCHESTRATOR_AUTO_COMPACT=0` to disable orchestrator auto-compaction.
