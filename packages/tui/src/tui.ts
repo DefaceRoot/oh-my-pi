@@ -65,7 +65,7 @@ export function isFocusable(component: Component | null): component is Component
  * Components emit this at the cursor position when focused.
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
-export const CURSOR_MARKER = "\x1b_pi:c\x07";
+export const CURSOR_MARKER = "\x1b_pi:c\x1b\\";
 
 export { visibleWidth };
 
@@ -943,10 +943,16 @@ export class TUI extends Container {
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = viewportStart + row + i;
 				if (idx >= 0 && idx < result.length) {
+					const overlayLine = overlayLines[i];
+					if (TERMINAL.isImageLine(overlayLine)) {
+						result[idx] = " ".repeat(col) + overlayLine;
+						modifiedLines.add(idx);
+						continue;
+					}
+
 					// Defensive: truncate overlay line to declared width before compositing
 					// (components should already respect width, but this ensures it)
-					const truncatedOverlayLine =
-						visibleWidth(overlayLines[i]) > w ? sliceByColumn(overlayLines[i], 0, w, true) : overlayLines[i];
+					const truncatedOverlayLine = visibleWidth(overlayLine) > w ? sliceByColumn(overlayLine, 0, w, true) : overlayLine;
 					result[idx] = this.#compositeLineAt(result[idx], truncatedOverlayLine, col, w, termWidth);
 					modifiedLines.add(idx);
 				}
