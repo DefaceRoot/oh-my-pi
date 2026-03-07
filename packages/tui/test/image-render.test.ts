@@ -138,3 +138,25 @@ describe("Windows Terminal Preview SIXEL detection", () => {
 		).toBe(false);
 	});
 });
+
+it("wraps Kitty graphics sequences for tmux passthrough", () => {
+	const previousTmux = Bun.env.TMUX;
+	terminal.imageProtocol = ImageProtocol.Kitty;
+	Bun.env.TMUX = "/tmp/tmux-session";
+	try {
+		const result = renderImage(BASE64_DUMMY, SQUARE_DIMENSIONS, {
+			maxWidthCells: 4,
+			maxHeightCells: 2,
+		});
+
+		expect(result).not.toBeNull();
+		expect(result?.sequence.startsWith("\x1bPtmux;")).toBe(true);
+		expect(result?.sequence).toContain("\x1b\x1b_G");
+	} finally {
+		if (previousTmux === undefined) {
+			delete Bun.env.TMUX;
+		} else {
+			Bun.env.TMUX = previousTmux;
+		}
+	}
+});
