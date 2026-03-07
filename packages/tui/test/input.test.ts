@@ -21,6 +21,12 @@ describe("Input component", () => {
 		return input;
 	}
 
+	it("uses a standards-terminated APC cursor marker", () => {
+		expect(CURSOR_MARKER).toBe("\x1b_pi:c\x1b\\");
+		expect(CURSOR_MARKER.endsWith("\x1b\\")).toBeTrue();
+		expect(CURSOR_MARKER.includes("\x07")).toBeFalse();
+	});
+
 	it("moves by CJK and punctuation blocks (backward)", () => {
 		const text = "天气不错，去散步吧！";
 
