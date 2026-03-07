@@ -55,22 +55,26 @@ function renderTokenLine(tokens: SidebarTokenSection): string {
 
 function renderMcpLine(server: SidebarMcpServer): string {
 	const indicator = server.connected ? chalk.green("●") : chalk.red("●");
-	const state = server.connected ? "connected" : "disconnected";
-	return `${indicator} ${server.name} · ${state}`;
+	const suffix = server.connected ? "" : chalk.dim(" · disconnected");
+	return `${indicator} ${server.name}${suffix}`;
 }
 
 function renderLspLine(server: SidebarLspServer): string {
 	const indicator = server.active ? chalk.green("●") : chalk.red("●");
-	const state = server.active ? "active" : "inactive";
-	return `${indicator} ${server.name} · ${state}`;
+	const suffix = server.active ? "" : chalk.dim(" · inactive");
+	return `${indicator} ${server.name}${suffix}`;
 }
 
-function renderTodoLine(todo: SidebarTodoItem): string {
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function renderTodoLine(todo: SidebarTodoItem, frame?: number): string {
 	switch (todo.status) {
 		case "completed":
 			return `${chalk.green("✓")} ${todo.content}`;
-		case "in_progress":
-			return `${chalk.cyan("→")} ${todo.content}`;
+		case "in_progress": {
+			const spin = SPINNER[(frame || 0) % SPINNER.length];
+			return `${chalk.cyan(spin)} ${chalk.cyan(todo.content)}`;
+		}
 		case "abandoned":
 			return `${chalk.red("×")} ${todo.content}`;
 		default:
@@ -112,18 +116,30 @@ function renderModifiedFileLine(file: SidebarModifiedFile): string {
 	return `${icon} ${shortName}`;
 }
 
-function buildModifiedFilesSection(modifiedFiles: SidebarModel["modifiedFiles"]): SidebarSection | undefined {
-	if (!modifiedFiles) return undefined;
-	if (modifiedFiles.length === 0) {
-		return { header: "Modified Files", lines: [chalk.gray("(clean)")] };
+function buildModifiedFilesSection(model: SidebarModel): SidebarSection | undefined {
+	if (!model.modifiedFiles && !model.todos) return undefined;
+	if (model.modifiedFiles?.length === 0 && !model.todos?.length)
+		return { header: "Session", lines: [chalk.gray("(clean)")] };
+
+	const lines: string[] = [];
+	if (model.modifiedFiles) {
+		if (model.modifiedFiles.length === 0) {
+			lines.push(chalk.gray("(clean)"));
+		} else {
+			lines.push(...model.modifiedFiles.slice(0, MODIFIED_FILES_PREVIEW_LIMIT).map(renderModifiedFileLine));
+			if (model.modifiedFiles.length > MODIFIED_FILES_PREVIEW_LIMIT) {
+				lines.push(chalk.gray(`...and ${model.modifiedFiles.length - MODIFIED_FILES_PREVIEW_LIMIT} more`));
+			}
+		}
 	}
 
-	const lines = modifiedFiles.slice(0, MODIFIED_FILES_PREVIEW_LIMIT).map(renderModifiedFileLine);
-	if (modifiedFiles.length > MODIFIED_FILES_PREVIEW_LIMIT) {
-		lines.push(chalk.gray(`...and ${modifiedFiles.length - MODIFIED_FILES_PREVIEW_LIMIT} more`));
+	if (model.todos && model.todos.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push(chalk.bold("Todo List"));
+		lines.push(...model.todos.map(t => renderTodoLine(t, model.animationFrame)));
 	}
 
-	return { header: "Modified Files", lines };
+	return { header: "Session", lines };
 }
 export function renderSidebar(model: SidebarModel): string[] {
 	const width = Math.max(1, Math.floor(model.width || 0));
@@ -141,19 +157,14 @@ export function renderSidebar(model: SidebarModel): string[] {
 		sections.push({ header: "LSP", lines: model.lspServers.map(renderLspLine) });
 	}
 
-	if (model.todos && model.todos.length > 0) {
-		sections.push({ header: "Todos", lines: model.todos.map(renderTodoLine) });
-	}
-
 	if (model.subagents && model.subagents.length > 0) {
 		sections.push({ header: "Subagents", lines: model.subagents.map(renderSubagentLine) });
 	}
 
-	const modifiedFilesSection = buildModifiedFilesSection(model.modifiedFiles);
+	const modifiedFilesSection = buildModifiedFilesSection(model);
 	if (modifiedFilesSection) {
 		sections.push(modifiedFilesSection);
 	}
-
 	if (sections.length === 0) {
 		return [fit("(no data)", width)];
 	}

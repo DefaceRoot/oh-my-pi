@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
+import { getActiveSidebarLspServers, getActiveSidebarMcpServers } from "../../interactive-mode";
 import type { SidebarModel } from "./model";
 import { renderSidebar } from "./render";
 
@@ -63,7 +64,8 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("MCP");
-		expect(output).toContain("filesystem · connected");
+		expect(output).toContain("● filesystem");
+		expect(output).not.toContain("filesystem · connected");
 		expect(output).toContain("github · disconnected");
 	});
 
@@ -78,11 +80,38 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("LSP");
-		expect(output).toContain("typescript · active");
+		expect(output).toContain("● typescript");
+		expect(output).not.toContain("typescript · active");
 		expect(output).toContain("rust-analyzer · inactive");
 	});
 
-	test("todos section renders all status icons", () => {
+	test("filters MCP sidebar entries to active connected session tools", () => {
+		const servers = getActiveSidebarMcpServers(["read", "mcp_augment_search", "mcp_chrome_devtools_click"], {
+			getTools: () =>
+				[
+					{ name: "mcp_augment_search", mcpServerName: "augment" },
+					{ name: "mcp_better_context_ask", mcpServerName: "better-context" },
+					{ name: "mcp_chrome_devtools_click", mcpServerName: "chrome-devtools" },
+				] as Array<{ name: string; mcpServerName?: string }>,
+			getConnectionStatus: name => (name === "augment" || name === "chrome-devtools" ? "connected" : "disconnected"),
+		});
+
+		expect(servers).toEqual([
+			{ name: "augment", connected: true },
+			{ name: "chrome-devtools", connected: true },
+		]);
+	});
+
+	test("filters LSP sidebar entries to ready servers only", () => {
+		const servers = getActiveSidebarLspServers([
+			{ name: "typescript", status: "ready", fileTypes: ["ts", "tsx"] },
+			{ name: "rust-analyzer", status: "error", fileTypes: ["rs"], error: "startup failed" },
+		]);
+
+		expect(servers).toEqual([{ name: "typescript", active: true }]);
+	});
+
+	test("todo items render with status icons and animate in-progress frames", () => {
 		const model: SidebarModel = {
 			width: 80,
 			todos: [
@@ -93,11 +122,20 @@ describe("renderSidebar", () => {
 			],
 		};
 
-		const output = renderSidebar(model).map(plain).join("\n");
-		expect(output).toContain("○ Pending item");
-		expect(output).toContain("→ In progress item");
-		expect(output).toContain("✓ Completed item");
-		expect(output).toContain("× Abandoned item");
+		const frameZero = renderSidebar({ ...model, animationFrame: 0 })
+			.map(plain)
+			.join("\n");
+		const frameOne = renderSidebar({ ...model, animationFrame: 1 })
+			.map(plain)
+			.join("\n");
+
+		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(frameZero).toContain("Todo List");
+		expect(frameZero).toContain("○ Pending item");
+		expect(frameZero).toContain("⠋ In progress item");
+		expect(frameOne).toContain("⠙ In progress item");
+		expect(frameZero).toContain("✓ Completed item");
+		expect(frameZero).toContain("× Abandoned item");
 	});
 
 	test("subagents section renders running and completed", () => {
@@ -121,8 +159,26 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
-		expect(output).toContain("Modified Files");
+		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
 		expect(output).toContain("(clean)");
+	});
+
+	test("modified files section nests the todo list under clean state", () => {
+		const model: SidebarModel = {
+			width: 80,
+			modifiedFiles: [],
+			todos: [
+				{ id: "1", content: "Ship the sidebar polish", status: "completed" },
+				{ id: "2", content: "Animate the working item", status: "in_progress" },
+			],
+		};
+
+		const output = renderSidebar(model).map(plain).join("\n");
+		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(output).toContain("(clean)");
+		expect(output).toContain("Todo List");
+		expect(output).toContain("✓ Ship the sidebar polish");
+		expect(output).toContain("⠋ Animate the working item");
 	});
 
 	test("modified files section renders icons and overflow", () => {
@@ -144,6 +200,7 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
+		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
 		expect(output).toContain("✎ one.ts");
 		expect(output).toContain("+ two.ts");
 		expect(output).toContain("- three.ts");
