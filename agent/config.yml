@@ -37,6 +37,7 @@ disabledProviders:
   - opencode
   - codex
   - agents-md
+  - claude
 memories: 
   enabled: true
 theme: 
