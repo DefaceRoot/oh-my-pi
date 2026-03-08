@@ -43,6 +43,7 @@ import {
 	FORK_REFRESH_BUTTON,
 	findActionButtonBounds,
 	hasSameVisibleText,
+	LAZYGIT_BUTTON,
 	stripAnsi,
 } from "./action-buttons";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -313,6 +314,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
 		this.statusLine.setHookStatus(FORK_REFRESH_BUTTON.statusKey, FORK_REFRESH_BUTTON.normalText);
+		this.statusLine.setHookStatus(LAZYGIT_BUTTON.statusKey, LAZYGIT_BUTTON.normalText);
 		this.mainLayoutContainer = new Container();
 		this.mainLayoutContainer.addChild(this.chatContainer);
 		this.mainLayoutContainer.addChild(this.pendingMessagesContainer);
@@ -1176,6 +1178,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (hoveredButton.editorText) {
 			this.editor.setText(hoveredButton.editorText);
+			return true;
+		}
+
+		if (hoveredButton.command === "/lazygit") {
+			void this.inputController.openLazygit();
 			return true;
 		}
 
