@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SettingPath, SettingValue } from "../../config/settings";
 import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
@@ -12,6 +13,7 @@ import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../sessio
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
+import { WORKFLOW_MENUS } from "../action-buttons";
 
 interface Expandable {
 	setExpanded(expanded: boolean): void;
@@ -29,6 +31,11 @@ export class InputController {
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.onEscape = () => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				this.ctx.statusLine.closeMenu();
+				this.ctx.ui.requestRender();
+				return;
+			}
 			if (this.ctx.isSubagentViewActive()) {
 				this.ctx.exitSubagentView();
 				return;
@@ -87,7 +94,12 @@ export class InputController {
 		this.ctx.editor.onCtrlL = () => this.ctx.showModelSelector();
 		this.ctx.editor.onCtrlR = () => this.ctx.showHistorySearch();
 		this.ctx.editor.onCtrlT = () => this.ctx.toggleTodoExpansion();
-		this.ctx.editor.onCtrlG = () => void this.openExternalEditor();
+		for (const key of this.ctx.keybindings.getKeys("lazygit")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.openLazygit());
+		}
+		for (const key of this.ctx.keybindings.getKeys("externalEditor")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.openExternalEditor());
+		}
 		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
 
@@ -126,6 +138,15 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("fork")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showUserMessageSelector());
 		}
+		for (const menu of WORKFLOW_MENUS) {
+			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction)) {
+				this.ctx.editor.setCustomKeyHandler(key, () => {
+					this.ctx.statusLine.toggleMenu(menu.id);
+					this.ctx.ui.requestRender();
+				});
+			}
+		}
+
 		for (const key of this.ctx.keybindings.getKeys("resume")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
 				const hasResumeUiCommand = Boolean(this.ctx.session.extensionRunner?.getCommand("resume-ui"));
@@ -150,10 +171,38 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("cycleAgentMode")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.cycleAgentMode());
 		}
-		this.ctx.editor.setCustomKeyHandler("left", () => this.handleSubagentRootNavigation(-1));
-		this.ctx.editor.setCustomKeyHandler("right", () => this.handleSubagentRootNavigation(1));
-		this.ctx.editor.setCustomKeyHandler("up", () => this.handleSubagentArrowNavigation(-1));
-		this.ctx.editor.setCustomKeyHandler("down", () => this.handleSubagentArrowNavigation(1));
+		this.ctx.editor.setCustomKeyHandler("left", () => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				this.ctx.statusLine.navigateMenu(-1);
+				this.ctx.ui.requestRender();
+				return true;
+			}
+			return this.handleSubagentRootNavigation(-1);
+		});
+		this.ctx.editor.setCustomKeyHandler("right", () => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				this.ctx.statusLine.navigateMenu(1);
+				this.ctx.ui.requestRender();
+				return true;
+			}
+			return this.handleSubagentRootNavigation(1);
+		});
+		this.ctx.editor.setCustomKeyHandler("up", () => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				this.ctx.statusLine.navigateMenu(-1);
+				this.ctx.ui.requestRender();
+				return true;
+			}
+			return this.handleSubagentArrowNavigation(-1);
+		});
+		this.ctx.editor.setCustomKeyHandler("down", () => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				this.ctx.statusLine.navigateMenu(1);
+				this.ctx.ui.requestRender();
+				return true;
+			}
+			return this.handleSubagentArrowNavigation(1);
+		});
 		this.ctx.editor.setCustomKeyHandler("tab", () => this.handleSubagentNestedNavigation(1));
 		this.ctx.editor.setCustomKeyHandler("a", () => this.handleSubagentAgentToggle());
 		this.ctx.editor.setCustomKeyHandler("A", () => this.handleSubagentAgentToggle());
@@ -172,6 +221,18 @@ export class InputController {
 
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
+			if (this.ctx.statusLine.getActiveMenu()) {
+				const action = this.ctx.statusLine.executeSelectedMenuAction();
+				if (action) {
+					if (action.editorText) {
+						this.ctx.editor.setText(action.editorText);
+					} else {
+						void this.ctx.session.prompt(action.command);
+					}
+				}
+				this.ctx.ui.requestRender();
+				return;
+			}
 			text = text.trim();
 
 			// Empty submit while streaming with queued messages: flush queues immediately
@@ -222,6 +283,11 @@ export class InputController {
 			if (text === "/plan") {
 				await this.ctx.handlePlanModeCommand();
 				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/lazygit") {
+				this.ctx.editor.setText("");
+				void this.openLazygit();
 				return;
 			}
 			if (text === "/model" || text === "/models") {
@@ -1054,6 +1120,48 @@ export class InputController {
 		} finally {
 			if (ttyHandle) {
 				await ttyHandle.close();
+			}
+
+			this.ctx.ui.start();
+			this.ctx.ui.requestRender();
+		}
+	}
+
+	async openLazygit(): Promise<void> {
+		if (!Bun.which("lazygit")) {
+			this.ctx.showWarning("lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation");
+			return;
+		}
+
+		const cwd = getProjectDir();
+		let ttyHandle: fs.FileHandle | null = null;
+		try {
+			ttyHandle = await this.openEditorTerminalHandle();
+			this.ctx.ui.stop();
+
+			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = ttyHandle
+				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
+				: ["inherit", "inherit", "inherit"];
+			const env = { ...process.env };
+			delete env.GIT_DIR;
+			delete env.GIT_WORK_TREE;
+
+			await new Promise<void>((resolve, reject) => {
+				const child = spawn("lazygit", ["-p", cwd], { stdio, env });
+				child.once("exit", () => resolve());
+				child.once("error", reject);
+			});
+		} catch (error) {
+			this.ctx.showWarning(`Failed to open lazygit: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (ttyHandle) {
+				try {
+					await ttyHandle.close();
+				} catch (error) {
+					this.ctx.showWarning(
+						`Failed to close lazygit terminal handle: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
 			}
 
 			this.ctx.ui.start();
