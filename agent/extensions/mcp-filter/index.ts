@@ -47,10 +47,11 @@ function resolveAgent(systemPrompt: string, ctx: ExtensionContext): string {
  * `[]`   = no MCP tools allowed (remove all).
  */
 const AGENT_MCP_ALLOW: Record<string, string[] | null> = {
-	default:        ["mcp_augment_", "mcp_better_context_"],  // exclude chrome-devtools
+	default:        ["mcp_augment_", "mcp_better_context_"],  // exclude chrome-devtools and grafana
 	orchestrator:   [],
-	implement:      ["mcp_augment_", "mcp_better_context_"],  // chrome-devtools is designer-only
-	designer:       null,
+	implement:      ["mcp_augment_", "mcp_better_context_"],  // chrome-devtools and grafana are specialized
+	designer:       ["mcp_augment_", "mcp_better_context_", "mcp_chrome_devtools_"],
+	grafana:        ["mcp_grafana_"],
 	explore:        ["mcp_augment_"],
 	research:       ["mcp_augment_", "mcp_better_context_"],
 	"ask-explore":  [],
@@ -119,6 +120,7 @@ const AGENT_SKILL_ALLOW: Record<string, string[] | null> = {
 		"web-design-guidelines",
 		"vercel-react-best-practices",
 	],
+	grafana:        ["grafana-dashboards"],
 	explore:        [],
 	research:       [],
 	"ask-explore":  [],

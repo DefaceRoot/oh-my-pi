@@ -49,6 +49,7 @@ export type ModelRole =
 	| "research"
 	| "verifier"
 	| "designer"
+	| "grafana"
 	| "worktree-setup"
 	| "code-reviewer"
 	| "plan-verifier"
@@ -80,6 +81,12 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	research: { tag: "RESEARCH", name: "Research", color: "accent" },
 	verifier: { tag: "VERIFY", name: "Verifier", color: "muted" },
 	designer: { tag: "DESIGN", name: "Frontend", color: "accent" },
+	grafana: {
+		tag: "GRAFANA",
+		name: "Grafana",
+		description: "Model for Grafana monitoring subagent",
+		color: "warning",
+	},
 	"worktree-setup": { tag: "WORKTREE", name: "Worktree Setup", color: "warning" },
 	"code-reviewer": { tag: "REVIEW", name: "Code Reviewer", color: "muted" },
 	"plan-verifier": { tag: "PLANCHK", name: "Plan Verifier", color: "muted" },
@@ -100,6 +107,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"research",
 	"verifier",
 	"designer",
+	"grafana",
 	"worktree-setup",
 	"code-reviewer",
 	"plan-verifier",

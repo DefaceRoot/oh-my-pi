@@ -8,14 +8,15 @@ const availableModels = [
 		id: "gpt-5.3-codex",
 		name: "GPT-5.3 Codex",
 		api: "openai-codex-responses",
+		baseUrl: "https://api.openai.com/v1",
 		reasoning: true,
-		input: ["text"] as const,
+		input: ["text"] as ("image" | "text")[],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
 		maxTokens: 32000,
 	},
 ];
-describe("ask role in model registry", () => {
+describe("model roles in model registry", () => {
 	it("ask role is present in MODEL_ROLES", () => {
 		expect(MODEL_ROLES.ask).toBeDefined();
 		expect(MODEL_ROLES.ask.description).toBe("Model for Ask Agent (read-only research mode)");
@@ -23,6 +24,15 @@ describe("ask role in model registry", () => {
 
 	it("ask role appears in role list used by /model picker", () => {
 		expect(MODEL_ROLE_IDS).toContain("ask");
+	});
+
+	it("grafana role is present in MODEL_ROLES", () => {
+		expect(MODEL_ROLES.grafana).toBeDefined();
+		expect(MODEL_ROLES.grafana.description).toBe("Model for Grafana monitoring subagent");
+	});
+
+	it("grafana role appears in role list used by /model picker", () => {
+		expect(MODEL_ROLE_IDS).toContain("grafana");
 	});
 
 	it("falls back to default role model when ask role is not configured", () => {

@@ -1,12 +1,12 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
   default: openai-codex/gpt-5.4:xhigh
-  ask: anthropic/claude-opus-4-6:medium
+  ask: kimi-code/kimi-k2
   orchestrator: openai-codex/gpt-5.4:medium
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
   implement: openai-codex/gpt-5.3-codex:high
-  explore: github-copilot/gemini-3-flash-preview:medium
+  explore: zai/glm-5:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
@@ -17,7 +17,8 @@ modelRoles:
   plan-verifier: openai-codex/gpt-5.4:high
   coderabbit: zai/glm-5:medium
   frontend: github-copilot/gemini-3.1-pro-preview
-  designer: github-copilot/gemini-3.1-pro-preview:high
+  designer: anthropic/claude-opus-4-6:high
+  grafana: openai-codex/gpt-5.4:xhigh
 defaultThinkingLevel: high
 providers: 
   webSearch: auto
@@ -80,3 +81,10 @@ browser:
   headless: true
 exa: 
   enableResearcher: true
+symbolPreset: nerd
+compaction: 
+  strategy: handoff
+commands: 
+  enableClaudeUser: false
+skills: 
+  enableSkillCommands: false

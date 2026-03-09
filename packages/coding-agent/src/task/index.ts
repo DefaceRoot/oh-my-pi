@@ -32,6 +32,7 @@ import { formatBytes, formatDuration } from "../tools/render-utils";
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { discoverAgents, getAgent } from "./discovery";
+import { resolveSubagentRole } from "./model-role";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
@@ -67,30 +68,6 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
-	"implement",
-	"explore",
-	"lint",
-	"merge",
-	"curator",
-	"research",
-	"verifier",
-	"designer",
-	"worktree-setup",
-	"code-reviewer",
-	"plan-verifier",
-	"coderabbit",
-]);
-
-const SUBAGENT_MODEL_ROLE_ALIASES: Readonly<Record<string, ModelRole>> = {
-	reviewer: "code-reviewer",
-};
-
-function resolveSubagentRole(agentName: string): ModelRole {
-	const aliasRole = SUBAGENT_MODEL_ROLE_ALIASES[agentName];
-	if (aliasRole) return aliasRole;
-	return SUBAGENT_MODEL_ROLES.has(agentName as ModelRole) ? (agentName as ModelRole) : "implement";
-}
 
 function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
 	if (Array.isArray(value)) {
