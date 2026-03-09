@@ -1,24 +1,34 @@
 import { afterEach, describe, expect, it, mock, vi } from "bun:test";
 import { EventEmitter } from "node:events";
+import * as childProcess from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import * as readlinePromises from "node:readline/promises";
+import type { Interface as ReadlineInterface } from "node:readline/promises";
 import type { FileHandle } from "node:fs/promises";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import type { InteractiveModeContext } from "../../modes/types";
 
 const spawnMock = vi.fn();
 const getProjectDirMock = vi.fn(() => "/tmp/lazygit-test-cwd");
 
 mock.module("node:child_process", () => ({
+	...childProcess,
 	spawn: spawnMock,
 }));
 
 mock.module("@oh-my-pi/pi-utils", () => ({
+	...piUtils,
 	$env: process.env,
 	getProjectDir: getProjectDirMock,
 }));
 
-import { InputController } from "./input-controller";
+mock.module("../action-buttons", () => ({
+	WORKFLOW_MENUS: [],
+}));
 
-type InputControllerWithLazygit = InputController & {
+const { detectLazygitInstallCommand, InputController } = await import("./input-controller");
+
+type InputControllerWithLazygit = {
 	openLazygit: () => Promise<void>;
 	openEditorTerminalHandle: () => Promise<FileHandle | null>;
 };
@@ -29,6 +39,7 @@ type LazygitFixture = {
 	uiStopSpy: ReturnType<typeof vi.fn>;
 	uiStartSpy: ReturnType<typeof vi.fn>;
 	uiRequestRenderSpy: ReturnType<typeof vi.fn>;
+	showWarningSpy: ReturnType<typeof vi.fn>;
 	releaseTerminalHandle: () => void;
 	releaseTtyClose: () => void;
 };
@@ -38,6 +49,18 @@ type ControllableChild = {
 	emitExit: () => void;
 	hasExitListener: () => boolean;
 };
+
+const originalProcessPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+if (!originalProcessPlatformDescriptor) {
+	throw new Error("Missing process.platform descriptor");
+}
+
+function setProcessPlatform(platform: NodeJS.Platform): void {
+	Object.defineProperty(process, "platform", {
+		configurable: true,
+		value: platform,
+	});
+}
 
 function createControllableChild(): ControllableChild {
 	const emitter = new EventEmitter();
@@ -54,6 +77,7 @@ function createFixture(): LazygitFixture {
 	const uiStopSpy = vi.fn();
 	const uiStartSpy = vi.fn();
 	const uiRequestRenderSpy = vi.fn();
+	const showWarningSpy = vi.fn();
 	let resolveTtyClose: (() => void) | null = null;
 	const ttyCloseSpy = vi.fn(async () => {
 		await new Promise<void>((resolve) => {
@@ -72,10 +96,10 @@ function createFixture(): LazygitFixture {
 			start: uiStartSpy,
 			requestRender: uiRequestRenderSpy,
 		},
-		showWarning: vi.fn(),
+		showWarning: showWarningSpy,
 	} as unknown as InteractiveModeContext;
 
-	const controller = new InputController(ctx) as InputControllerWithLazygit;
+	const controller = new InputController(ctx) as unknown as InputControllerWithLazygit;
 	vi.spyOn(controller, "openEditorTerminalHandle").mockReturnValue(terminalHandlePromise);
 
 	return {
@@ -84,6 +108,7 @@ function createFixture(): LazygitFixture {
 		uiStopSpy,
 		uiStartSpy,
 		uiRequestRenderSpy,
+		showWarningSpy,
 		releaseTerminalHandle: () => resolveTerminalHandle?.(ttyHandle),
 		releaseTtyClose: () => resolveTtyClose?.(),
 	};
@@ -190,6 +215,7 @@ afterEach(() => {
 	getProjectDirMock.mockReset();
 	getProjectDirMock.mockReturnValue("/tmp/lazygit-test-cwd");
 	vi.restoreAllMocks();
+	Object.defineProperty(process, "platform", originalProcessPlatformDescriptor);
 	delete process.env.GIT_DIR;
 	delete process.env.GIT_WORK_TREE;
 });
@@ -275,6 +301,85 @@ describe("InputController openLazygit", () => {
 	});
 });
 
+describe("detectLazygitInstallCommand", () => {
+	it("returns null on Windows before checking package managers", () => {
+		setProcessPlatform("win32");
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		expect(detectLazygitInstallCommand()).toBeNull();
+		expect(whichSpy).not.toHaveBeenCalled();
+	});
+
+	it("prefers brew before system package managers", () => {
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(1000);
+		const whichSpy = vi.spyOn(Bun, "which").mockImplementation((command: string) => {
+			if (command === "brew") return "/opt/homebrew/bin/brew";
+			if (command === "sudo") return null;
+			if (command === "apt") return "/usr/bin/apt";
+			return null;
+		});
+
+		expect(detectLazygitInstallCommand()).toEqual({ command: "brew", args: ["install", "lazygit"] });
+		expect(whichSpy.mock.calls).toEqual([["brew"]]);
+	});
+
+	it("returns null when not root and sudo is unavailable", () => {
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(1000);
+		const whichSpy = vi.spyOn(Bun, "which").mockImplementation((command: string) => {
+			if (command === "brew") return null;
+			if (command === "sudo") return null;
+			if (command === "apt") return "/usr/bin/apt";
+			return null;
+		});
+
+		expect(detectLazygitInstallCommand()).toBeNull();
+		expect(whichSpy.mock.calls).toEqual([["brew"], ["sudo"]]);
+	});
+
+	const packageManagers = [
+		{ name: "apt", args: ["install", "-y", "lazygit"] },
+		{ name: "dnf", args: ["install", "-y", "lazygit"] },
+		{ name: "pacman", args: ["-S", "--noconfirm", "lazygit"] },
+		{ name: "apk", args: ["add", "lazygit"] },
+	] as const;
+
+	for (const manager of packageManagers) {
+		it(`wraps ${manager.name} with sudo when not root`, () => {
+			setProcessPlatform("linux");
+			vi.spyOn(process, "getuid").mockReturnValue(1000);
+			const whichSpy = vi.spyOn(Bun, "which").mockImplementation((command: string) => {
+				if (command === "brew") return null;
+				if (command === "sudo") return "/usr/bin/sudo";
+				if (command === manager.name) return `/usr/bin/${manager.name}`;
+				return null;
+			});
+
+			expect(detectLazygitInstallCommand()).toEqual({
+				command: "sudo",
+				args: [manager.name, ...manager.args],
+			});
+			expect(whichSpy).toHaveBeenCalledWith(manager.name);
+		});
+
+		it(`runs ${manager.name} directly when already root`, () => {
+			setProcessPlatform("linux");
+			vi.spyOn(process, "getuid").mockReturnValue(0);
+			const whichSpy = vi.spyOn(Bun, "which").mockImplementation((command: string) => {
+				if (command === "brew") return null;
+				if (command === manager.name) return `/usr/bin/${manager.name}`;
+				return null;
+			});
+
+			expect(detectLazygitInstallCommand()).toEqual({
+				command: manager.name,
+				args: [...manager.args],
+			});
+			expect(whichSpy).toHaveBeenCalledWith(manager.name);
+		});
+	}
+});
 
 describe("InputController lazygit keybinding and submit wiring", () => {
 	it("registers custom handlers for each configured lazygit and external editor key", () => {
@@ -309,5 +414,151 @@ describe("InputController lazygit keybinding and submit wiring", () => {
 		expect(fixture.openLazygitSpy).toHaveBeenCalledTimes(1);
 		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("InputController lazygit installation flow", () => {
+	it("shows manual install warning when detectLazygitInstallCommand returns null", async () => {
+		const fixture = createFixture();
+		vi.spyOn(Bun, "which").mockReturnValue(null);
+		setProcessPlatform("win32"); // will force detectLazygitInstallCommand to return null
+
+		await fixture.controller.openLazygit();
+
+		expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
+		expect(fixture.uiStopSpy).not.toHaveBeenCalled();
+				expect(fixture.showWarningSpy).toHaveBeenCalledWith(
+			"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation"
+		);
+	});
+
+	it("shows manual install warning when no TTY is available", async () => {
+		const fixture = createFixture();
+		vi.spyOn(Bun, "which").mockReturnValue(null);
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(0);
+		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => cmd === "apt" ? "/usr/bin/apt" : null);
+
+		const originalStdinIsTTY = process.stdin.isTTY;
+		const originalStdoutIsTTY = process.stdout.isTTY;
+
+		try {
+			Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+
+			await fixture.controller.openLazygit();
+
+			expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
+			expect(fixture.uiStopSpy).not.toHaveBeenCalled();
+			expect(fixture.showWarningSpy).toHaveBeenCalledWith(
+				"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation"
+			);
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });
+		}
+	});
+
+	it("restores the TUI when install prompt setup fails before launching install", async () => {
+		const fixture = createFixture();
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(0);
+		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => (cmd === "apt" ? "/usr/bin/apt" : null));
+		const promptError = new Error("prompt failed");
+		const closeSpy = vi.fn();
+		vi.spyOn(readlinePromises, "createInterface").mockReturnValue({
+			question: vi.fn().mockRejectedValue(promptError),
+			close: closeSpy,
+		} as unknown as ReadlineInterface);
+
+		const originalStdinIsTTY = process.stdin.isTTY;
+		const originalStdoutIsTTY = process.stdout.isTTY;
+		try {
+			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+
+			await fixture.controller.openLazygit();
+
+			expect(spawnMock).not.toHaveBeenCalled();
+			expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
+			expect(fixture.uiStopSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiStartSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiRequestRenderSpy).toHaveBeenCalledTimes(1);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.showWarningSpy).toHaveBeenCalledWith("Failed to install lazygit: prompt failed");
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });
+		}
+	});
+
+	it("restores the TUI and skips install when prompt is declined", async () => {
+		const fixture = createFixture();
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(0);
+		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => (cmd === "apt" ? "/usr/bin/apt" : null));
+		const closeSpy = vi.fn();
+		vi.spyOn(readlinePromises, "createInterface").mockReturnValue({
+			question: vi.fn().mockResolvedValue("n"),
+			close: closeSpy,
+		} as unknown as ReadlineInterface);
+
+		const originalStdinIsTTY = process.stdin.isTTY;
+		const originalStdoutIsTTY = process.stdout.isTTY;
+		try {
+			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+
+			await fixture.controller.openLazygit();
+
+			expect(spawnMock).not.toHaveBeenCalled();
+			expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
+			expect(fixture.uiStopSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiStartSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiRequestRenderSpy).toHaveBeenCalledTimes(1);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.showWarningSpy).not.toHaveBeenCalled();
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });
+		}
+	});
+
+	it("restores the TUI when install command fails", async () => {
+		const fixture = createFixture();
+		setProcessPlatform("linux");
+		vi.spyOn(process, "getuid").mockReturnValue(0);
+		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => (cmd === "apt" ? "/usr/bin/apt" : null));
+		const closeSpy = vi.fn();
+		vi.spyOn(readlinePromises, "createInterface").mockReturnValue({
+			question: vi.fn().mockResolvedValue("y"),
+			close: closeSpy,
+		} as unknown as ReadlineInterface);
+		const installChild = new EventEmitter() as ChildProcess;
+		spawnMock.mockReturnValue(installChild);
+
+		const originalStdinIsTTY = process.stdin.isTTY;
+		const originalStdoutIsTTY = process.stdout.isTTY;
+		try {
+			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+
+			const runPromise = fixture.controller.openLazygit();
+			await waitFor(() => installChild.listenerCount("exit") > 0);
+			installChild.emit("exit", 1);
+			await runPromise;
+
+			expect(spawnMock).toHaveBeenCalledTimes(1);
+			expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
+			expect(fixture.uiStopSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiStartSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.uiRequestRenderSpy).toHaveBeenCalledTimes(1);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+			expect(fixture.showWarningSpy).toHaveBeenCalledWith(
+				"Failed to install lazygit: Install command exited with code 1"
+			);
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });
+		}
 	});
 });

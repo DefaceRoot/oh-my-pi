@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as readlinePromises from "node:readline/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
@@ -21,6 +22,32 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+
+export function detectLazygitInstallCommand(): { command: string; args: string[] } | null {
+	if (process.platform === "win32") return null;
+	const isRoot = process.getuid && process.getuid() === 0;
+
+	if (Bun.which("brew")) return { command: "brew", args: ["install", "lazygit"] };
+
+	const hasSudo = !isRoot && !!Bun.which("sudo");
+	if (!isRoot && !hasSudo) return null;
+
+	const managers = [
+		{ name: "apt", args: ["install", "-y", "lazygit"] },
+		{ name: "dnf", args: ["install", "-y", "lazygit"] },
+		{ name: "pacman", args: ["-S", "--noconfirm", "lazygit"] },
+		{ name: "apk", args: ["add", "lazygit"] },
+	] as const;
+
+	for (const manager of managers) {
+		if (Bun.which(manager.name)) {
+			if (isRoot) return { command: manager.name, args: manager.args as unknown as string[] };
+			return { command: "sudo", args: [manager.name, ...manager.args] as string[] };
+		}
+	}
+	return null;
 }
 
 export class InputController {
@@ -1129,8 +1156,59 @@ export class InputController {
 
 	async openLazygit(): Promise<void> {
 		if (!Bun.which("lazygit")) {
-			this.ctx.showWarning("lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation");
-			return;
+			const installCmd = detectLazygitInstallCommand();
+			if (!installCmd || !process.stdin.isTTY || !process.stdout.isTTY) {
+				this.ctx.showWarning(
+					"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation",
+				);
+				return;
+			}
+
+			let closePrompt = null;
+			let shouldLaunchLazygit = false;
+			try {
+				this.ctx.ui.stop();
+
+				const rl = readlinePromises.createInterface({
+					input: process.stdin,
+					output: process.stdout,
+				});
+				closePrompt = () => rl.close();
+
+				const cmdStr = [installCmd.command, ...installCmd.args].join(" ");
+				process.stdout.write(`lazygit is not installed.\n`);
+				const answer = await rl.question(`Would you like to install it now? [Y/n] (${cmdStr}): `);
+
+				if (answer.trim().toLowerCase() === "n") {
+					return;
+				}
+
+				process.stdout.write(`\nRunning: ${cmdStr}\n`);
+
+				await new Promise((resolve, reject) => {
+					const child = spawn(installCmd.command, installCmd.args, {
+						stdio: "inherit",
+					});
+					child.once("exit", (code) => {
+						if (code === 0) resolve();
+						else reject(new Error(`Install command exited with code ${code}`));
+					});
+					child.once("error", reject);
+				});
+
+				shouldLaunchLazygit = true;
+			} catch (error) {
+				this.ctx.showWarning(
+					`Failed to install lazygit: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return;
+			} finally {
+				closePrompt?.();
+				if (!shouldLaunchLazygit) {
+					this.ctx.ui.start();
+					this.ctx.ui.requestRender();
+				}
+			}
 		}
 
 		const cwd = getProjectDir();
