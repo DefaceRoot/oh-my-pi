@@ -5,51 +5,40 @@ alwaysApply: false
 
 # Planning Protocol (MANDATORY)
 
-When `/plan` is invoked or when creating ANY implementation plan:
+When `/plan` is invoked or when creating any implementation plan:
 
 <critical>
-## Worktree Questions Are Handled by an Extension (NOT the LLM `ask` tool)
-
-The `implementation-engine` extension intercepts plan sessions and prompts the user (via UI dialogs) for:
-1. **Base branch** (usually `master`)
-2. **New branch name**
-
-These are asked **before** the agent responds.
-
-**Do NOT ask the user for base branch / branch name using the LLM `ask` tool.**
-
-The extension will create the worktree in the background and inject a message:
-- `implement-worktree/pending` while creating
-- `implement-worktree/ready` when complete (includes worktree path)
-
-After you see `implement-worktree/ready`, proceed with planning/exploration using the worktree path.
-
-Important: The new branch is checked out **inside the worktree directory**. The original repo typically remains on its current branch.
+## Planning Uses the Current Workspace
+Planning uses the workspace already attached to the session.
+Reuse the workspace or worktree already visible from the current CWD.
+Do NOT ask the user for branch names, base branches, or worktree setup during planning unless they explicitly request that workflow.
+Do NOT create a new worktree as part of planning by default.
 </critical>
 
 ## Planning vs Implementation
 
-- Click the footer `Plan` button (or run `/plan-new`) in your current checkout (typically `master`) to bootstrap planning and create/update the phased TDD plan file under `.omp/sessions/plans/`.
-- Plan files should use: `.omp/sessions/plans/<kebab-case-goal-name>.md`.
-- Keep plan-scoped artifacts (notes/checklists/json metadata/scratch files) under `.omp/sessions/plans/` alongside the plan file.
-- Use `/implement` (or the footer `Implement` button) only after the plan file exists.
+- Click the footer `Plan` button (or run `/plan-new`) in your current checkout to bootstrap planning.
+- Persisted plan files must use: `.omp/sessions/plans/<plan-slug>/plan.md`.
+- Persisted verifier artifacts must use: `.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/`.
+- Only the plan agent updates `plan.md`; plan-verifier agents write artifacts only.
+- Use `/implement` only after the plan file exists.
 
-## Brainstorming Approach
+## Ask Tool Discipline
 
-Use the `superpowers:brainstorming` skill approach during plan/design work:
-- Ask questions ONE AT A TIME
-- Prefer multiple choice questions when possible
-- Present design in 200-300 word sections, validating each
+- After entering planning mode, every user-facing planning question must go through the ask tool.
+- Ask questions one at a time.
+- Prefer multiple choice questions when possible.
+- Use the ask tool again for section-by-section validation instead of typing raw questions in assistant prose.
 
 ## Local Planning Guidance Source
 
 - Use `superpowers:writing-plans` for baseline structure.
 - Apply repo-local constraints from `agent/skills/writing-plans/SKILL.md`; this repository supplement is authoritative for orchestrator-ready plan formatting.
-- Keep heavy planning context with the Plan Agent while authoring the plan document. The later Orchestrator execution gets only the finished plan file.
+- Keep heavy planning context with the plan agent while authoring the plan document. The later implementation session gets only the finished plan file.
 
 ## Final Plan Output
 
-Plans must be phase-based and directly executable by a fresh Orchestrator session with zero extra conversation context:
+Plans must be phase-based and directly executable by a fresh implementation session with zero extra conversation context:
 
 ```markdown
 ## Phased Implementation Plan (Agent-Sized)
@@ -65,12 +54,12 @@ Required plan constraints:
 - Every unit MUST include `**Depends on**` with explicit unit IDs, or `None` if independent.
 - Every unit MUST encode TDD explicitly with test-first sequencing (`Tests First` before `Implementation`).
 - If a unit is marked `(P)`, include `**Parallel safety**` evidence (no shared files, no shared contract ownership, no ordering dependency).
-- Keep phase ordering and commit boundaries explicit so an orchestrator can execute without re-planning.
-- The plan (or implementation handoff) should instruct use of the `commit-hygiene` skill for phase execution.
+- Keep phase ordering and commit boundaries explicit so an implementation orchestrator can execute without re-planning.
+- The plan should instruct use of the `commit-hygiene` skill during implementation.
 
 ## Post-Plan Verification Gate (MANDATORY before planning completes)
 
-After writing `.omp/sessions/plans/<kebab-case-goal-name>.md`, run a plan-quality verification round before leaving planning mode.
+After writing `.omp/sessions/plans/<plan-slug>/plan.md`, run a plan-quality verification round before leaving planning mode.
 
 Required flow:
 1. Parse all phase headings and derive deterministic `phase_key` values (recommended: zero-padded order + slug, for example `01-bootstrap-workflow`).
@@ -82,7 +71,7 @@ Required flow:
    - Full plan content plus assigned phase scope
 4. Require repo-local validation assets: `skill://validate-implementation-plan` and `skill://validate-implementation-plan/references/artifact-output.md`.
 5. Require deterministic artifact layout beside the plan file (never ad hoc temp paths):
-.omp/sessions/plans/<plan-stem>.plan-verifier/<phase-key>/<run-timestamp>/
+.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/
 6. Each run directory must contain both files:
    - `verification.md`
    - `findings.json`

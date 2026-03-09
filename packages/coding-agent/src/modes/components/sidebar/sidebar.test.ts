@@ -69,14 +69,11 @@ describe("renderSidebar", () => {
 		expect(output).toContain("github · disconnected");
 	});
 
-	test("lsp section shows active and inactive states", () => {
-		const model: SidebarModel = {
-			width: 80,
-			lspServers: [
-				{ name: "typescript", active: true },
-				{ name: "rust-analyzer", active: false },
-			],
-		};
+		test("lsp section shows active and inactive states", () => {
+			const model: SidebarModel = {
+				width: 80,
+				languages: [{ id: "typescript", name: "TypeScript", status: "active", servers: [{ name: "typescript-language-server", status: "ready" }] }],
+			};
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("LSP");
@@ -227,7 +224,7 @@ describe("renderSidebar", () => {
 			width: 32,
 			tokens: { contextUsedPercent: 88, tokensUsed: 35_200, tokensTotal: 40_000, costUsd: 1.237 },
 			mcpServers: [{ name: "filesystem", connected: true }],
-			lspServers: [{ name: "typescript", active: true }],
+			languages: [{ id: "typescript", name: "TypeScript", status: "active", servers: [{ name: "typescript-language-server", status: "ready" }] }],
 			todos: [{ id: "1", content: "Very long todo content that should be clipped safely", status: "in_progress" }],
 			subagents: [
 				{

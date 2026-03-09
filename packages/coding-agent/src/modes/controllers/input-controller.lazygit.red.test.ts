@@ -31,6 +31,7 @@ const { detectLazygitInstallCommand, InputController } = await import("./input-c
 type InputControllerWithLazygit = {
 	openLazygit: () => Promise<void>;
 	openEditorTerminalHandle: () => Promise<FileHandle | null>;
+	toggleSTT: () => Promise<void>;
 };
 
 type LazygitFixture = {
@@ -124,7 +125,11 @@ async function waitFor(condition: () => boolean, timeoutMs = 100): Promise<void>
 	}
 }
 
-function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: string[]) {
+function createKeyHandlerFixture(
+	lazygitKeys: string[],
+	externalEditorKeys: string[],
+	sttKeys: string[] = [],
+) {
 	const customHandlers = new Map<string, () => unknown>();
 	const setCustomKeyHandlerSpy = vi.fn((key: string, handler: () => unknown) => {
 		customHandlers.set(key, handler);
@@ -132,6 +137,7 @@ function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: stri
 	const getKeysSpy = vi.fn((action: string) => {
 		if (action === "lazygit") return lazygitKeys;
 		if (action === "externalEditor") return externalEditorKeys;
+		if (action === "toggleSTT") return sttKeys;
 		return [];
 	});
 	const editor = {
@@ -164,17 +170,31 @@ function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: stri
 		handleClearCommand: vi.fn(),
 		showSessionSelector: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
+		showWarning: vi.fn(),
+		showStatus: vi.fn(),
+		registerExtensionShortcuts: vi.fn(),
+		handlePlanModeCommand: vi.fn(async () => undefined),
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	const openLazygitSpy = vi.spyOn(controller, "openLazygit").mockResolvedValue();
 	const openExternalEditorSpy = vi.spyOn(controller, "openExternalEditor").mockResolvedValue();
-	return { controller, customHandlers, getKeysSpy, setCustomKeyHandlerSpy, openLazygitSpy, openExternalEditorSpy };
+	const toggleSTTSpy = vi.spyOn(controller, "toggleSTT").mockResolvedValue();
+	return {
+		controller,
+		customHandlers,
+		getKeysSpy,
+		setCustomKeyHandlerSpy,
+		openLazygitSpy,
+		openExternalEditorSpy,
+		toggleSTTSpy,
+	};
 }
 
 function createSubmitInterceptFixture() {
 	const editorSetTextSpy = vi.fn();
 	const editorAddToHistorySpy = vi.fn();
 	const sessionPromptSpy = vi.fn(async () => undefined);
+	const showStatusSpy = vi.fn();
 	const editor = {
 		setText: editorSetTextSpy,
 		addToHistory: editorAddToHistorySpy,
@@ -193,12 +213,17 @@ function createSubmitInterceptFixture() {
 		pendingImages: [],
 		updatePendingMessagesDisplay: vi.fn(),
 		ui: { requestRender: vi.fn() },
+		showStatus: showStatusSpy,
+		showWarning: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	const openLazygitSpy = vi.spyOn(controller, "openLazygit").mockResolvedValue();
+	const toggleSTTSpy = vi.spyOn(controller, "toggleSTT").mockResolvedValue();
 	controller.setupEditorSubmitHandler();
 	return {
 		openLazygitSpy,
+		toggleSTTSpy,
+		showStatusSpy,
 		editorSetTextSpy,
 		editorAddToHistorySpy,
 		sessionPromptSpy,
@@ -244,7 +269,7 @@ describe("InputController openLazygit", () => {
 		const [command, args, options] = spawnMock.mock.calls[0] as [
 			string,
 			string[],
-			{ env: Record<string, string | undefined>; stdio: [number, number, number] }
+			{ env: Record<string, string | undefined>; stdio: [number, number, number] },
 		];
 		expect(command).toBe("lazygit");
 		expect(args).toEqual(["-p", "/tmp/repo-cwd"]);
@@ -381,15 +406,17 @@ describe("detectLazygitInstallCommand", () => {
 	}
 });
 
-describe("InputController lazygit keybinding and submit wiring", () => {
-	it("registers custom handlers for each configured lazygit and external editor key", () => {
+describe("InputController shortcut and submit wiring", () => {
+	it("registers custom handlers for each configured lazygit, external editor, and speech-to-text key", () => {
 		const lazygitKeys = ["alt+g", "alt+shift+g"];
 		const externalEditorKeys = ["alt+e", "alt+shift+e"];
-		const fixture = createKeyHandlerFixture(lazygitKeys, externalEditorKeys);
+		const sttKeys = ["alt+h"];
+		const fixture = createKeyHandlerFixture(lazygitKeys, externalEditorKeys, sttKeys);
 		fixture.controller.setupKeyHandlers();
 
 		expect(fixture.getKeysSpy).toHaveBeenCalledWith("lazygit");
 		expect(fixture.getKeysSpy).toHaveBeenCalledWith("externalEditor");
+		expect(fixture.getKeysSpy).toHaveBeenCalledWith("toggleSTT");
 
 		for (const key of lazygitKeys) {
 			const handler = fixture.customHandlers.get(key);
@@ -401,9 +428,15 @@ describe("InputController lazygit keybinding and submit wiring", () => {
 			expect(handler).toBeTypeOf("function");
 			(handler as () => unknown)();
 		}
+		for (const key of sttKeys) {
+			const handler = fixture.customHandlers.get(key);
+			expect(handler).toBeTypeOf("function");
+			(handler as () => unknown)();
+		}
 
 		expect(fixture.openLazygitSpy).toHaveBeenCalledTimes(lazygitKeys.length);
 		expect(fixture.openExternalEditorSpy).toHaveBeenCalledTimes(externalEditorKeys.length);
+		expect(fixture.toggleSTTSpy).toHaveBeenCalledTimes(sttKeys.length);
 	});
 
 	it("intercepts typed /lazygit before streaming prompt dispatch", async () => {
@@ -414,6 +447,25 @@ describe("InputController lazygit keybinding and submit wiring", () => {
 		expect(fixture.openLazygitSpy).toHaveBeenCalledTimes(1);
 		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+
+	it("intercepts typed /stt before streaming prompt dispatch", async () => {
+		const fixture = createSubmitInterceptFixture();
+		await fixture.submit("/stt");
+
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.toggleSTTSpy).toHaveBeenCalledTimes(1);
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+
+	it("shows usage for unsupported /stt arguments", async () => {
+		const fixture = createSubmitInterceptFixture();
+		await fixture.submit("/stt nope");
+
+		expect(fixture.toggleSTTSpy).not.toHaveBeenCalled();
+		expect(fixture.showStatusSpy).toHaveBeenCalledWith("Usage: /stt [on|off|status]");
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 	});
 });
 
@@ -427,7 +479,7 @@ describe("InputController lazygit installation flow", () => {
 
 		expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
 		expect(fixture.uiStopSpy).not.toHaveBeenCalled();
-				expect(fixture.showWarningSpy).toHaveBeenCalledWith(
+		expect(fixture.showWarningSpy).toHaveBeenCalledWith(
 			"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation"
 		);
 	});

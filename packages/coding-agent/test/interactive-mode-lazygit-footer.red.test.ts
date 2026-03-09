@@ -1,4 +1,10 @@
-import { describe, expect, test, vi } from "bun:test";
+import { describe, expect, mock, test, vi } from "bun:test";
+mock.module("@oh-my-pi/pi-coding-agent/modes/components/sidebar/sidebar-panel", () => ({
+	SidebarPanelComponent: class SidebarPanelComponent {},
+}));
+mock.module("@oh-my-pi/pi-coding-agent/modes/components/sidebar/render", () => ({
+	renderSidebar: () => [],
+}));
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 
 describe("InteractiveMode lazygit footer click routing", () => {

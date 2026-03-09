@@ -625,7 +625,7 @@ These are **in-chat slash commands** (not CLI subcommands).
 | `/lazygit` | Open Lazygit |
 | `/extensions` (`/status`) | Open Extension Control Center |
 | `/changelog` | Show changelog entries |
-| `/tree` | Navigate session tree |
+| `/tree` | Navigate session tree (`a` key) |
 | `/branch` | Open branch selector (tree or message selector, based on settings) |
 | `/fork` | Fork from a previous message |
 | `/resume` | Open session picker |
@@ -695,6 +695,8 @@ Bundled custom slash commands include `/review` (interactive code review launche
 | Ctrl+O                | Toggle tool output expansion                                         |
 | Ctrl+T                | Toggle todo list expansion                                           |
 | Ctrl+G                | Open Lazygit                                                         |
+| a                     | Navigate session tree                                                |
+| Ctrl+W                | Open Worktree Menu                                                   |
 | Alt+H                 | Toggle speech-to-text recording                                      |
 
 ### Bash Mode

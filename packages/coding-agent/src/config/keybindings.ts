@@ -25,6 +25,7 @@ export type AppAction =
 	| "selectModel"
 	| "togglePlanMode"
 	| "toggleAskMode"
+	| "toggleSTT"
 	| "expandTools"
 	| "toggleThinking"
 	| "toggleSessionNamedFilter"
@@ -35,11 +36,13 @@ export type AppAction =
 	| "cycleSubagentForward"
 	| "cycleSubagentBackward"
 	| "cycleAgentMode"
+	| "lazygit"
 	| "pasteImage"
 	| "newSession"
 	| "tree"
 	| "fork"
-	| "resume";
+	| "resume"
+	| "toggleWorktreeMenu";
 
 /**
  * All configurable actions.
@@ -67,6 +70,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	selectModel: "ctrl+l",
 	togglePlanMode: "alt+shift+p",
 	toggleAskMode: [],
+	toggleSTT: "alt+h",
 	historySearch: "ctrl+r",
 	expandTools: "ctrl+o",
 	toggleThinking: "ctrl+t",
@@ -79,9 +83,11 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	cycleAgentMode: "alt+a",
 	pasteImage: "ctrl+v",
 	newSession: [],
-	tree: [],
+	tree: "a",
 	fork: [],
 	resume: [],
+	toggleWorktreeMenu: "ctrl+w",
+	lazygit: "ctrl+g",
 };
 
 /**
@@ -104,6 +110,7 @@ const APP_ACTIONS: AppAction[] = [
 	"selectModel",
 	"togglePlanMode",
 	"toggleAskMode",
+	"toggleSTT",
 	"historySearch",
 	"expandTools",
 	"toggleThinking",
@@ -119,6 +126,8 @@ const APP_ACTIONS: AppAction[] = [
 	"tree",
 	"fork",
 	"resume",
+	"toggleWorktreeMenu",
+	"lazygit",
 ];
 
 function isAppAction(action: string): action is AppAction {

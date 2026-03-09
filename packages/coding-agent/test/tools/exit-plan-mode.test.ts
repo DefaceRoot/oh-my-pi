@@ -14,7 +14,8 @@ describe("ExitPlanModeTool", () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "exit-plan-mode-"));
 		artifactsDir = path.join(tmpDir, "artifacts");
 		await fs.mkdir(path.join(artifactsDir, "local"), { recursive: true });
-		await Bun.write(path.join(artifactsDir, "local", "PLAN.md"), "# Plan\n");
+		await fs.mkdir(path.join(tmpDir, ".omp", "sessions", "plans", "manual"), { recursive: true });
+		await Bun.write(path.join(tmpDir, ".omp", "sessions", "plans", "manual", "plan.md"), "# Plan\n");
 	});
 
 	afterEach(async () => {
@@ -30,7 +31,7 @@ describe("ExitPlanModeTool", () => {
 			settings: Settings.isolated(),
 			getArtifactsDir: () => artifactsDir,
 			getSessionId: () => "session-a",
-			getPlanModeState: () => ({ enabled: true, planFilePath: "local://PLAN.md" }),
+			getPlanModeState: () => ({ enabled: true, planFilePath: ".omp/sessions/plans/manual/plan.md" }),
 			...overrides,
 		};
 	}
@@ -41,13 +42,13 @@ describe("ExitPlanModeTool", () => {
 		expect(schema.required).toContain("title");
 	});
 
-	it("normalizes title to .md final plan path", async () => {
+	it("keeps the active canonical plan file path for execution handoff", async () => {
 		const tool = new ExitPlanModeTool(createSession());
 		const result = await tool.execute("call-1", { title: "WP_MIGRATION_PLAN" });
 
-		expect(result.details?.planFilePath).toBe("local://PLAN.md");
+		expect(result.details?.planFilePath).toBe(".omp/sessions/plans/manual/plan.md");
 		expect(result.details?.title).toBe("WP_MIGRATION_PLAN");
-		expect(result.details?.finalPlanFilePath).toBe("local://WP_MIGRATION_PLAN.md");
+		expect(result.details?.finalPlanFilePath).toBe(".omp/sessions/plans/manual/plan.md");
 		expect(result.details?.planExists).toBe(true);
 	});
 
@@ -55,7 +56,7 @@ describe("ExitPlanModeTool", () => {
 		const tool = new ExitPlanModeTool(createSession());
 		const result = await tool.execute("call-2", { title: "WP_MIGRATION_PLAN.md" });
 		expect(result.details?.title).toBe("WP_MIGRATION_PLAN");
-		expect(result.details?.finalPlanFilePath).toBe("local://WP_MIGRATION_PLAN.md");
+		expect(result.details?.finalPlanFilePath).toBe(".omp/sessions/plans/manual/plan.md");
 	});
 
 	it("rejects invalid title characters", async () => {

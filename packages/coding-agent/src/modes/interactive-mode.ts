@@ -65,6 +65,7 @@ import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { SelectorController } from "./controllers/selector-controller";
+import { OAuthManualInputManager } from "./oauth-manual-input";
 import {
 	SubagentNavigatorComponent,
 	type SubagentNavigatorSelection,
@@ -184,6 +185,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	public editor: CustomEditor;
 	public editorContainer: Container;
 	public statusLine: StatusLineComponent;
+	public oauthManualInput = new OAuthManualInputManager();
 	private readonly mainLayoutContainer: Container;
 	private readonly sidebarPanel: SidebarPanelComponent;
 	private readonly responsiveLayout: Component;
@@ -1317,16 +1319,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.commandController.handleExportCommand(text);
 	}
 
-	handleDumpCommand(): Promise<void> {
-		return this.commandController.handleDumpCommand();
+	handleDumpCommand(): void {
+		this.commandController.handleDumpCommand();
 	}
 
 	handleShareCommand(): Promise<void> {
 		return this.commandController.handleShareCommand();
 	}
 
-	handleCopyCommand(): Promise<void> {
-		return this.commandController.handleCopyCommand();
+	handleCopyCommand(): void {
+		this.commandController.handleCopyCommand();
 	}
 
 	handleSessionCommand(): Promise<void> {
@@ -1351,6 +1353,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleForkCommand(): Promise<void> {
 		return this.commandController.handleForkCommand();
+	}
+
+	refreshForkInstall(): Promise<void> {
+		return this.commandController.handleRefreshForkInstall();
 	}
 
 	showDebugSelector(): void {
@@ -1414,8 +1420,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.selectorController.handleResumeSession(sessionPath);
 	}
 
-	showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		return this.selectorController.showOAuthSelector(mode);
+	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
+		return this.selectorController.showOAuthSelector(mode, providerId);
 	}
 
 	showHookConfirm(title: string, message: string): Promise<boolean> {

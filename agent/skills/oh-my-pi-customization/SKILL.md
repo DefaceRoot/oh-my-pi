@@ -675,7 +675,7 @@ See `<fork-root>/agent/extensions/implementation-engine/index.ts` for a complete
 - Persists/restores worktree state so `/resume` re-enters the correct worktree context
 - Falls back to manual implementation handoff (`@plan` attachment) when in-session metadata is missing
 - Persists active plan file path/workspace metadata in worktree state so follow-on workflow actions (like review) use the exact plan bound to that worktree
-- Supports manual review-plan selection via `/review-complete @docs/plans/...md` and UI input fallback when metadata is missing
+- Supports manual review-plan selection via `/review-complete @.omp/sessions/plans/<plan-slug>/plan.md` and UI input fallback when metadata is missing
 - Uses section-aware + deduplicated phase extraction to avoid double-counting phases in review kickoff
 - Keeps workflow runtime changes in package source so `reinstall:fork` remains durable across relaunches
 - Adds a dedicated `Implementation Agent` model role (red badge) and routes implementation Task subagents to it by default

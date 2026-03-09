@@ -53,7 +53,7 @@ Do not substitute user-global variants or alternate output contracts.
 
 <artifact_contract>
 When caller provides plan context, write run artifacts beside the plan file using this exact layout:
-`<plan-dir>/<plan-stem>.plan-verifier/<phase-key>/<run-timestamp>/`
+`<plan-dir>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/`
 
 Required files per run:
 1. `verification.md`

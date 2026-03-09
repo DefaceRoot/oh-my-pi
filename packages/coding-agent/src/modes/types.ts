@@ -42,6 +42,7 @@ export interface InteractiveModeContext {
 	editor: CustomEditor;
 	editorContainer: Container;
 	statusLine: StatusLineComponent;
+	oauthManualInput: import("./oauth-manual-input").OAuthManualInputManager;
 
 	// Session access
 	session: AgentSession;
@@ -137,14 +138,15 @@ export interface InteractiveModeContext {
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleCopyCommand(): Promise<void>;
+	handleCopyCommand(): void;
 	handleSessionCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(): Promise<void>;
 	handleHotkeysCommand(): void;
-	handleDumpCommand(): Promise<void>;
+	handleDumpCommand(): void;
 	handleClearCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
+	refreshForkInstall(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;
@@ -161,7 +163,7 @@ export interface InteractiveModeContext {
 	showTreeSelector(): void;
 	showSessionSelector(): void;
 	handleResumeSession(sessionPath: string): Promise<void>;
-	showOAuthSelector(mode: "login" | "logout"): Promise<void>;
+	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
 

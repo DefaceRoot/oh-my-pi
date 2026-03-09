@@ -12,10 +12,21 @@ const FULL_MODEL: SidebarModel = {
 		{ name: "better-context", connected: true },
 		{ name: "chrome-devtools", connected: false },
 	],
-	lspServers: [
-		{ name: "typescript", active: true },
-		{ name: "eslint", active: false },
+	languages: [
+		{
+			id: "typescript",
+			name: "TypeScript",
+			status: "active",
+			servers: [{ name: "typescript", status: "ready" }],
+		},
+		{
+			id: "eslint",
+			name: "ESLint",
+			status: "unavailable",
+			servers: [{ name: "eslint", status: "not-installed" }],
+		},
 	],
+	expandedLanguages: new Set(["typescript"]),
 	todos: [
 		{ id: "1", content: "Add unit tests", status: "completed" },
 		{ id: "2", content: "Fix the thing", status: "in_progress" },

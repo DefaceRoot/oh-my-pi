@@ -7,6 +7,12 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import {
+	type FlattenedWorkflowMenuAction,
+	flattenWorkflowMenuActions,
+	WORKFLOW_MENUS,
+	type WorkflowMenu,
+} from "../action-buttons";
 import { getPreset } from "./status-line/presets";
 import { renderSegment, type SegmentContext } from "./status-line/segments";
 import { getSeparator } from "./status-line/separators";
@@ -28,6 +34,14 @@ export interface StatusLineSettings {
 }
 
 const SUBAGENT_VIEWER_STATUS_KEY = "subagent-viewer";
+const LEGACY_WORKTREE_HOOK_STATUS_KEYS = new Set(["bbb-wt-sync", "zzzz-0-spacer", "zzzz-wt-delete"]);
+type WorkflowActionState = "hidden" | "disabled" | "enabled";
+const MENU_SELECTED_TAG_ANSI = "\x1b[1m\x1b[30;106m";
+const MENU_ENABLED_TAG_ANSI = "\x1b[36m";
+const MENU_DISABLED_TAG_ANSI = "\x1b[90m";
+const MENU_SELECTED_TEXT_ANSI = "\x1b[1;97m";
+const MENU_DISABLED_TEXT_ANSI = "\x1b[90m";
+const ANSI_RESET = "\x1b[0m";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Rendering Helpers
@@ -47,9 +61,7 @@ function readWorktreeHeadPath(gitFilePath: string): string | null {
 		const match = raw.match(/^gitdir:\s*(.+)$/i);
 		if (!match) return null;
 		const gitDir = match[1].trim();
-		const resolvedGitDir = path.isAbsolute(gitDir)
-			? gitDir
-			: path.resolve(path.dirname(gitFilePath), gitDir);
+		const resolvedGitDir = path.isAbsolute(gitDir) ? gitDir : path.resolve(path.dirname(gitFilePath), gitDir);
 		const headPath = path.join(resolvedGitDir, "HEAD");
 		return fs.existsSync(headPath) ? headPath : null;
 	} catch {
@@ -99,6 +111,9 @@ export class StatusLineComponent implements Component {
 	private subagentCount: number = 0;
 	private sessionStartTime: number = Date.now();
 	private planModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	private workflowActionStates: Map<string, WorkflowActionState> = new Map();
+	private activeMenuId: string | undefined;
+	private activeMenuSelectedIndex: number = 0;
 
 	// Git status caching (1s TTL)
 	private cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -145,6 +160,92 @@ export class StatusLineComponent implements Component {
 
 	getHookStatus(key: string): string | undefined {
 		return this.hookStatuses.get(key);
+	}
+
+	setWorkflowActionState(actionId: string, state: WorkflowActionState): void {
+		this.workflowActionStates.set(actionId, state);
+		if (!this.activeMenuId) return;
+
+		const activeMenu = this.getWorkflowMenu(this.activeMenuId);
+		if (!activeMenu) return;
+
+		const visibleActions = this.getVisibleMenuActions(activeMenu);
+		if (visibleActions.length === 0) {
+			this.activeMenuSelectedIndex = 0;
+			return;
+		}
+
+		const selectedAction = visibleActions[this.activeMenuSelectedIndex];
+		if (!selectedAction || this.getActionState(selectedAction.id) !== "enabled") {
+			const nextSelected = this.findNextSelectableIndex(visibleActions, this.activeMenuSelectedIndex, 1);
+			if (nextSelected !== undefined) {
+				this.activeMenuSelectedIndex = nextSelected;
+			}
+		}
+	}
+
+	toggleMenu(menuId: string): void {
+		if (this.activeMenuId === menuId) {
+			this.closeMenu();
+			return;
+		}
+
+		const menu = this.getWorkflowMenu(menuId);
+		if (!menu) return;
+
+		this.activeMenuId = menuId;
+		const visibleActions = this.getVisibleMenuActions(menu);
+		this.activeMenuSelectedIndex = this.findNextSelectableIndex(visibleActions, -1, 1) ?? 0;
+	}
+
+	closeMenu(): void {
+		this.activeMenuId = undefined;
+		this.activeMenuSelectedIndex = 0;
+	}
+
+	getActiveMenu(): string | undefined {
+		return this.activeMenuId;
+	}
+
+	navigateMenu(direction: number): void {
+		if (!this.activeMenuId || direction === 0) return;
+
+		const menu = this.getWorkflowMenu(this.activeMenuId);
+		if (!menu) return;
+
+		const visibleActions = this.getVisibleMenuActions(menu);
+		if (visibleActions.length === 0) return;
+
+		const step: 1 | -1 = direction > 0 ? 1 : -1;
+		const nextSelected = this.findNextSelectableIndex(visibleActions, this.activeMenuSelectedIndex, step);
+		if (nextSelected !== undefined) {
+			this.activeMenuSelectedIndex = nextSelected;
+		}
+	}
+
+	executeSelectedMenuAction(): FlattenedWorkflowMenuAction | undefined {
+		if (!this.activeMenuId) return undefined;
+
+		const menu = this.getWorkflowMenu(this.activeMenuId);
+		if (!menu) return undefined;
+
+		const visibleActions = this.getVisibleMenuActions(menu);
+		if (visibleActions.length === 0) return undefined;
+
+		let selectedIndex = this.activeMenuSelectedIndex;
+		const selectedAction = visibleActions[selectedIndex];
+		if (!selectedAction || this.getActionState(selectedAction.id) !== "enabled") {
+			const nextSelected = this.findNextSelectableIndex(visibleActions, selectedIndex, 1);
+			if (nextSelected === undefined) return undefined;
+			selectedIndex = nextSelected;
+			this.activeMenuSelectedIndex = nextSelected;
+		}
+
+		const action = visibleActions[selectedIndex];
+		if (!action || this.getActionState(action.id) !== "enabled") return undefined;
+
+		this.closeMenu();
+		return action;
 	}
 
 	watchBranch(onBranchChange: () => void): void {
@@ -280,6 +381,80 @@ export class StatusLineComponent implements Component {
 		return this.cachedGitStatus;
 	}
 
+	private getActionState(actionId: string): WorkflowActionState {
+		return this.workflowActionStates.get(actionId) ?? "enabled";
+	}
+
+	private getWorkflowMenu(menuId: string): WorkflowMenu | undefined {
+		return WORKFLOW_MENUS.find(menu => menu.id === menuId);
+	}
+
+	private getVisibleMenuActions(menu: WorkflowMenu): FlattenedWorkflowMenuAction[] {
+		return flattenWorkflowMenuActions(menu).filter(action => this.getActionState(action.id) !== "hidden");
+	}
+
+	private findNextSelectableIndex(
+		actions: FlattenedWorkflowMenuAction[],
+		startIndex: number,
+		direction: 1 | -1,
+	): number | undefined {
+		if (actions.length === 0) return undefined;
+
+		for (let offset = 1; offset <= actions.length; offset++) {
+			const index = (startIndex + direction * offset + actions.length) % actions.length;
+			if (this.getActionState(actions[index].id) === "enabled") {
+				return index;
+			}
+		}
+
+		return undefined;
+	}
+
+	private renderWorkflowMenus(width: number): string[] {
+		if (WORKFLOW_MENUS.length === 0) return [];
+
+		const topLevelMenus = WORKFLOW_MENUS.map(menu => {
+			const active = menu.id === this.activeMenuId;
+			const menuText = ` ${menu.label} `;
+			const style = active ? MENU_SELECTED_TAG_ANSI : MENU_ENABLED_TAG_ANSI;
+			return `${style}${menuText}${ANSI_RESET}`;
+		});
+
+		const lines = [truncateToWidth(topLevelMenus.join(" "), width)];
+		if (!this.activeMenuId) return lines;
+
+		const activeMenu = this.getWorkflowMenu(this.activeMenuId);
+		if (!activeMenu) return lines;
+
+		const visibleActions = this.getVisibleMenuActions(activeMenu);
+		for (let index = 0; index < visibleActions.length; index++) {
+			const action = visibleActions[index];
+			const actionState = this.getActionState(action.id);
+			const isSelected = index === this.activeMenuSelectedIndex;
+
+			const actionLabelStyle =
+				actionState === "disabled" ? MENU_DISABLED_TEXT_ANSI : isSelected ? MENU_SELECTED_TEXT_ANSI : "";
+			const actionLabel = actionLabelStyle
+				? `${actionLabelStyle}${action.baseLabel}${ANSI_RESET}`
+				: action.baseLabel;
+
+			if (action.groupLabel) {
+				const tagStyle =
+					actionState === "disabled"
+						? MENU_DISABLED_TAG_ANSI
+						: isSelected
+							? MENU_SELECTED_TAG_ANSI
+							: MENU_ENABLED_TAG_ANSI;
+				lines.push(truncateToWidth(`└ ${tagStyle}[${action.groupLabel}]${ANSI_RESET} ${actionLabel}`, width));
+				continue;
+			}
+
+			lines.push(truncateToWidth(actionLabel, width));
+		}
+
+		return lines;
+	}
+
 	private buildSegmentContext(width: number): SegmentContext {
 		const state = this.session.state;
 
@@ -312,7 +487,7 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.resolveSettings().segmentOptions ?? {},
 			planMode: this.planModeStatus,
-			usageStats,
+			usageStats: { ...usageStats, tokensPerSecond: usageStats.tokensPerSecond ?? null },
 			contextPercent,
 			contextWindow,
 			autoCompactEnabled: this.autoCompactEnabled,
@@ -321,6 +496,7 @@ export class StatusLineComponent implements Component {
 			git: {
 				branch: this.getCurrentBranch(),
 				status: this.getGitStatus(),
+				pr: null,
 			},
 		};
 	}
@@ -463,21 +639,28 @@ export class StatusLineComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		// Only render hook statuses - main status is in editor's top border
+		const lines = this.renderWorkflowMenus(width);
+
 		const showHooks = this.settings.showHookStatus ?? true;
 		if (!showHooks || this.hookStatuses.size === 0) {
-			return [];
+			return lines;
 		}
 
 		const subagentStatus = this.hookStatuses.get(SUBAGENT_VIEWER_STATUS_KEY);
 		if (subagentStatus) {
-			return [truncateToWidth(sanitizeStatusText(subagentStatus), width)];
+			lines.push(truncateToWidth(sanitizeStatusText(subagentStatus), width));
+			return lines;
 		}
 
 		const sortedStatuses = Array.from(this.hookStatuses.entries())
+			.filter(([key]) => !LEGACY_WORKTREE_HOOK_STATUS_KEYS.has(key))
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([, text]) => sanitizeStatusText(text));
+		if (sortedStatuses.length === 0) {
+			return lines;
+		}
 		const hookLine = sortedStatuses.join(" ");
-		return [truncateToWidth(hookLine, width)];
+		lines.push(truncateToWidth(hookLine, width));
+		return lines;
 	}
 }

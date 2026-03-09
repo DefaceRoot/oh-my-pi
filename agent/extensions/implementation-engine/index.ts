@@ -69,14 +69,10 @@ async function showPlanFilePicker(
 	rootPath: string,
 	title: string,
 ): Promise<string | undefined> {
-	// Prefer session plans under .omp/sessions/plans, then docs/plans, then root.
+	// Prefer session plans under .omp/sessions/plans only.
 	const sessionPlansDir = path.join(rootPath, ".omp", "sessions", "plans");
-	const docsPlansDir = path.join(rootPath, "docs", "plans");
-	const searchDir = (await Bun.file(sessionPlansDir).exists())
-		? sessionPlansDir
-		: (await Bun.file(docsPlansDir).exists())
-			? docsPlansDir
-			: rootPath;
+	const searchDir = (await Bun.file(sessionPlansDir).exists()) ? sessionPlansDir : undefined;
+	if (!searchDir) return undefined;
 
 	// Run find directly — no bash script needed, avoids popup-stdin issues
 	const findProc = Bun.spawn(
@@ -280,8 +276,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		  }
 		| undefined;
 	let actionButtonStage: ActionButtonStage = "plan";
-	let syncNeeded = false;
-	let sigwinchInstalled = false;
 	let sessionTitleCaptured = false;
 	let hasInjectedSessionWorktreePrompt = false;
 	let activeAgentIsParentTurn = true;
@@ -294,25 +288,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 	let implementationWorkerBaselineSnapshot = new Set<string>();
 	let implementationWorkerBaselineCaptured = false;
 	let warmedAuggieWorkspacePaths = new Set<string>();
-	let paneWidth = 120; // updated from tmux on session_start and SIGWINCH
-
-	const updatePaneWidth = async (): Promise<void> => {
-		if (process.env.TMUX) {
-			try {
-				const proc = Bun.spawn(
-					["tmux", "display-message", "-p", "#{pane_width}"],
-					{ stdout: "pipe", stderr: "ignore", env: { ...process.env } },
-				);
-				const out = await new Response(proc.stdout).text();
-				const w = parseInt(out.trim(), 10);
-				if (!Number.isNaN(w) && w > 0) paneWidth = w;
-			} catch {
-				paneWidth = (process.stdout as { columns?: number }).columns ?? 120;
-			}
-		} else {
-			paneWidth = (process.stdout as { columns?: number }).columns ?? 120;
-		}
-	};
 	let last: {
 		baseBranch?: string;
 		branchName?: string;
@@ -476,90 +451,37 @@ export default function implementationEngine(pi: ExtensionAPI) {
 	const setActionButton = (ctx: ExtensionContext, stage: ActionButtonStage) => {
 		if (!ctx.hasUI) return;
 		actionButtonStage = stage;
-		const hasActiveWorktree =
-			setupDone && Boolean(last.worktreePath) && Boolean(last.branchName);
 
 		if (stage === "none") {
 			for (const key of [
 				PLAN_WORKFLOW_STATUS_KEY,
-				SYNC_NEEDED_STATUS_KEY,
 				IMPLEMENT_WORKFLOW_STATUS_KEY,
 				REVIEW_COMPLETE_STATUS_KEY,
 				CLEANUP_WORKFLOW_STATUS_KEY,
 				PLAN_REVIEW_STATUS_KEY,
 				FIX_PLAN_STATUS_KEY,
-				SPACER_STATUS_KEY,
-				DELETE_WORKTREE_STATUS_KEY,
 			]) {
 				ctx.ui.setStatus(key, undefined);
 			}
 			return;
 		}
 
-		ctx.ui.setStatus(
-			SYNC_NEEDED_STATUS_KEY,
-			hasActiveWorktree && syncNeeded ? SYNC_NEEDED_ACTION_TEXT : undefined,
-		);
-
-		let footerShowGit = false;
-		let footerCenterAction: string | undefined;
-
-		if (!hasActiveWorktree) {
-			ctx.ui.setStatus(PLAN_WORKFLOW_STATUS_KEY, FREEFORM_WORKTREE_ACTION_TEXT);
-			ctx.ui.setStatus(
-				IMPLEMENT_WORKFLOW_STATUS_KEY,
-				PLANNED_WORKTREE_ACTION_TEXT,
-			);
-			ctx.ui.setStatus(
-				REVIEW_COMPLETE_STATUS_KEY,
-				REVIEW_COMPLETE_ACTION_TEXT,
-			);
-			ctx.ui.setStatus(
-				CLEANUP_WORKFLOW_STATUS_KEY,
-				CLEANUP_WORKTREES_ACTION_TEXT,
-			);
-			ctx.ui.setStatus(PLAN_REVIEW_STATUS_KEY, PLAN_REVIEW_ACTION_TEXT);
-			ctx.ui.setStatus(FIX_PLAN_STATUS_KEY, FIX_PLAN_ACTION_TEXT);
-		} else {
-			ctx.ui.setStatus(PLAN_WORKFLOW_STATUS_KEY, undefined);
-
-			const showGit =
-				hasActiveWorktree && stage !== "plan" && stage !== "implement";
-			footerShowGit = showGit;
-			ctx.ui.setStatus(
-				IMPLEMENT_WORKFLOW_STATUS_KEY,
-				showGit ? GIT_MENU_ACTION_TEXT : undefined,
-			);
-
-			let centerAction: string | undefined;
-			if (stage === "submit-pr") centerAction = REVIEW_COMPLETE_ACTION_TEXT;
-			else if (stage === "fix-issues") centerAction = FIX_ISSUES_ACTION_TEXT;
-			else if (stage === "update-version")
-				centerAction = UPDATE_VERSION_ACTION_TEXT;
-			footerCenterAction = centerAction;
-			ctx.ui.setStatus(REVIEW_COMPLETE_STATUS_KEY, centerAction);
-			ctx.ui.setStatus(CLEANUP_WORKFLOW_STATUS_KEY, undefined);
-			ctx.ui.setStatus(PLAN_REVIEW_STATUS_KEY, undefined);
-			ctx.ui.setStatus(FIX_PLAN_STATUS_KEY, undefined);
-		}
-		if (hasActiveWorktree) {
-			// Use tmux pane width (cached) for accurate right-edge alignment
-			const leftVisible =
-				(syncNeeded ? visibleLen(SYNC_NEEDED_ACTION_TEXT) : 0) +
-				(footerShowGit ? visibleLen(GIT_MENU_ACTION_TEXT) : 0) +
-				(footerCenterAction ? visibleLen(footerCenterAction) : 0);
-			const deleteText = DELETE_WORKTREE_ACTION_TEXT;
-			const spacer = Math.max(
-				1,
-				paneWidth - leftVisible - visibleLen(deleteText),
-			);
-			ctx.ui.setStatus(SPACER_STATUS_KEY, " ".repeat(spacer));
-			ctx.ui.setStatus(DELETE_WORKTREE_STATUS_KEY, deleteText);
-		} else {
-			ctx.ui.setStatus(SPACER_STATUS_KEY, undefined);
-			ctx.ui.setStatus(DELETE_WORKTREE_STATUS_KEY, undefined);
-		}
+		ctx.ui.setStatus(PLAN_WORKFLOW_STATUS_KEY, undefined);
+		ctx.ui.setStatus(IMPLEMENT_WORKFLOW_STATUS_KEY, undefined);
+		ctx.ui.setStatus(REVIEW_COMPLETE_STATUS_KEY, undefined);
+		ctx.ui.setStatus(CLEANUP_WORKFLOW_STATUS_KEY, undefined);
+		ctx.ui.setStatus(PLAN_REVIEW_STATUS_KEY, undefined);
+		ctx.ui.setStatus(FIX_PLAN_STATUS_KEY, undefined);
 	};
+
+
+const notifyWorktreeProgress = (
+	ctx: ExtensionContext | undefined,
+	message: string,
+): void => {
+	if (!ctx?.hasUI) return;
+	ctx.ui.notify(message, "info");
+};
 
 	const resolvePrimaryCheckoutActionButtonStage = (
 		ctx: ExtensionContext,
@@ -644,7 +566,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		const setup = await setupWorktreeFromTopic(ctx, {
 			topic,
 			planFilePath: manualMode
-				? "docs/plans/manual/manual-implement.md"
+				? ".omp/sessions/plans/manual/plan.md"
 				: (resolvedPlanPath ?? ""),
 		});
 		if (!setup) {
@@ -666,8 +588,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			updatedAt: Date.now(),
 		};
 
-		ctx.ui.setStatus(
-			IMPLEMENT_PROGRESS_STATUS_KEY,
+		notifyWorktreeProgress(
+			ctx,
 			"implement: starting implementation session...",
 		);
 
@@ -759,7 +681,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 							"- After all phases complete: write a 3-5 line summary only.",
 						]
 					: [
-							"Implement the approved plan from @docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md in this worktree.",
+							"Implement the approved plan from @.omp/sessions/plans/<plan-slug>/plan.md in this worktree.",
 							"",
 							"Orchestrator execution contract:",
 							"- Read ONLY the phase headings from the plan file. Do not read source code files.",
@@ -797,7 +719,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 						"## Manual implement mode ready",
 						"",
 						"No /plan-new metadata was found in this session, so automatic kickoff was skipped.",
-						"Attach your existing plan doc (for example: @docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md) and submit when ready.",
+						"Attach your existing plan doc (for example: @.omp/sessions/plans/<plan-slug>/plan.md) and submit when ready.",
 					].join("\n"),
 					display: true,
 					details: { mode: "manual" },
@@ -836,8 +758,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			const msg = err instanceof Error ? err.message : String(err);
 			pi.logger.error("implementation-engine: implement failed", { error: msg });
 			ctx.ui.notify(`implement failed: ${msg}`, "error");
-		} finally {
-			ctx.ui.setStatus(IMPLEMENT_PROGRESS_STATUS_KEY, undefined);
 		}
 	};
 
@@ -998,8 +918,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			}
 			: undefined;
 
-		ctx.ui.setStatus(
-			REVIEW_COMPLETE_PROGRESS_STATUS_KEY,
+		notifyWorktreeProgress(
+			ctx,
 			"review-complete: starting review session...",
 		);
 
@@ -1099,8 +1019,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			const msg = err instanceof Error ? err.message : String(err);
 			pi.logger.error("implementation-engine: review-complete failed", { error: msg });
 			ctx.ui.notify(`review-complete failed: ${msg}`, "error");
-		} finally {
-			ctx.ui.setStatus(REVIEW_COMPLETE_PROGRESS_STATUS_KEY, undefined);
 		}
 	};
 
@@ -1286,8 +1204,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 					}
 				: undefined;
 
-		ctx.ui.setStatus(
-			FIX_ISSUES_PROGRESS_STATUS_KEY,
+		notifyWorktreeProgress(
+			ctx,
 			"fix-issues: starting remediation session...",
 		);
 
@@ -1381,8 +1299,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			const msg = err instanceof Error ? err.message : String(err);
 			pi.logger.error("implementation-engine: fix-issues failed", { error: msg });
 			ctx.ui.notify(`fix-issues failed: ${msg}`, "error");
-		} finally {
-			ctx.ui.setStatus(FIX_ISSUES_PROGRESS_STATUS_KEY, undefined);
 		}
 	};
 
@@ -1479,8 +1395,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			updatedAt: Date.now(),
 		};
 
-		ctx.ui.setStatus(
-			UPDATE_VERSION_PROGRESS_STATUS_KEY,
+		notifyWorktreeProgress(
+			ctx,
 			"update-version: starting dedicated version session...",
 		);
 
@@ -1614,8 +1530,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				error: msg,
 			});
 			ctx.ui.notify(`update-version-workflow failed: ${msg}`, "error");
-		} finally {
-			ctx.ui.setStatus(UPDATE_VERSION_PROGRESS_STATUS_KEY, undefined);
 		}
 	};
 
@@ -1624,12 +1538,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		const worktreePath = normalizePath(last.worktreePath);
 		const branchName = last.branchName;
 
-		if (ctx.hasUI) {
-			ctx.ui.setStatus(
-				UPDATE_VERSION_PROGRESS_STATUS_KEY,
-				"update-version: finalizing commit + push...",
-			);
-		}
+		notifyWorktreeProgress(ctx, "update-version: finalizing commit + push...");
 
 		try {
 			await ensurePinnedToWorktree();
@@ -1745,10 +1654,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			});
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Update Version finalize failed: ${msg}`, "error");
-			}
-		} finally {
-			if (ctx.hasUI) {
-				ctx.ui.setStatus(UPDATE_VERSION_PROGRESS_STATUS_KEY, undefined);
 			}
 		}
 	};
@@ -2198,6 +2103,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				display: true,
 			});
 
+			notifyWorktreeProgress(ctx, "worktree: creating...");
+
 			const repoRoot = await getRepoRoot(pi, ctx.cwd);
 			last.repoRoot = repoRoot;
 			if (input.planFilePath) {
@@ -2294,7 +2201,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			last.baseBranch = baseBranch;
 			last.branchName = branchName;
 
-			ctx.ui.setStatus("worktree", "worktree: creating...");
 
 			const worktreesDir = `${repoRoot}/.worktrees`;
 			await run(["mkdir", "-p", worktreesDir], repoRoot);
@@ -2312,7 +2218,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			);
 			await run(["mkdir", "-p", parentDir], repoRoot);
 
-			ctx.ui.setStatus("worktree", "worktree: git worktree add...");
 			await createWorktree(pi, repoRoot, {
 				baseBranch,
 				branchName,
@@ -2321,27 +2226,25 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			await verifyWorktree(repoRoot, { branchName, worktreePath });
 			pi.logger.debug("implementation-engine: worktree verified", { worktreePath });
 
-			ctx.ui.setStatus("worktree", "worktree: linking project skills...");
 			await bestEffortLinkProjectAgentsSkills(pi, repoRoot, worktreePath);
 
-			ctx.ui.setStatus("worktree", "worktree: publishing remote branch...");
 			await syncWorktreeBranchToRemote(ctx, "publish initial branch");
 
-			ctx.ui.setStatus("worktree", "worktree: installing deps...");
 			await bestEffortSetup(worktreePath);
 
-			ctx.ui.setStatus("worktree", "worktree: switching...");
 			process.chdir(worktreePath);
 			pi.logger.debug("implementation-engine: chdir complete", { cwd: process.cwd() });
 
-			await bestEffortAuggieIndex(pi, ctx, worktreePath);
+			await bestEffortAuggieIndex(pi, ctx, worktreePath, {
+				statusKey: null,
+				statusText: null,
+			});
 
 			setupDone = true;
 			await ensurePinnedToWorktree();
 			await ensureOrchestratorRuntimeDefaults(ctx);
 			setActionButton(ctx, "submit-pr");
 			persistWorktreeState();
-			ctx.ui.setStatus("worktree", undefined);
 			ctx.ui.notify("Worktree ready — session switched", "info");
 
 			pi.sendMessage({
@@ -2369,7 +2272,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			pi.logger.error("implementation-engine: setup failed", { error: msg });
-			ctx.ui.setStatus("worktree", undefined);
 			if (last.repoRoot && last.worktreePath) {
 				try {
 					await cleanupFailedWorktree(
@@ -2437,11 +2339,9 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		);
 		last.repoRoot = repoRoot;
 
-		if (ctx?.hasUI) {
-			ctx.ui.setStatus(REMOTE_SYNC_STATUS_KEY, `remote-sync: ${reason}...`);
-		}
 
-		try {
+		notifyWorktreeProgress(ctx, `remote-sync: ${reason}...`);
+
 			const originRemote = await runAllowFail(
 				["git", "remote", "get-url", "origin"],
 				repoRoot,
@@ -2473,7 +2373,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				if (diverge.code === 0) {
 					const parts = diverge.stdout.trim().split(/\s+/);
 					const behind = Number.parseInt(parts[0] ?? "0", 10);
-					syncNeeded = behind > 0;
 				}
 			}
 			pendingRemoteSyncError = undefined;
@@ -2487,11 +2386,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			if (ctx?.hasUI) {
 				setActionButton(ctx, actionButtonStage);
 			}
-		} finally {
-			if (ctx?.hasUI) {
-				ctx.ui.setStatus(REMOTE_SYNC_STATUS_KEY, undefined);
-			}
-		}
 	};
 
 	const deleteCurrentWorktree = async (
@@ -2530,10 +2424,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			return;
 		}
 
-		ctx.ui.setStatus(
-			DELETE_WORKTREE_PROGRESS_STATUS_KEY,
-			"delete-worktree: removing...",
-		);
+
+		notifyWorktreeProgress(ctx, "delete-worktree: removing...");
 
 		let localBranchDeleted = false;
 		let remoteDeleteAttempted = false;
@@ -2592,7 +2484,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 
 			setupDone = false;
 			pendingRemoteSyncError = undefined;
-			syncNeeded = false;
 			last = {};
 			setActionButton(ctx, resolvePrimaryCheckoutActionButtonStage(ctx));
 			persistWorktreeState();
@@ -2640,8 +2531,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				worktreePath,
 			});
 			ctx.ui.notify(`delete-worktree failed: ${msg}`, "error");
-		} finally {
-			ctx.ui.setStatus(DELETE_WORKTREE_PROGRESS_STATUS_KEY, undefined);
 		}
 	};
 
@@ -2777,8 +2666,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		let setup:
 			| { baseBranch: string; branchName: string; worktreePath: string }
 			| undefined;
-		ctx.ui.setStatus(
-			IMPLEMENT_PROGRESS_STATUS_KEY,
+		notifyWorktreeProgress(
+			ctx,
 			"implement: finalizing planned worktree session...",
 		);
 
@@ -2912,7 +2801,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			clearPendingPlannedWorktreeState();
 			ctx.ui.notify(`planned worktree error: ${msg}`, "error");
 		} finally {
-			ctx.ui.setStatus(IMPLEMENT_PROGRESS_STATUS_KEY, undefined);
 			if (!setupDone || !last.worktreePath) {
 				setActionButton(ctx, "plan");
 			}
@@ -3095,7 +2983,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		pi.logger.debug("implementation-engine: extension loaded");
 		pendingRemoteSyncError = undefined;
-		syncNeeded = false;
 		pendingUpdateVersionFinalize = false;
 		pendingPlannedWorktree = false;
 		linkedPlannedPlanPath = undefined;
@@ -3105,7 +2992,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		hasInjectedSessionWorktreePrompt = false;
 		readBudget.resetForNextDelegation();
 		warmedAuggieWorkspacePaths = new Set();
-		await updatePaneWidth(); // prime cache for accurate right-edge button placement
 		const restored = await tryRestoreWorktreeState(ctx);
 		if (!restored) {
 			setActionButton(ctx, resolvePrimaryCheckoutActionButtonStage(ctx));
@@ -3128,15 +3014,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				// In main checkout — show Worktree button
 				setActionButton(ctx, "plan");
 			}
-		}
-		if (!sigwinchInstalled) {
-			sigwinchInstalled = true;
-			process.on("SIGWINCH", () => {
-				// Update tmux pane width cache then recalculate spacer
-				void updatePaneWidth().then(() => {
-					if (ctx.hasUI) setActionButton(ctx, actionButtonStage);
-				});
-			});
 		}
 		// Sync thinking level from model-role-thinking.json for this session's role so the status
 		// line reflects the configured level immediately without waiting for the first agent turn.
@@ -3165,7 +3042,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 	pi.on("session_switch", async (_event, ctx) => {
 		setupDone = false;
 		pendingRemoteSyncError = undefined;
-		syncNeeded = false;
 		pendingUpdateVersionFinalize = false;
 		pendingPlannedWorktree = false;
 		linkedPlannedPlanPath = undefined;
@@ -3354,7 +3230,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 
 	pi.registerCommand(FIX_ISSUES_COMMAND, {
 		description:
-			"Open a remediation session that fixes issues from the latest review report, pushes remediation commits to origin, then runs final verification including a final CodeRabbit CLI gate. Optional: /fix-issues @docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md",
+			"Open a remediation session that fixes issues from the latest review report, pushes remediation commits to origin, then runs final verification including a final CodeRabbit CLI gate. Optional: /fix-issues @.omp/sessions/plans/<plan-slug>/plan.md",
 		handler: async (args, ctx) => {
 			await launchFixIssues(ctx, args);
 		},
@@ -3388,7 +3264,7 @@ export default function implementationEngine(pi: ExtensionAPI) {
 			}
 
 			setActionButton(ctx, "implement");
-			const freeformPlanPath = "docs/plans/manual/manual-implement.md";
+			const freeformPlanPath = ".omp/sessions/plans/manual/plan.md";
 			const parentSessionFile = ctx.sessionManager.getSessionFile();
 			let setup:
 				| { baseBranch: string; branchName: string; worktreePath: string }
@@ -3458,8 +3334,8 @@ export default function implementationEngine(pi: ExtensionAPI) {
 					updatedAt: Date.now(),
 				};
 
-				ctx.ui.setStatus(
-					IMPLEMENT_PROGRESS_STATUS_KEY,
+				notifyWorktreeProgress(
+					ctx,
 					"implement: starting implementation session...",
 				);
 				const created = await ctx.newSession({
@@ -3562,7 +3438,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				}
 				ctx.ui.notify(`freeform worktree error: ${msg}`, "error");
 			} finally {
-				ctx.ui.setStatus(IMPLEMENT_PROGRESS_STATUS_KEY, undefined);
 				if (!setupDone || !last.worktreePath) {
 					setActionButton(ctx, "plan");
 				}
@@ -3613,7 +3488,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		if (result.removedActiveWorktree) {
 			setupDone = false;
 			pendingRemoteSyncError = undefined;
-			syncNeeded = false;
 			pendingUpdateVersionFinalize = false;
 			last = {};
 			setActionButton(ctx, resolvePrimaryCheckoutActionButtonStage(ctx));
@@ -3674,7 +3548,6 @@ export default function implementationEngine(pi: ExtensionAPI) {
 				pi.sendUserMessage(
 					`Spawn the \`merge\` subagent with these parameters:\n- worktree_path: ${last.worktreePath}\n- branch_name: ${last.branchName}\n- base_branch: ${last.baseBranch}\nTask: Sync Branch`,
 				);
-				syncNeeded = false;
 				setActionButton(ctx, actionButtonStage);
 			} else if (choice === RESOLVE_CONFLICTS) {
 				if (!last.baseBranch) {
@@ -5387,20 +5260,11 @@ const PERSISTED_PLANNED_WORKTREE_SELECTION_TYPE =
 	"implementation-engine/planned-selection";
 const CURATOR_BRANCH_SUGGEST_TIMEOUT_MS = 10_000;
 const PLAN_WORKFLOW_STATUS_KEY = "aaa-wt-worktree";
-const SYNC_NEEDED_STATUS_KEY = "bbb-wt-sync";
 const IMPLEMENT_WORKFLOW_STATUS_KEY = "ccc-wt-git";
 const REVIEW_COMPLETE_STATUS_KEY = "ddd-wt-review";
 const CLEANUP_WORKFLOW_STATUS_KEY = "eee-wt-cleanup";
 const PLAN_REVIEW_STATUS_KEY = "fff-wt-plan-review";
 const FIX_PLAN_STATUS_KEY = "ggg-wt-fix-plan";
-const SPACER_STATUS_KEY = "zzzz-0-spacer";
-const DELETE_WORKTREE_STATUS_KEY = "zzzz-wt-delete";
-const REVIEW_COMPLETE_PROGRESS_STATUS_KEY = "review-complete";
-const FIX_ISSUES_PROGRESS_STATUS_KEY = "fix-issues";
-const IMPLEMENT_PROGRESS_STATUS_KEY = "implement-workflow-start";
-const UPDATE_VERSION_PROGRESS_STATUS_KEY = "update-version-workflow";
-const DELETE_WORKTREE_PROGRESS_STATUS_KEY = "delete-worktree";
-const REMOTE_SYNC_STATUS_KEY = "worktree-remote-sync";
 const AUTO_COMPACT_STATUS_KEY = "orchestrator-auto-compact";
 const AUTO_COMPACT_COOLDOWN_MS = 60_000;
 const FALSE_ENV_VALUES = ["0", "false", "off", "no"];
@@ -5409,8 +5273,6 @@ const VERIFIER_CONTEXT_SIZE_THRESHOLD = 4000;
 const REVIEW_COMPLETE_ACTION_TEXT = "\x1b[30;44m Review \x1b[0m";
 const FIX_ISSUES_ACTION_TEXT = "\x1b[30;47m Fix Issues \x1b[0m";
 const UPDATE_VERSION_ACTION_TEXT = "\x1b[30;46m Update Version \x1b[0m";
-const DELETE_WORKTREE_ACTION_TEXT = "\x1b[30;41m \u2715 Worktree \x1b[0m";
-const SYNC_NEEDED_ACTION_TEXT = "\x1b[30;103m ! Sync \x1b[0m";
 const FREEFORM_WORKTREE_ACTION_TEXT = "\x1b[30;45m Freeform \x1b[0m";
 const PLANNED_WORKTREE_ACTION_TEXT = "\x1b[30;46m Planned \x1b[0m";
 const CLEANUP_WORKTREES_ACTION_TEXT = "\x1b[30;43m Cleanup \x1b[0m";
@@ -5550,13 +5412,6 @@ function persistPlanMetadata(pi: ExtensionAPI, planFilePath: string): void {
 	});
 }
 
-function isRepoRelativePlanPath(planFilePath: string): boolean {
-	const normalized = planFilePath.trim();
-	return (
-		normalized.startsWith("/docs/plans/") ||
-		normalized.startsWith("/.omp/sessions/plans/")
-	);
-}
 
 function resolveRepoRelativePlanPath(
 	planFilePath: string,
@@ -5565,8 +5420,13 @@ function resolveRepoRelativePlanPath(
 	return normalizePath(path.resolve(cwd, `.${planFilePath}`));
 }
 
+function isRepoRelativePlanPath(planFilePath: string): boolean {
+	const normalized = planFilePath.trim();
+	return normalized.startsWith("/.omp/sessions/plans/");
+}
+
 function planPathValidationErrorText(): string {
-	return "plan file must be under docs/plans or .omp/sessions/plans and end with .md";
+	return "plan file must be under .omp/sessions/plans and end with .md";
 }
 
 function linkedPlanPathValidationErrorText(): string {
@@ -5578,21 +5438,18 @@ function isMarkdownPlanPath(filePath: string): boolean {
 }
 
 function plannedWorktreePlanPathPromptText(): string {
-	return "Attach a valid @docs/plans/... .md or @.omp/sessions/plans/... .md plan file to continue planned worktree setup.";
+	return "Attach a valid @.omp/sessions/plans/.../plan.md file to continue planned worktree setup.";
 }
 
 function plannedWorktreePlanPathInfoText(): string {
-	return "Attach your plan file as @docs/plans/... .md or @.omp/sessions/plans/... .md and submit to continue planned worktree setup.";
+	return "Attach your plan file as @.omp/sessions/plans/.../plan.md and submit to continue planned worktree setup.";
 }
 
 function isDocsPlanMarkdownPath(filePath: string): boolean {
 	const normalized = normalizePath(filePath);
 	if (!normalized.toLowerCase().endsWith(".md")) return false;
-	const docsMarker = `${path.sep}docs${path.sep}plans${path.sep}`;
 	const sessionPlansMarker = `${path.sep}.omp${path.sep}sessions${path.sep}plans${path.sep}`;
-	return (
-		normalized.includes(docsMarker) || normalized.includes(sessionPlansMarker)
-	);
+	return normalized.includes(sessionPlansMarker);
 }
 
 function getPlanWorkspaceDir(planFilePath: string): string {

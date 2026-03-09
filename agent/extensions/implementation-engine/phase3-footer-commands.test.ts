@@ -125,16 +125,17 @@ function centerColumnForLabel(lineText: string, label: string): number {
 }
 
 describe("implementation-engine phase 3 footer actions and command wiring (RED)", () => {
-	test("plan/implement without active worktree exposes Freeform, Planned, and Cleanup footer actions", async () => {
+	test("setActionButton clears legacy flat workflow statuses so Worktree menu is the only entry point", async () => {
 		const source = await readExtensionSource();
 
-		expect(source).toMatch(/const FREEFORM_WORKTREE_ACTION_TEXT\s*=\s*"[^"]*Freeform[^"]*"/);
-		expect(source).toMatch(/const PLANNED_WORKTREE_ACTION_TEXT\s*=\s*"[^"]*Planned[^"]*"/);
-		expect(source).toMatch(/const CLEANUP_WORKTREES_ACTION_TEXT\s*=\s*"[^"]*Cleanup[^"]*"/);
-		expect(source).toMatch(/if \(!hasActiveWorktree\) \{/);
-		expect(source).toMatch(/ctx\.ui\.setStatus\(PLAN_WORKFLOW_STATUS_KEY,\s*FREEFORM_WORKTREE_ACTION_TEXT\)/);
-		expect(source).toMatch(/ctx\.ui\.setStatus\([\s\S]*IMPLEMENT_WORKFLOW_STATUS_KEY,[\s\S]*PLANNED_WORKTREE_ACTION_TEXT[\s\S]*\)/);
-		expect(source).toMatch(/ctx\.ui\.setStatus\([\s\S]*CLEANUP_WORKFLOW_STATUS_KEY,[\s\S]*CLEANUP_WORKTREES_ACTION_TEXT[\s\S]*\)/);
+		expect(source).toMatch(/for \(const key of \[[\s\S]*PLAN_WORKFLOW_STATUS_KEY[\s\S]*IMPLEMENT_WORKFLOW_STATUS_KEY[\s\S]*REVIEW_COMPLETE_STATUS_KEY[\s\S]*CLEANUP_WORKFLOW_STATUS_KEY[\s\S]*PLAN_REVIEW_STATUS_KEY[\s\S]*FIX_PLAN_STATUS_KEY[\s\S]*\]\) \{\s*ctx\.ui\.setStatus\(key,\s*undefined\);\s*\}/);
+
+		expect(source).not.toMatch(/const\s+SYNC_NEEDED_STATUS_KEY\s*=/);
+		expect(source).not.toMatch(/const\s+SPACER_STATUS_KEY\s*=/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*SYNC_NEEDED_STATUS_KEY,/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*SPACER_STATUS_KEY,/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*[^,]+,\s*DELETE_WORKTREE_ACTION_TEXT\s*\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*[^,]+,\s*["'`][^"'`]*✕ Worktree[^"'`]*["'`]\s*\)/);
 	});
 
 	test("freeform/planned/cleanup footer outputs are assigned to three distinct status keys", async () => {
@@ -231,15 +232,30 @@ describe("implementation-engine phase 3 footer actions and command wiring (RED)"
 		expect(source).toMatch(/registerCommand\("freeform-worktree",\s*\{/);
 		expect(source).toMatch(/registerCommand\("planned-worktree",\s*\{/);
 		expect(source).toMatch(/registerCommand\("cleanup-worktrees",\s*\{/);
+		expect(source).toMatch(/pi\.registerCommand\(DELETE_WORKTREE_COMMAND,\s*\{/);
 	});
 
-	test("active-worktree footer behavior remains gated by hasActiveWorktree", async () => {
+	test("active-worktree footer no longer emits flat sync/delete/progress entries", async () => {
 		const source = await readExtensionSource();
 
-		expect(source).toMatch(
+		expect(source).not.toMatch(
 			/const hasActiveWorktree =\s*setupDone && Boolean\(last\.worktreePath\) && Boolean\(last\.branchName\);/,
 		);
-		expect(source).toMatch(/const showGit =\s*hasActiveWorktree && stage !== "plan" && stage !== "implement";/);
-		expect(source).toMatch(/if \(hasActiveWorktree\) \{[\s\S]*ctx\.ui\.setStatus\(DELETE_WORKTREE_STATUS_KEY, deleteText\);/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*SYNC_NEEDED_STATUS_KEY,/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*SPACER_STATUS_KEY,/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*[^,]+,\s*DELETE_WORKTREE_ACTION_TEXT\s*\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(\s*[^,]+,\s*["'`][^"'`]*✕ Worktree[^"'`]*["'`]\s*\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\("worktree",\s*["'`][^"'`]*["'`]\s*\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\("worktree",\s*undefined\s*\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(REMOTE_SYNC_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(DELETE_WORKTREE_PROGRESS_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(IMPLEMENT_PROGRESS_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(REVIEW_COMPLETE_PROGRESS_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(FIX_ISSUES_PROGRESS_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).not.toMatch(/ctx\.ui\.setStatus\(UPDATE_VERSION_PROGRESS_STATUS_KEY,\s*[^)]+\)/);
+		expect(source).toMatch(/const notifyWorktreeProgress = \(/);
+		expect(source).toMatch(/notifyWorktreeProgress\(ctx,\s*"worktree: creating\.\.\."\)/);
+		expect(source).toMatch(/notifyWorktreeProgress\(ctx,\s*`remote-sync: \$\{reason\}\.\.\.`\)/);
+		expect(source).toMatch(/notifyWorktreeProgress\(ctx,\s*"delete-worktree: removing\.\.\."\)/);
 	});
 });

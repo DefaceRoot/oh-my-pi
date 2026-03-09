@@ -13,7 +13,9 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
+import { type SttState, STTController } from "../../stt";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
+
 import { WORKFLOW_MENUS } from "../action-buttons";
 
 interface Expandable {
@@ -53,6 +55,7 @@ export function detectLazygitInstallCommand(): { command: string; args: string[]
 export class InputController {
 	#askModePreviousRole: "default" | "orchestrator" | "plan" | "custom" | undefined;
 	#askModePreviousModel: Model | undefined;
+	#sttController = new STTController();
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -151,22 +154,31 @@ export class InputController {
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
 		}
-
 		for (const key of this.ctx.keybindings.getKeys("toggleAskMode")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.#toggleAskMode());
 		}
 
+		for (const key of this.ctx.keybindings.getKeys("toggleSTT")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.toggleSTT());
+		}
+
 		for (const key of this.ctx.keybindings.getKeys("newSession")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				void this.ctx.handleClearCommand();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("tree")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showTreeSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showTreeSelector();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("fork")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showUserMessageSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showUserMessageSelector();
+			});
 		}
 		for (const menu of WORKFLOW_MENUS) {
-			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction)) {
+			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction as import("../../config/keybindings").AppAction)) {
 				this.ctx.editor.setCustomKeyHandler(key, () => {
 					this.ctx.statusLine.toggleMenu(menu.id);
 					this.ctx.ui.requestRender();
@@ -232,7 +244,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("tab", () => this.handleSubagentNestedNavigation(1));
 		this.ctx.editor.setCustomKeyHandler("a", () => this.handleSubagentAgentToggle());
-		this.ctx.editor.setCustomKeyHandler("A", () => this.handleSubagentAgentToggle());
+		this.ctx.editor.setCustomKeyHandler("A" as import("../../config/keybindings").KeyId, () => this.handleSubagentAgentToggle());
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
@@ -420,6 +432,28 @@ export class InputController {
 			if (text === "/extensions" || text === "/status") {
 				this.ctx.showExtensionsDashboard();
 				this.ctx.editor.setText("");
+				return;
+			}
+			if (text === "/stt" || text.startsWith("/stt ")) {
+				const arg = text.slice(4).trim().toLowerCase();
+				this.ctx.editor.setText("");
+				if (!arg) {
+					await this.toggleSTT();
+					return;
+				}
+				if (arg === "status") {
+					this.showSTTStatus();
+					return;
+				}
+				if (arg === "on") {
+					await this.toggleSTT({ force: "start" });
+					return;
+				}
+				if (arg === "off") {
+					await this.toggleSTT({ force: "stop" });
+					return;
+				}
+				this.ctx.showStatus("Usage: /stt [on|off|status]");
 				return;
 			}
 			if (text === "/branch") {
@@ -624,6 +658,69 @@ export class InputController {
 		} else {
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
+		}
+	}
+
+	async toggleSTT(options?: { force?: "start" | "stop" }): Promise<void> {
+		const enabled = settings.get("stt.enabled") as boolean;
+		if (!enabled) {
+			this.ctx.showWarning("Speech-to-text is disabled. Enable it in settings first.");
+			return;
+		}
+
+		const state = this.#sttController.state;
+		if (options?.force === "start" && state !== "idle") {
+			if (state === "recording") {
+				this.ctx.showStatus("Speech-to-text is already recording.");
+			} else {
+				this.ctx.showStatus("Speech-to-text is already transcribing.");
+			}
+			return;
+		}
+		if (options?.force === "stop" && state === "idle") {
+			this.ctx.showStatus("Speech-to-text is already idle.");
+			return;
+		}
+		if (options?.force === "stop" && state === "transcribing") {
+			this.ctx.showStatus("Speech-to-text is already transcribing.");
+			return;
+		}
+		await this.#runSTTToggle();
+	}
+
+	showSTTStatus(): void {
+		const enabled = settings.get("stt.enabled") as boolean;
+		if (!enabled) {
+			this.ctx.showStatus("Speech-to-text is disabled.");
+			return;
+		}
+		const labels: Record<SttState, string> = {
+			idle: "idle",
+			recording: "recording",
+			transcribing: "transcribing",
+		};
+		this.ctx.showStatus(`Speech-to-text: ${labels[this.#sttController.state]}`);
+	}
+
+	async #runSTTToggle(): Promise<void> {
+		await this.#sttController.toggle(this.ctx.editor, {
+			showWarning: msg => this.ctx.showWarning(msg),
+			showStatus: msg => this.ctx.showStatus(msg),
+			onStateChange: state => this.#handleSTTStateChange(state),
+		});
+	}
+
+	#handleSTTStateChange(state: SttState): void {
+		switch (state) {
+			case "idle":
+				this.ctx.showStatus("");
+				break;
+			case "recording":
+				this.ctx.showStatus(`${theme.symbol("icon.mic")} Recording… Press Alt+H again to transcribe.`, { dim: false });
+				break;
+			case "transcribing":
+				this.ctx.showStatus(`${theme.symbol("icon.mic")} Transcribing…`, { dim: false });
+				break;
 		}
 	}
 

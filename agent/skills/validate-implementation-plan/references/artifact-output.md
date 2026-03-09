@@ -6,13 +6,12 @@ This reference defines the required output shape for implementation-plan verific
 
 Given a plan file:
 
-- `<plan-file>`: `docs/plans/<plan-name>.md`
-- `<plan-dir>`: `docs/plans`
-- `<plan-stem>`: `<plan-name>`
+- `<plan-file>`: `.omp/sessions/plans/<plan-slug>/plan.md`
+- `<plan-dir>`: `.omp/sessions/plans/<plan-slug>`
 
 Write outputs beside the plan file under:
 
-`<plan-dir>/<plan-stem>.plan-verifier/<phase-key>/<run-timestamp>/`
+`<plan-dir>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/`
 
 Where:
 - `<phase-key>` is deterministic for the specific phase section (recommended: zero-padded order + slug, for example `01-bootstrap-agent-workflow`)

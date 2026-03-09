@@ -11,6 +11,11 @@ interface OmpCommand {
 const DEFAULT_CMD = process.platform === "win32" ? "omp.cmd" : "omp";
 const DEFAULT_SHELL = process.platform === "win32";
 
+export const SESSION_ARTIFACT_DIR_TEMPLATES = {
+	planned: ".omp/sessions/plans/<plan>/<nested_dir_for_all_subagents>",
+	nonPlanned: ".omp/sessions/<session>/<nested_dir_for_all_subagents>",
+} as const;
+
 export function resolveOmpCommand(): OmpCommand {
 	const envCmd = $env.PI_SUBPROCESS_CMD;
 	if (envCmd?.trim()) {
@@ -23,4 +28,8 @@ export function resolveOmpCommand(): OmpCommand {
 	}
 
 	return { cmd: DEFAULT_CMD, args: [], shell: DEFAULT_SHELL };
+}
+
+export function buildOmpResumeArgs(sessionFile: string | undefined): string[] {
+	return sessionFile ? ["--resume", sessionFile] : [];
 }

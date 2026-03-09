@@ -1,5 +1,5 @@
 ---
-description: Create a phased, TDD-first implementation plan (brainstorming -> TDD -> writing-plans)
+description: Create a phased, TDD-first implementation plan in the current workspace
 argument-hint: "[feature or change request]"
 agent: build
 ---
@@ -7,15 +7,21 @@ agent: build
 <role>
 You are in PLAN-NEW mode. Your job is to create a high-quality implementation plan file only.
 Do not implement production code in this mode.
-This command is commonly launched by clicking the footer `Plan` button, which should just bootstrap `/plan-new` and let the user type the planning request.
+This command is commonly launched by clicking the footer `Plan` button, which should bootstrap `/plan-new` and let the user type the planning request.
 </role>
 
 <bootstrap_behavior>
-If `$ARGUMENTS` is empty (common when launched via the footer `Plan` button):
+If `$ARGUMENTS` is empty:
 - Ask exactly this first question and nothing else: **"What should this plan cover?"**
 - End your response immediately after that question.
-- Do NOT load or apply any planning/debugging skills until the user answers this first question.
+- Do NOT load or apply any planning or debugging skills until the user answers this first question.
 </bootstrap_behavior>
+
+<workspace_contract>
+Planning stays in the current workspace or inherited worktree.
+Do NOT ask for branch names, base branches, or worktree setup unless the user explicitly asks for that workflow.
+Never create a new worktree as part of planning by default.
+</workspace_contract>
 
 <required_skill_order>
 After the user provides the planning topic:
@@ -46,27 +52,24 @@ After requirements are clear, explicitly apply:
 - `writing-plans` skill format and quality bar
 
 Write the plan to:
-- `/docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md`
+- `.omp/sessions/plans/<plan-slug>/plan.md`
 
-Where:
-- `<plan-title>` is a stable kebab-case directory name for this plan topic (example: `auth-hardening`)
-- `YYYY-MM-DD-<feature-slug>.md` is the specific plan document for this run
+Write plan-verifier artifacts to:
+- `.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/`
 
-If `/docs/plans/<plan-title>/` does not exist, create it.
-
-All plan-scoped artifacts must be colocated in that same directory (for example: checklists, scratch notes, JSON status metadata).
+If `.omp/sessions/plans/<plan-slug>/` does not exist, create it.
+Only the plan agent updates `plan.md`; plan-verifier agents write artifacts only.
 Do not place plan-scoped scratch artifacts at repo root or in unrelated directories.
 </plan_generation>
 
 <phase_contract>
-All plans MUST use phases (never task/step-based top-level structure).
+All plans MUST use phases (never task- or step-based top-level structure).
 
 Required section title:
 ## Phased Implementation Plan (Agent-Sized)
 
 For each phase:
 - Keep scope small: target 1-2 concrete actions
-- Size target: should fit in an LLM 100k context window OR take a human ~5-10 minutes without LLM help
 - Put phases in strict dependency order
 - Assume one fresh subagent will execute each phase
 
@@ -94,5 +97,5 @@ Return:
 1) The saved plan file path
 2) A concise phase list (Phase 1..N titles)
 3) Confirmation that brainstorming -> TDD -> writing-plans order was followed
-4) A final instruction: "When ready, click the Implement footer button in this same session to create a worktree and start phased implementation."
+4) A final instruction: "When ready, continue planning in the current workspace or inherited worktree and use this saved plan as the implementation source of truth."
 </output>

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,6 +14,8 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
+import { FORK_REINSTALL_COMMAND } from "../../cli/update-cli";
+import type { BashResult } from "../../exec/bash-executor";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import { getGatewayStatus } from "../../ipy/gateway-coordinator";
@@ -25,6 +28,7 @@ import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
+import { buildOmpResumeArgs, resolveOmpCommand } from "../../task/omp-command";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
@@ -432,10 +436,18 @@ export class CommandController {
 	}
 
 	handleHotkeysCommand(): void {
-		const expandToolsKey = this.ctx.keybindings.getDisplayString("expandTools") || "Ctrl+O";
-		const agentModeKey = this.ctx.keybindings.getDisplayString("cycleAgentMode") || "Alt+A";
-		const planModeKey = this.ctx.keybindings.getDisplayString("togglePlanMode") || "Alt+Shift+P";
-		const sttKey = this.ctx.keybindings.getDisplayString("toggleSTT") || "Alt+H";
+		const getDisplayString = (action: string): string =>
+			(this.ctx.keybindings as { getDisplayString(actionName: string): string }).getDisplayString(action);
+		const expandToolsKey = getDisplayString("expandTools") || "Ctrl+O";
+		const agentModeKey = getDisplayString("cycleAgentMode") || "Alt+A";
+		const planModeKey = getDisplayString("togglePlanMode") || "Alt+Shift+P";
+		const sttKey = getDisplayString("toggleSTT") || "Alt+H";
+		const lazygitKey = getDisplayString("lazygit").trim();
+		const externalEditorKey = getDisplayString("externalEditor").trim();
+		const lazygitRow = lazygitKey ? `		| \`${lazygitKey}\` | Open Lazygit |\n` : "";
+		const externalEditorRow = externalEditorKey
+			? `		| \`${externalEditorKey}\` | Edit message in external editor |\n`
+			: "";
 		const hotkeys = `
 		**Navigation**
 		| Key | Action |
@@ -472,8 +484,7 @@ export class CommandController {
 		| \`Ctrl+R\` | Search prompt history |
 		| \`${expandToolsKey}\` | Toggle tool output expansion |
 		| \`Ctrl+T\` | Toggle todo list expansion |
-		| \`Ctrl+G\` | Edit message in external editor |
-		| \`${sttKey}\` | Toggle speech-to-text recording |
+		${lazygitRow}${externalEditorRow}		| \`${sttKey}\` | Toggle speech-to-text recording |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |
@@ -636,7 +647,7 @@ export class CommandController {
 		}
 	}
 
-	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+	private async runBashCommand(command: string, excludeFromContext = false): Promise<BashResult | undefined> {
 		const isDeferred = this.ctx.session.isStreaming;
 		this.ctx.bashComponent = new BashExecutionComponent(command, this.ctx.ui, excludeFromContext);
 
@@ -667,15 +678,57 @@ export class CommandController {
 					truncation: meta?.truncation,
 				});
 			}
+			return result;
 		} catch (error) {
 			if (this.ctx.bashComponent) {
 				this.ctx.bashComponent.setComplete(undefined, false);
 			}
 			this.ctx.showError(`Bash command failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+			return undefined;
+		} finally {
+			this.ctx.bashComponent = undefined;
+			this.ctx.ui.requestRender();
+		}
+	}
+
+	private relaunchOmpSession(): void {
+		const { cmd, args, shell } = resolveOmpCommand();
+		const child = spawn(cmd, [...args, ...buildOmpResumeArgs(this.ctx.sessionManager.getSessionFile())], {
+			cwd: this.ctx.sessionManager.getCwd(),
+			detached: true,
+			shell,
+			stdio: "inherit",
+		});
+		child.unref();
+	}
+
+	async handleRefreshForkInstall(): Promise<void> {
+		this.ctx.showStatus("Running fork reinstall. OMP will relaunch automatically if it succeeds.");
+		const result = await this.runBashCommand(FORK_REINSTALL_COMMAND, true);
+		if (!result) return;
+		if (result.cancelled) {
+			this.ctx.showWarning("Fork reinstall cancelled. OMP was not restarted.");
+			return;
+		}
+		if (result.exitCode !== 0) {
+			this.ctx.showError(`Fork reinstall failed with exit code ${result.exitCode}. OMP was not restarted.`);
+			return;
 		}
 
-		this.ctx.bashComponent = undefined;
-		this.ctx.ui.requestRender();
+		try {
+			this.relaunchOmpSession();
+		} catch (error) {
+			this.ctx.showError(
+				`Fork reinstall succeeded, but automatic relaunch failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+			);
+			return;
+		}
+
+		await this.ctx.shutdown();
+	}
+
+	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+		await this.runBashCommand(command, excludeFromContext);
 	}
 
 	async handlePythonCommand(code: string, excludeFromContext = false): Promise<void> {

@@ -1,8 +1,8 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
-import { FORK_REINSTALL_COMMAND } from "../cli/update-cli";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import type { InteractiveModeContext } from "../modes/types";
+import { SESSION_ARTIFACT_DIR_TEMPLATES } from "../task/omp-command";
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -82,7 +82,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 	{
 		name: "plan",
-		description: "Toggle plan mode (agent plans before executing)",
+		description: `Toggle plan mode (planned artifacts stay in ${SESSION_ARTIFACT_DIR_TEMPLATES.planned})`,
 		inlineHint: "[prompt]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -460,13 +460,10 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 	{
 		name: "refresh-fork",
-		description: "Reinstall the local OMP fork globally (restart current session to load package changes)",
+		description: "Reinstall the local OMP fork globally and relaunch this session with refreshed package code",
 		handle: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
-			runtime.ctx.showStatus(
-				"Running fork reinstall. This session keeps its current loaded package code until you restart omp.",
-			);
-			await runtime.ctx.handleBashCommand(FORK_REINSTALL_COMMAND, true);
+			await runtime.ctx.refreshForkInstall();
 		},
 	},
 	{

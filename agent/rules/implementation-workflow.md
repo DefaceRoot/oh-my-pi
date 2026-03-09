@@ -85,9 +85,9 @@ A clickable footer action area is shown with workflow controls:
 
 - Use `/submit-pr` from inside a worktree to rebase, resolve conflicts, bump version, update changelog, push, and create/update a PR.
 - Use `/review-complete` to launch a new review session that verifies each phase against the plan using evidence, then returns completion percentage and discrepancy report.
-- You can pass a plan file manually (useful for older sessions missing metadata): `/review-complete @docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md`.
+- You can pass a plan file manually (useful when metadata is missing): `/review-complete @.omp/sessions/plans/<plan-slug>/plan.md`.
 - Use `/fix-issues` from the spawned review session to launch a remediation session that fixes review findings sequentially and performs final verification.
-- You can pass a plan file manually to remediation too: `/fix-issues @docs/plans/<plan-title>/YYYY-MM-DD-<feature-slug>.md`.
+- You can pass a plan file manually to remediation too: `/fix-issues @.omp/sessions/plans/<plan-slug>/plan.md`.
 - Use `/update-version-workflow [patch|minor|major]` after remediation to open a dedicated session in the same worktree and run `/update-version` automatically.
 - `/update-version` changelog generation is commit-history driven for the active worktree branch range (`origin/<base>..HEAD`), not staged-diff driven; it commits and pushes the version bump changes on completion.
 - Use `/delete-worktree` to permanently discard the active implementation worktree (with confirmation), remove local branch, and attempt remote branch deletion.
