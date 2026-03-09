@@ -1,14 +1,65 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 // ─── Agent detection ────────────────────────────────────────────────────────
 
-/**
- * Extract agent name from YAML frontmatter in the system prompt.
- * Falls back to "default" when no agent name is found (parent session).
- */
-function detectAgentName(systemPrompt: string): string {
+type KnownAgentPrompt = {
+	name: string;
+	body: string;
+};
+
+const DEFAULT_AGENT_DIR = path.join(os.homedir(), ".omp", "agent");
+const SUBAGENT_ROLE_MARKER = "You are operating on a delegated sub-task.";
+
+let knownAgentPromptsPromise: Promise<KnownAgentPrompt[]> | undefined;
+
+function stripFrontmatter(content: string): string {
+	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	if (!normalized.startsWith("---\n")) return normalized.trim();
+	const endIndex = normalized.indexOf("\n---", 3);
+	return endIndex === -1 ? normalized.trim() : normalized.slice(endIndex + 4).trim();
+}
+
+function detectAgentNameFromPrompt(systemPrompt: string, knownAgentPrompts: KnownAgentPrompt[]): string {
 	const match = systemPrompt.match(/^name:\s*(\S+)/m);
-	return match ? match[1] : "default";
+	if (match) return match[1];
+	if (!systemPrompt.includes(SUBAGENT_ROLE_MARKER)) return "default";
+	const matchedAgent = knownAgentPrompts.find(({ body }) => body.length > 0 && systemPrompt.includes(body));
+	return matchedAgent?.name ?? "default";
+}
+
+async function loadKnownAgentPrompts(): Promise<KnownAgentPrompt[]> {
+	if (!knownAgentPromptsPromise) {
+		knownAgentPromptsPromise = (async () => {
+			const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || DEFAULT_AGENT_DIR;
+			const agentsDir = path.join(agentDir, "agents");
+			try {
+				const entries = await fs.readdir(agentsDir, { withFileTypes: true });
+				const prompts = await Promise.all(
+					entries
+						.filter(entry => entry.isFile() && entry.name.endsWith(".md"))
+						.map(async entry => {
+							const fullPath = path.join(agentsDir, entry.name);
+							const content = await fs.readFile(fullPath, "utf8");
+							const metadataMatch = content.match(/^---\n([\s\S]*?)\n---/);
+							const name = metadataMatch?.[1].match(/^name:\s*(\S+)/m)?.[1];
+							if (!name) return undefined;
+							const body = stripFrontmatter(content);
+							return body.length > 0 ? { name, body } : undefined;
+						}),
+				);
+				return prompts
+					.filter((prompt): prompt is KnownAgentPrompt => prompt !== undefined)
+					.sort((left, right) => right.body.length - left.body.length);
+			} catch {
+				return [];
+			}
+		})();
+	}
+
+	return knownAgentPromptsPromise;
 }
 
 /**
@@ -30,8 +81,9 @@ function isOrchestratorMode(ctx: ExtensionContext): boolean {
  * Resolve the effective agent name. For parent sessions, distinguishes between
  * default mode and orchestrator mode.
  */
-function resolveAgent(systemPrompt: string, ctx: ExtensionContext): string {
-	const name = detectAgentName(systemPrompt);
+async function resolveAgent(systemPrompt: string, ctx: ExtensionContext): Promise<string> {
+	const knownAgentPrompts = await loadKnownAgentPrompts();
+	const name = detectAgentNameFromPrompt(systemPrompt, knownAgentPrompts);
 	if (name === "default" && isOrchestratorMode(ctx)) {
 		return "orchestrator";
 	}
@@ -75,7 +127,7 @@ const AGENT_MCP_ALLOW: Record<string, string[] | null> = {
  * prefix appears in the agent's allowlist.
  */
 function stripMcpTools(systemPrompt: string, agent: string): string {
-	const allowed = AGENT_MCP_ALLOW[agent];
+	const allowed = AGENT_MCP_ALLOW[agent] ?? AGENT_MCP_ALLOW.default;
 
 	// null = keep everything
 	if (allowed === null) return systemPrompt;
@@ -152,7 +204,7 @@ const AGENT_SKILL_ALLOW: Record<string, string[] | null> = {
  * but retain only `## skill-name` blocks whose name is in the allowlist.
  */
 function stripSkills(systemPrompt: string, agent: string): string {
-	const allowed = AGENT_SKILL_ALLOW[agent];
+	const allowed = AGENT_SKILL_ALLOW[agent] ?? AGENT_SKILL_ALLOW.default;
 
 	// null = keep everything
 	if (allowed === null) return systemPrompt;
@@ -208,12 +260,12 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 	let currentAgent = "default";
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		const agent = resolveAgent(event.systemPrompt, ctx);
+		const agent = await resolveAgent(event.systemPrompt, ctx);
 		currentAgent = agent;
 
 		// Skip filtering for agents with full access (no changes needed)
-		const mcpAllow = AGENT_MCP_ALLOW[agent];
-		const skillAllow = AGENT_SKILL_ALLOW[agent];
+		const mcpAllow = AGENT_MCP_ALLOW[agent] ?? AGENT_MCP_ALLOW.default;
+		const skillAllow = AGENT_SKILL_ALLOW[agent] ?? AGENT_SKILL_ALLOW.default;
 		if (mcpAllow === null && skillAllow === null) {
 			pi.logger.debug(`mcp-filter: agent=${agent} — full access, skipping`);
 			return;
@@ -233,7 +285,7 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
 		if (!event.toolName.startsWith("mcp_")) return;
 
-		const allowed = AGENT_MCP_ALLOW[currentAgent];
+		const allowed = AGENT_MCP_ALLOW[currentAgent] ?? AGENT_MCP_ALLOW.default;
 		if (allowed === null) return; // full access
 
 		// No MCP tools allowed
