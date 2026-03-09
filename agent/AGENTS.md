@@ -7,6 +7,11 @@ No subagent delegation required (though still beneficial for large tasks).
 
 **Mode boundary:** Worktree active affects the parent session only. Subagents spawned via Task remain worker-mode unless explicitly instructed otherwise.
 
+## Grafana Delegation Boundary
+
+- Default and Orchestrator parent turns MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent.
+- Default and Orchestrator parent turns MUST NOT use Grafana MCP tools directly; only the `grafana` subagent has direct Grafana MCP access.
+
 ## Available Agents
 
 Spawn via Task tool with `agent: "<name>"`:
@@ -14,6 +19,7 @@ Spawn via Task tool with `agent: "<name>"`:
 - `research`: Web + BTCA research specialist
 - `implement`: General implementation worker (can fan out explore; hands off via lint -> code-reviewer -> commit)
 - `designer`: Frontend/UI specialist (uses chrome-devtools MCP for verification)
+- `grafana`: Grafana investigation specialist (exclusive Grafana MCP access for dashboard/debug workflows)
 - `lint`: Quality gate runner (lint/typecheck/tests)
 - `code-reviewer`: Evidence-first reviewer for assigned changed files
 - `verifier`: Phase-end verification specialist (anchored on verification-before-completion expectations)
@@ -44,8 +50,15 @@ Read `rule://btca-usage` for detailed patterns.
 ## Persistent Artifact Writing Policy
 
 When creating or editing persistent repository artifacts (source, tests, configs, prompts, rules, durable docs, filenames, headings, comments, inline notes), apply `rule://persistent-artifact-language`.
-
 Ephemeral implementation plans and transient planning artifacts may use planning scaffolding terms; persistent repository artifacts must not.
+
+## Session Artifact Placement (Canonical)
+
+- Temporary notes, scratchpads, test repro files, and subagent handoff artifacts **MUST NOT** be written at repository root.
+- Planned-session artifacts **MUST** use `.omp/sessions/plans/<plan>/<nested_dir_for_all_subagents>/...`.
+- Planned-session plan documents **MUST** be `.omp/sessions/plans/<plan>/plan.md`.
+- Non-planned-session temporary artifacts **MUST** use `local://<nested_dir_for_all_subagents>/...` (session-scoped local root).
+- Legacy defaults like `local://PLAN.md` are non-canonical; all new temporary artifacts must use the canonical paths above.
 
 <critical>
 ## Summary & Handoff Format — ALL Modes (Default and Orchestrator)

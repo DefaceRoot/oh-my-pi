@@ -6,6 +6,19 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Terminology**: When the user says "agent" or asks "why is agent doing X", they mean the **coding-agent package implementation**, not you (the assistant). The coding-agent is a CLI tool that uses Claude—questions about its behavior refer to the code in `packages/coding-agent/`, not your current session.
 
+## Grafana Work Routing
+
+- Default and Orchestrator roles MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent via Task.
+- Default and Orchestrator roles MUST NOT call Grafana MCP tools directly; direct Grafana MCP access is reserved for the `grafana` subagent.
+
+## Session Artifact Placement (Canonical)
+
+- Temporary notes, scratchpads, test repro files, and subagent handoff artifacts **MUST NOT** be written at repository root.
+- Planned-session artifacts **MUST** stay under `.omp/sessions/plans/<plan>/<nested_dir_for_all_subagents>/...`.
+- Planned-session plan documents **MUST** be `.omp/sessions/plans/<plan>/plan.md`.
+- Non-planned-session temporary artifacts **MUST** use `local://<nested_dir_for_all_subagents>/...` (session-scoped local root).
+- Treat legacy defaults like `local://PLAN.md` or loose root-level scratch files as non-canonical; route all new temporary artifacts to the paths above.
+
 ### Package Structure
 
 | Package                 | Description                                          |
