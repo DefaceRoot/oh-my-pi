@@ -622,6 +622,7 @@ These are **in-chat slash commands** (not CLI subcommands).
 | `/session` | Show session info and usage |
 | `/usage` | Show provider usage and limits |
 | `/hotkeys` | Show keyboard shortcuts |
+| `/lazygit` | Open lazygit |
 | `/extensions` (`/status`) | Open Extension Control Center |
 | `/changelog` | Show changelog entries |
 | `/tree` | Navigate session tree |
@@ -693,7 +694,7 @@ Bundled custom slash commands include `/review` (interactive code review launche
 | Ctrl+R                | Search prompt history                                     |
 | Ctrl+O                | Toggle tool output expansion                              |
 | Ctrl+T                | Toggle todo list expansion                                |
-| Ctrl+G                | Edit message in external editor (`$VISUAL` or `$EDITOR`)  |
+| Ctrl+G                | Open lazygit                                              |
 | Alt+H                 | Toggle speech-to-text recording                           |
 
 ### Bash Mode
@@ -1187,7 +1188,7 @@ omp --export session.jsonl output.html
 | `PI_PACKAGE_DIR`                                  | Override package directory resolution                   |
 | `PI_EXPLORE_MODEL`, `PI_ORCHESTRATOR_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
 | `PI_NO_PTY`                                       | Disable PTY-based bash execution                        |
-| `VISUAL`, `EDITOR`                                | External editor for Ctrl+G                              |
+| `VISUAL`, `EDITOR`                                | External editor command                                 |
 
 See [Environment Variables](docs/environment-variables.md) for the complete reference.
 
