@@ -28,6 +28,7 @@ export type AppAction =
 	| "expandTools"
 	| "toggleThinking"
 	| "toggleSessionNamedFilter"
+	| "lazygit"
 	| "externalEditor"
 	| "historySearch"
 	| "followUp"
@@ -71,7 +72,8 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	expandTools: "ctrl+o",
 	toggleThinking: "ctrl+t",
 	toggleSessionNamedFilter: "ctrl+n",
-	externalEditor: "ctrl+g",
+	lazygit: "ctrl+g",
+	externalEditor: [],
 	followUp: "ctrl+enter",
 	dequeue: "alt+up",
 	cycleSubagentForward: "ctrl+x",
@@ -108,6 +110,7 @@ const APP_ACTIONS: AppAction[] = [
 	"expandTools",
 	"toggleThinking",
 	"toggleSessionNamedFilter",
+	"lazygit",
 	"externalEditor",
 	"followUp",
 	"dequeue",

@@ -20,6 +20,7 @@ import { buildMemoryToolDeveloperInstructions, clearMemoryData, enqueueMemoryCon
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
+import { editorKey } from "../../modes/components/keybinding-hints";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
@@ -432,10 +433,18 @@ export class CommandController {
 	}
 
 	handleHotkeysCommand(): void {
-		const expandToolsKey = this.ctx.keybindings.getDisplayString("expandTools") || "Ctrl+O";
-		const agentModeKey = this.ctx.keybindings.getDisplayString("cycleAgentMode") || "Alt+A";
-		const planModeKey = this.ctx.keybindings.getDisplayString("togglePlanMode") || "Alt+Shift+P";
-		const sttKey = this.ctx.keybindings.getDisplayString("toggleSTT") || "Alt+H";
+		const resolveKeyLabel = (
+			action: "expandTools" | "cycleAgentMode" | "togglePlanMode" | "lazygit" | "externalEditor",
+		): string => {
+			const keys = this.ctx.keybindings.getKeys(action);
+			return keys.length > 0 ? this.ctx.keybindings.getDisplayString(action) : "Unbound";
+		};
+		const expandToolsKey = resolveKeyLabel("expandTools");
+		const agentModeKey = resolveKeyLabel("cycleAgentMode");
+		const planModeKey = resolveKeyLabel("togglePlanMode");
+		const lazygitKey = resolveKeyLabel("lazygit");
+		const externalEditorKey = resolveKeyLabel("externalEditor");
+		const sttKey = editorKey("toggleSTT") || "Unbound";
 		const hotkeys = `
 		**Navigation**
 		| Key | Action |
@@ -472,14 +481,15 @@ export class CommandController {
 		| \`Ctrl+R\` | Search prompt history |
 		| \`${expandToolsKey}\` | Toggle tool output expansion |
 		| \`Ctrl+T\` | Toggle todo list expansion |
-		| \`Ctrl+G\` | Edit message in external editor |
+		| \`${lazygitKey}\` | Open Lazygit |
+		| \`${externalEditorKey}\` | Edit message in external editor |
 		| \`${sttKey}\` | Toggle speech-to-text recording |
-| \`/\` | Slash commands |
-| \`!\` | Run bash command |
-| \`!!\` | Run bash command (excluded from context) |
-| \`$\` | Run Python in shared kernel |
-| \`$$\` | Run Python (excluded from context) |
-`;
+		| \`/\` | Slash commands |
+		| \`!\` | Run bash command |
+		| \`!!\` | Run bash command (excluded from context) |
+		| \`$\` | Run Python in shared kernel |
+		| \`$$\` | Run Python (excluded from context) |
+	`;
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new DynamicBorder());
 		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));

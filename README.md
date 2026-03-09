@@ -697,6 +697,8 @@ Bundled custom slash commands include `/review` (interactive code review launche
 | Ctrl+G                | Open Lazygit                                                         |
 | Alt+H                 | Toggle speech-to-text recording                                      |
 
+External editor has no default shortcut. Bind `externalEditor` in `~/.omp/agent/keybindings.json` if you want a hotkey for it.
+
 ### Bash Mode
 
 Prefix commands with `!` to execute them and include output in context:
