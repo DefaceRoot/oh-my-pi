@@ -1754,6 +1754,15 @@ export class AgentSession {
 		this.#planReferencePath = path;
 	}
 
+	#resolvePlanPath(planFilePath: string): string {
+		return planFilePath.startsWith("local://")
+			? resolveLocalUrlToPath(planFilePath, {
+					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+					getSessionId: () => this.sessionManager.getSessionId(),
+				})
+			: resolveToCwd(planFilePath, this.sessionManager.getCwd());
+	}
+
 	getCheckpointState(): CheckpointState | undefined {
 		return this.#checkpointState;
 	}
@@ -1820,23 +1829,13 @@ export class AgentSession {
 		if (this.#planReferenceSent) return null;
 
 		const planFilePath = this.#planReferencePath;
-		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		let planContent: string;
-		try {
-			planContent = await Bun.file(resolvedPlanPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				return null;
-			}
-			throw error;
+		const resolvedPlanPath = this.#resolvePlanPath(planFilePath);
+		if (!(await Bun.file(resolvedPlanPath).exists())) {
+			return null;
 		}
 
 		const content = renderPromptTemplate(planModeReferencePrompt, {
 			planFilePath,
-			planContent,
 		});
 
 		this.#planReferenceSent = true;
@@ -1853,22 +1852,11 @@ export class AgentSession {
 
 	async #buildPlanModeMessage(): Promise<CustomMessage | null> {
 		const state = this.#planModeState;
-		if (!state?.enabled) return null;
-		const sessionPlanUrl = "local://PLAN.md";
-		const resolvedPlanPath = state.planFilePath.startsWith("local://")
-			? resolveLocalUrlToPath(state.planFilePath, {
-					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-					getSessionId: () => this.sessionManager.getSessionId(),
-				})
-			: resolveToCwd(state.planFilePath, this.sessionManager.getCwd());
-		const resolvedSessionPlan = resolveLocalUrlToPath(sessionPlanUrl, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		const displayPlanPath =
-			state.planFilePath.startsWith("local://") || resolvedPlanPath !== resolvedSessionPlan
-				? state.planFilePath
-				: sessionPlanUrl;
+		if (!state?.enabled || state.suppressPlanModeMessage) return null;
+		const sessionPlanPath = ".omp/sessions/plans/manual/plan.md";
+		const resolvedPlanPath = this.#resolvePlanPath(state.planFilePath);
+		const resolvedSessionPlan = resolveToCwd(sessionPlanPath, this.sessionManager.getCwd());
+		const displayPlanPath = resolvedPlanPath === resolvedSessionPlan ? sessionPlanPath : state.planFilePath;
 
 		const planExists = fs.existsSync(resolvedPlanPath);
 		const content = renderPromptTemplate(planModeActivePrompt, {
@@ -2553,7 +2541,6 @@ export class AgentSession {
 
 		this.#todoReminderCount = 0;
 		this.#planReferenceSent = false;
-		this.#planReferencePath = "local://PLAN.md";
 		this.#reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to hooks

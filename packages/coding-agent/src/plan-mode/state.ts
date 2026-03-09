@@ -3,4 +3,5 @@ export interface PlanModeState {
 	planFilePath: string;
 	workflow?: "parallel" | "iterative";
 	reentry?: boolean;
+	suppressPlanModeMessage?: boolean;
 }

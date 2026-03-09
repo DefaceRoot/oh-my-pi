@@ -14,7 +14,7 @@ const exitPlanModeSchema = Type.Object({
 
 type ExitPlanModeParams = Static<typeof exitPlanModeSchema>;
 
-function normalizePlanTitle(title: string): { title: string; fileName: string } {
+function normalizePlanTitle(title: string): string {
 	const trimmed = title.trim();
 	if (!trimmed) {
 		throw new ToolError("Title is required and must not be empty.");
@@ -29,8 +29,7 @@ function normalizePlanTitle(title: string): { title: string; fileName: string } 
 		throw new ToolError("Title may only contain letters, numbers, underscores, or hyphens.");
 	}
 
-	const normalizedTitle = withExtension.slice(0, -3);
-	return { title: normalizedTitle, fileName: withExtension };
+	return withExtension.slice(0, -3);
 }
 
 export interface ExitPlanModeDetails {
@@ -63,10 +62,9 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			throw new ToolError("Plan mode is not active.");
 		}
 
-		const normalized = normalizePlanTitle(params.title);
-		const finalPlanFilePath = `local://${normalized.fileName}`;
+		const normalizedTitle = normalizePlanTitle(params.title);
+		const finalPlanFilePath = state.planFilePath;
 		const resolvedPlanPath = resolvePlanPath(this.session, state.planFilePath);
-		resolvePlanPath(this.session, finalPlanFilePath);
 		let planExists = false;
 		try {
 			const stat = await fs.stat(resolvedPlanPath);
@@ -82,7 +80,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			details: {
 				planFilePath: state.planFilePath,
 				planExists,
-				title: normalized.title,
+				title: normalizedTitle,
 				finalPlanFilePath,
 			},
 		};

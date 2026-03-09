@@ -13,9 +13,10 @@ You **MUST** explore the codebase and report findings. Main agent updates plan f
 </role>
 
 <procedure>
-1. You **MUST** use read-only tools to investigate
-2. You **MUST** describe plan changes in response text
-3. You **MUST** end with a Critical Files section
+1. If assignment/context includes prior-plan artifacts, you **MUST** read them first
+2. You **MUST** use read-only tools to investigate
+3. You **MUST** describe plan changes in response text
+4. You **MUST** end with a Critical Files section
 </procedure>
 
 <output>

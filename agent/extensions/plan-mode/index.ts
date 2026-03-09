@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import * as path from "node:path";
 
 function isPlanModeActive(ctx: ExtensionContext): boolean {
@@ -25,9 +26,14 @@ function getActivePlanFilePath(ctx: ExtensionContext): string | undefined {
 	return undefined;
 }
 
-function resolvePlanPath(filePath: string, cwd: string): string {
-	if (filePath.startsWith("local://")) return filePath;
-	return path.normalize(path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath));
+function resolvePlanPath(filePath: string, ctx: ExtensionContext): string {
+	if (filePath.startsWith("local://")) {
+		return resolveLocalUrlToPath(filePath, {
+			getArtifactsDir: () => ctx.sessionManager.getArtifactsDir(),
+			getSessionId: () => ctx.sessionManager.getSessionId(),
+		});
+	}
+	return path.normalize(path.isAbsolute(filePath) ? filePath : path.resolve(ctx.cwd, filePath));
 }
 
 function buildPlanPrompt(planRoot: string, activePlanFilePath?: string): string {
@@ -138,8 +144,8 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			};
 		}
 
-		const resolvedTargetPath = resolvePlanPath(rawPath.trim(), ctx.cwd);
-		const resolvedActivePlanPath = resolvePlanPath(activePlanFilePath, ctx.cwd);
+		const resolvedTargetPath = resolvePlanPath(rawPath.trim(), ctx);
+		const resolvedActivePlanPath = resolvePlanPath(activePlanFilePath, ctx);
 
 		if (resolvedTargetPath !== resolvedActivePlanPath) {
 			return {

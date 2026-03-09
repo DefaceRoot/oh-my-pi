@@ -820,7 +820,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private getPlanFilePath(): string {
-		return "local://PLAN.md";
+		return ".omp/sessions/plans/manual/plan.md";
 	}
 
 	private resolvePlanFilePath(planFilePath: string): string {
@@ -984,7 +984,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	private async approvePlan(planContent: string): Promise<void> {
+	private async approvePlan(planContent: string, finalPlanFilePath: string): Promise<void> {
 		const previousTools = this.planModePreviousTools ?? this.session.getActiveToolNames();
 		await this.exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
@@ -992,7 +992,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		this.session.markPlanReferenceSent();
-		const prompt = renderPromptTemplate(planModeApprovedPrompt, { planContent });
+		const prompt = renderPromptTemplate(planModeApprovedPrompt, { planContent, finalPlanFilePath });
 		await this.session.prompt(prompt);
 	}
 
@@ -1031,7 +1031,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		]);
 
 		if (choice === "Approve and execute") {
-			await this.approvePlan(planContent);
+			await this.approvePlan(planContent, details.finalPlanFilePath || planFilePath);
 			return;
 		}
 		if (choice === "Refine plan") {
