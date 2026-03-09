@@ -1,33 +1,15 @@
 import { Container, matchesKey, Spacer, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { DynamicBorder } from "./components/dynamic-border";
 import { theme } from "./theme/theme";
+import type { SubagentNavigatorSelection, SubagentViewGroup, SubagentViewRef } from "./subagent-view/types";
 
-export interface SubagentViewRef {
-	id: string;
-	sessionPath?: string;
-	outputPath?: string;
-	agent?: string;
-	description?: string;
-	model?: string;
-	tokens?: number;
-	contextPreview?: string;
-	rootId?: string;
-	parentId?: string;
-	depth?: number;
-	lastUpdatedMs?: number;
-	lastSeenOrder?: number;
-}
-
-export interface SubagentViewGroup {
-	rootId: string;
-	refs: SubagentViewRef[];
-	lastUpdatedMs: number;
-}
-
-export interface SubagentNavigatorSelection {
-	groupIndex: number;
-	nestedIndex: number;
-}
+export type {
+	SubagentIndexSnapshot,
+	SubagentNavigatorSelection,
+	SubagentStatus,
+	SubagentViewGroup,
+	SubagentViewRef,
+} from "./subagent-view/types";
 
 export class SubagentNavigatorComponent extends Container {
 	private groups: SubagentViewGroup[] = [];
