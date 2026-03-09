@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -12,12 +12,12 @@ function createMode(tempDir: string, entries: unknown[] = []): InteractiveMode {
 	const sessionFile = path.join(tempDir, SESSION_FILE_NAME);
 	const mode = Object.create(InteractiveMode.prototype) as InteractiveMode & {
 		sessionManager: {
-			getBranch: () => unknown[];
+			getEntries: () => unknown[];
 			getSessionFile: () => string;
 		};
 	};
 	mode.sessionManager = {
-		getBranch: () => entries,
+		getEntries: () => entries,
 		getSessionFile: () => sessionFile,
 	};
 	return mode;
@@ -34,6 +34,9 @@ async function seedNestedArtifacts(tempDir: string): Promise<void> {
 	await mkdir(nestedArtifactsDir, { recursive: true });
 	await writeFile(rootTaskSessionFile, '{"type":"session_init","task":"Investigate the broken workflow"}\n', "utf8");
 	await writeFile(nestedTaskSessionFile, '{"type":"session_init","task":"Trace the nested worker"}\n', "utf8");
+	const fixedMtime = new Date("2025-01-01T00:00:00.000Z");
+	await utimes(rootTaskSessionFile, fixedMtime, fixedMtime);
+	await utimes(nestedTaskSessionFile, fixedMtime, fixedMtime);
 }
 
 describe("InteractiveMode subagent discovery", () => {
@@ -62,18 +65,19 @@ describe("InteractiveMode subagent discovery", () => {
 		await seedNestedArtifacts(tempDir);
 		const mode = createMode(tempDir);
 
-		const rows = (mode as any).buildSidebarSubagents([]);
+		const rows = (mode as any).buildSidebarSubagents();
 
 		expect(rows).toBeDefined();
 		expect(
-			rows.map((row: { id: string; depth: number; isRoot: boolean }) => ({
+			rows.map((row: { id: string; agentName: string; status: "running" | "completed" | "failed"; description?: string }) => ({
 				id: row.id,
-				depth: row.depth,
-				isRoot: row.isRoot,
+				agentName: row.agentName,
+				status: row.status,
+				description: row.description,
 			})),
 		).toEqual([
-			{ id: ROOT_TASK_ID, depth: 0, isRoot: true },
-			{ id: NESTED_TASK_ID, depth: 1, isRoot: false },
+			{ id: ROOT_TASK_ID, agentName: "task", status: "completed", description: undefined },
+			{ id: NESTED_TASK_ID, agentName: "task", status: "completed", description: undefined },
 		]);
 	});
 });
