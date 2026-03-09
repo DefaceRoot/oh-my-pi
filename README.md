@@ -622,7 +622,7 @@ These are **in-chat slash commands** (not CLI subcommands).
 | `/session` | Show session info and usage |
 | `/usage` | Show provider usage and limits |
 | `/hotkeys` | Show keyboard shortcuts |
-| `/lazygit` | Open lazygit |
+| `/lazygit` | Open Lazygit |
 | `/extensions` (`/status`) | Open Extension Control Center |
 | `/changelog` | Show changelog entries |
 | `/tree` | Navigate session tree |
@@ -679,23 +679,23 @@ Bundled custom slash commands include `/review` (interactive code review launche
 
 **Other:**
 
-| Key                   | Action                                                    |
-| --------------------- | --------------------------------------------------------- |
-| Tab                   | Path completion / accept autocomplete                     |
-| Escape                | Cancel autocomplete / abort streaming                     |
-| Ctrl+C                | Clear editor (first) / exit (second)                      |
-| Ctrl+D                | Exit (when editor is empty)                               |
-| Ctrl+Z                | Suspend to background (use `fg` in shell to resume)       |
-| Shift+Tab             | Cycle thinking level                                      |
+| Key                   | Action                                                               |
+| --------------------- | -------------------------------------------------------------------- |
+| Tab                   | Path completion / accept autocomplete                                |
+| Escape                | Cancel autocomplete / abort streaming                                |
+| Ctrl+C                | Clear editor (first) / exit (second)                                 |
+| Ctrl+D                | Exit (when editor is empty)                                          |
+| Ctrl+Z                | Suspend to background (use `fg` in shell to resume)                  |
+| Shift+Tab             | Cycle thinking level                                                 |
 | Ctrl+P / Shift+Ctrl+P | Cycle role models (orchestrator/default/explore), temporary on shift |
-| Alt+P                 | Select model temporarily                                  |
-| Ctrl+L                | Open model selector                                       |
-| Alt+Shift+P           | Toggle plan mode                                          |
-| Ctrl+R                | Search prompt history                                     |
-| Ctrl+O                | Toggle tool output expansion                              |
-| Ctrl+T                | Toggle todo list expansion                                |
-| Ctrl+G                | Open lazygit                                              |
-| Alt+H                 | Toggle speech-to-text recording                           |
+| Alt+P                 | Select model temporarily                                             |
+| Ctrl+L                | Open model selector                                                  |
+| Alt+Shift+P           | Toggle plan mode                                                     |
+| Ctrl+R                | Search prompt history                                                |
+| Ctrl+O                | Toggle tool output expansion                                         |
+| Ctrl+T                | Toggle todo list expansion                                           |
+| Ctrl+G                | Open Lazygit                                                         |
+| Alt+H                 | Toggle speech-to-text recording                                      |
 
 ### Bash Mode
 
@@ -1181,14 +1181,14 @@ omp --export session.jsonl output.html
 
 ### Environment Variables
 
-| Variable                                          | Description                                             |
-| ------------------------------------------------- | ------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.       | Provider credentials                                    |
-| `PI_CODING_AGENT_DIR`                             | Override agent data directory (default: `~/.omp/agent`) |
-| `PI_PACKAGE_DIR`                                  | Override package directory resolution                   |
+| Variable                                                     | Description                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.                  | Provider credentials                                    |
+| `PI_CODING_AGENT_DIR`                                        | Override agent data directory (default: `~/.omp/agent`) |
+| `PI_PACKAGE_DIR`                                             | Override package directory resolution                   |
 | `PI_EXPLORE_MODEL`, `PI_ORCHESTRATOR_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
-| `PI_NO_PTY`                                       | Disable PTY-based bash execution                        |
-| `VISUAL`, `EDITOR`                                | External editor command                                 |
+| `PI_NO_PTY`                                                  | Disable PTY-based bash execution                        |
+| `VISUAL`, `EDITOR`                                           | External editor command (editor binding is configurable) |
 
 See [Environment Variables](docs/environment-variables.md) for the complete reference.
 
