@@ -29,6 +29,8 @@ import { type ConfigError, ConfigFile } from "../config";
 import type { ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 
+export { RolesConfig, RolesConfigFile } from "./roles-config";
+
 export const kNoAuth = "N/A";
 
 export function isAuthenticated(apiKey: string | undefined | null): apiKey is string {
