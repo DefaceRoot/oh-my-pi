@@ -191,8 +191,7 @@ async function verifyInstalledVersion(
 ): Promise<{ ok: boolean; actual?: string; path?: string; pathMismatch?: boolean }> {
 	const ompPath = resolveOmpPath();
 	const pathMismatch =
-		expectedMethod === "bun" &&
-		(!ompPath || resolveUpdateMethod(ompPath, await getBunGlobalBinDir()) !== "bun");
+		expectedMethod === "bun" && (!ompPath || resolveUpdateMethod(ompPath, await getBunGlobalBinDir()) !== "bun");
 
 	if (!ompPath) return { ok: false, pathMismatch };
 

@@ -1,5 +1,5 @@
-import process from "node:process";
 import { existsSync } from "node:fs";
+import process from "node:process";
 
 import { $env } from "@oh-my-pi/pi-utils";
 import { FORK_DIRECT_ENTRY } from "../cli/update-cli";
