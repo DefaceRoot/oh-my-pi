@@ -1,6 +1,6 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: openai-codex/gpt-5.4:xhigh
+  default: zai/glm-5:high
   ask: kimi-code/kimi-k2
   orchestrator: openai-codex/gpt-5.4:medium
   plan: anthropic/claude-opus-4-6:xhigh
@@ -10,8 +10,8 @@ modelRoles:
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
-  research: anthropic/claude-sonnet-4-6:high
-  verifier: anthropic/claude-opus-4-6:high
+  research: kimi-code/kimi-k2.5:high
+  verifier: google-antigravity/claude-opus-4-6-thinking:high
   worktree-setup: kimi-code/kimi-k2.5:medium
   code-reviewer: openai-codex/gpt-5.4:high
   plan-verifier: openai-codex/gpt-5.4:high
