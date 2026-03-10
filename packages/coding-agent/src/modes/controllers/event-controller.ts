@@ -43,7 +43,6 @@ export class EventController {
 			await this.ctx.init();
 		}
 
-
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorTopBorder();
 
@@ -249,6 +248,13 @@ export class EventController {
 					const details = event.result.details as { todos?: TodoItem[] } | undefined;
 					if (details?.todos) {
 						this.ctx.setTodos(details.todos);
+					}
+				}
+				// Ingest task results into SubagentIndex for live subagent metadata updates
+				if (event.toolName === "task" && !event.isError) {
+					const taskDetails = event.result.details as { results?: unknown[] } | undefined;
+					if (Array.isArray(taskDetails?.results) && taskDetails.results.length > 0) {
+						this.ctx.ingestTaskToolResult(taskDetails.results);
 					}
 				}
 				if (event.toolName === "exit_plan_mode" && !event.isError) {

@@ -172,11 +172,14 @@ export interface InteractiveModeContext {
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	handleDequeue(): void;
-	cycleSubagentView(direction?: 1 | -1): Promise<void>;
-	cycleSubagentNestedView(direction?: 1 | -1): Promise<void>;
+	openSubagentNavigator(): void;
+	openSubagentViewerForRoot(direction: 1 | -1): Promise<void>;
+	openSubagentViewerNewest(): Promise<void>;
+	requestSubagentRefresh(reason: "manual" | "watch" | "bootstrap"): void;
+	handleSessionRootChange(): void;
 	exitSubagentView(): void;
 	isSubagentViewActive(): boolean;
-	isSubagentNestedArrowModeEnabled(): boolean;
+	ingestTaskToolResult(results: unknown[]): void;
 	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
 	cycleThinkingLevel(): void;

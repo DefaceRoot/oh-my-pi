@@ -3,7 +3,6 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
@@ -28,12 +27,12 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import type { MCPManager } from "../mcp";
+import { mergePlanModeMainAgentTools } from "../plan-mode/main-agent-tools";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
-import type { SessionContext, SessionManager } from "../session/session-manager";
-import { getRecentSessions } from "../session/session-manager";
+import { getRecentSessions, type SessionContext, SessionManager } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -66,12 +65,15 @@ import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
-import {
-	SubagentNavigatorComponent,
-	type SubagentNavigatorSelection,
-	type SubagentViewGroup,
-	type SubagentViewRef,
-} from "./subagent-navigator";
+import { SubagentIndex } from "./subagent-view/subagent-index";
+import { SubagentNavigatorModal } from "./subagent-view/subagent-navigator-modal";
+import { SubagentArtifactsWatchManager } from "./subagent-view/subagent-watch";
+import type {
+	SubagentIndexSnapshot,
+	SubagentNavigatorSelection,
+	SubagentViewGroup,
+	SubagentViewRef,
+} from "./subagent-view/types";
 import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme, ThemeColor } from "./theme/theme";
 import { getEditorTheme, getMarkdownTheme, onThemeChange, theme } from "./theme/theme";
@@ -87,6 +89,9 @@ const SIDEBAR_WIDTH = 38;
 const SIDEBAR_MIN_WIDTH = 120;
 const SIDEBAR_SUBAGENT_LIMIT = 8;
 const SIDEBAR_MODIFIED_FILES_REFRESH_MS = 5_000;
+
+const SUBAGENT_EMPTY_STATE_MESSAGE = "No subagent transcripts found in this session yet.";
+type SubagentRefreshReason = "manual" | "watch" | "bootstrap";
 
 type SidebarSessionLspServer = {
 	name: string;
@@ -240,6 +245,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	private planModePreviousModel: Model | undefined;
 	private pendingModelSwitch: Model | undefined;
 	private hoveredActionButtonLabel: string | undefined;
+	private subagentIndex: SubagentIndex;
+	private subagentSnapshot: SubagentIndexSnapshot = {
+		version: 0,
+		updatedAt: 0,
+		refs: [],
+		groups: [],
+	};
+	private subagentRefreshInFlight: Promise<void> | undefined;
+	private subagentRefreshQueuedReason: SubagentRefreshReason | undefined;
+	private subagentRefreshGeneration = 0;
+	private subagentWatchCleanup: (() => void) | undefined;
+	private subagentWatchManager: SubagentArtifactsWatchManager | undefined;
 	private subagentCycleSignature: string | undefined;
 	private subagentCycleIndex = -1;
 	private subagentNestedCycleIndex = -1;
@@ -248,9 +265,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	private subagentSessionOverlay: OverlayHandle | undefined;
 	private subagentViewRequestToken = 0;
 	private subagentViewActiveId: string | undefined;
-	private subagentViewRefreshInterval: ReturnType<typeof setInterval> | undefined;
-	private subagentNavigatorComponent: SubagentNavigatorComponent | undefined;
-	private subagentNavigatorClose: (() => void) | undefined;
+	private subagentNavigatorComponent: SubagentNavigatorModal | undefined;
 	private subagentNavigatorOverlay: ReturnType<TUI["showOverlay"]> | undefined;
 	private subagentNavigatorGroups: SubagentViewGroup[] = [];
 	private sidebarModifiedFiles: SidebarModel["modifiedFiles"] = [];
@@ -289,6 +304,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.toolUiContextSetter = setToolUIContext;
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
+		this.subagentIndex = this.createSubagentIndex();
+		this.subagentSnapshot = this.subagentIndex.getSnapshot();
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
@@ -492,6 +509,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.subscribeToAgent();
+		this.requestSubagentRefresh("bootstrap");
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -639,32 +657,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.sidebarAnimationFrame = 0;
 	}
 
-	private buildSubagentStatusMap(): Map<string, SidebarSubagent["status"]> {
-		const statuses = new Map<string, SidebarSubagent["status"]>();
-		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type !== "message") continue;
-			const message = (entry as { message?: Record<string, unknown> }).message;
-			if (!message || message.role !== "toolResult" || message.toolName !== "task") continue;
-			const details = message.details as Record<string, unknown> | undefined;
-			const results = Array.isArray(details?.results) ? details.results : [];
-			for (const result of results) {
-				if (!result || typeof result !== "object") continue;
-				const record = result as Record<string, unknown>;
-				const id = typeof record.id === "string" ? record.id.trim() : "";
-				if (!id) continue;
-				const aborted = record.aborted === true;
-				const exitCode = typeof record.exitCode === "number" ? record.exitCode : 0;
-				const hasError = typeof record.error === "string" && record.error.length > 0;
-				statuses.set(id, aborted || hasError || exitCode !== 0 ? "failed" : "completed");
-			}
-		}
-		return statuses;
-	}
-
 	private buildSidebarSubagents(): SidebarModel["subagents"] {
-		const refs = this.collectSubagentViewRefs().slice(0, SIDEBAR_SUBAGENT_LIMIT);
+		const refs = this.getSnapshotRefs().slice(0, SIDEBAR_SUBAGENT_LIMIT);
 		if (refs.length === 0) return undefined;
-		const statuses = this.buildSubagentStatusMap();
 		const now = Date.now();
 		return refs.map(ref => {
 			const isRecent =
@@ -673,13 +668,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				now - ref.lastUpdatedMs <= 30_000;
 			const inferredStatus: SidebarSubagent["status"] =
 				ref.id === this.subagentViewActiveId || isRecent ? "running" : "completed";
-			const recordedStatus = statuses.get(ref.id);
+			const statusFromRef = ref.status;
 			const status: SidebarSubagent["status"] =
-				recordedStatus === "failed"
+				statusFromRef === "failed" || statusFromRef === "cancelled"
 					? "failed"
 					: inferredStatus === "running"
 						? "running"
-						: (recordedStatus ?? "completed");
+						: statusFromRef === "pending"
+							? "running"
+							: "completed";
 			return {
 				id: ref.id,
 				agentName: ref.agent ?? "task",
@@ -906,9 +903,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const planFilePath = options?.planFilePath ?? this.getPlanFilePath();
 		const previousTools = this.session.getActiveToolNames();
-		const hasExitTool = this.session.getToolByName("exit_plan_mode") !== undefined;
-		const planTools = hasExitTool ? [...previousTools, "exit_plan_mode"] : previousTools;
-		const uniquePlanTools = [...new Set(planTools)];
+		const uniquePlanTools = mergePlanModeMainAgentTools(
+			previousTools,
+			toolName => this.session.getToolByName(toolName) !== undefined,
+		);
 
 		this.planModePreviousTools = previousTools;
 		this.planModePlanFilePath = planFilePath;
@@ -1043,7 +1041,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		this.inputController.dispose();
 		this.stopSidebarAnimation();
+		this.exitSubagentView();
+		this.disposeSubagentWatchCleanup();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
@@ -1273,6 +1274,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		this.uiHelpers.addMessageToChat(message, options);
+		const toolMessage = message as { role?: string; toolName?: string };
+		if (toolMessage.role === "toolResult" && toolMessage.toolName === "task") {
+			this.requestSubagentRefresh("watch");
+		}
 	}
 
 	renderSessionContext(
@@ -1283,7 +1288,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	renderInitialMessages(): void {
-		this.stopSubagentViewRefresh();
 		this.subagentNavigatorOverlay?.hide();
 		this.subagentSessionOverlay?.hide();
 		this.subagentViewRequestToken += 1;
@@ -1295,7 +1299,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentSessionOverlay = undefined;
 		this.subagentViewActiveId = undefined;
 		this.subagentNavigatorComponent = undefined;
-		this.subagentNavigatorClose = undefined;
 		this.subagentNavigatorOverlay = undefined;
 		this.subagentNavigatorGroups = [];
 		this.statusLine.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
@@ -1445,39 +1448,47 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.inputController.handleDequeue();
 	}
 
-	async cycleSubagentView(direction: 1 | -1 = 1): Promise<void> {
-		if (this.subagentNavigatorComponent) {
-			this.subagentNavigatorComponent.moveRoot(direction);
-			return;
-		}
-		if (this.subagentSessionViewer && this.subagentViewActiveId) {
-			await this.navigateSubagentView("root", direction);
-			return;
-		}
-		this.openSubagentNavigator({ scope: "root", direction });
+	openSubagentNavigator(): void {
+		this.openSubagentNavigatorOverlay({ scope: "root", direction: 1 });
 	}
 
-	async cycleSubagentNestedView(direction: 1 | -1 = 1): Promise<void> {
-		if (this.subagentNavigatorComponent) {
-			this.subagentNavigatorComponent.moveNested(direction);
-			return;
-		}
-		if (this.subagentSessionViewer && this.subagentViewActiveId) {
-			await this.navigateSubagentView("nested", direction);
-			return;
-		}
-		this.openSubagentNavigator({ scope: "nested", direction });
+	async openSubagentViewerForRoot(direction: 1 | -1): Promise<void> {
+		await this.navigateSubagentView("root", direction);
 	}
 
-	private openSubagentNavigator(options: { scope: "root" | "nested"; direction: 1 | -1 }): void {
-		const refs = this.collectSubagentViewRefs();
-		if (refs.length === 0) {
-			this.showStatus("No subagent transcripts found in this session yet.");
-			return;
-		}
-		const groups = this.buildSubagentViewGroups(refs);
+	async openSubagentViewerNewest(): Promise<void> {
+		const groups = this.getSnapshotGroups();
 		if (groups.length === 0) {
-			this.showStatus("No subagent transcripts found in this session yet.");
+			this.showStatus(SUBAGENT_EMPTY_STATE_MESSAGE);
+			return;
+		}
+		this.subagentNavigatorGroups = groups;
+		await this.openSubagentTranscriptFromNavigator({ groupIndex: 0, nestedIndex: -1 });
+	}
+
+	requestSubagentRefresh(reason: SubagentRefreshReason): void {
+		this.requestIndexRefresh(reason);
+	}
+
+	ingestTaskToolResult(results: unknown[]): void {
+		this.subagentIndex.ingestTaskResults(results);
+		this.requestSubagentRefresh("watch");
+	}
+
+	handleSessionRootChange(): void {
+		this.exitSubagentView();
+		this.disposeSubagentWatchCleanup();
+		this.subagentRefreshGeneration += 1;
+		this.subagentRefreshQueuedReason = undefined;
+		this.subagentIndex = this.createSubagentIndex();
+		this.subagentSnapshot = this.subagentIndex.getSnapshot();
+		this.requestSubagentRefresh("bootstrap");
+	}
+
+	private openSubagentNavigatorOverlay(options: { scope: "root" | "nested"; direction: 1 | -1 }): void {
+		const groups = this.getSnapshotGroups();
+		if (groups.length === 0) {
+			this.showStatus(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 
@@ -1500,19 +1511,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNestedCycleIndex = this.clampSubagentNestedSelection(selectedGroup, this.subagentNestedCycleIndex);
 		const selected = this.getSubagentSelectionRef(selectedGroup, this.subagentNestedCycleIndex);
 		if (!selected) {
-			this.showStatus("No subagent transcripts found in this session yet.");
+			this.showStatus(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 
 		if (this.subagentNavigatorComponent) {
+			// Navigator already exists — update data in-place and unhide if hidden
 			this.subagentNavigatorComponent.setGroups(groups, {
 				groupIndex: this.subagentCycleIndex,
 				nestedIndex: this.subagentNestedCycleIndex,
 			});
-			if (options.scope === "root") {
-				this.subagentNavigatorComponent.moveRoot(options.direction);
-			} else {
-				this.subagentNavigatorComponent.moveNested(options.direction);
+			if (this.subagentNavigatorOverlay?.isHidden()) {
+				this.subagentNavigatorOverlay.setHidden(false);
 			}
 			return;
 		}
@@ -1521,38 +1531,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			{ groupIndex: this.subagentCycleIndex, nestedIndex: this.subagentNestedCycleIndex },
 			groups,
 		);
-		const leaderKey = this.keybindings.getDisplayString("cycleSubagentForward") || "Ctrl+X";
-		const closeNavigator = () => {
-			const overlay = this.subagentNavigatorOverlay;
-			this.subagentNavigatorOverlay = undefined;
-			overlay?.hide();
-			this.subagentNavigatorComponent = undefined;
-			this.subagentNavigatorClose = undefined;
-			this.subagentNavigatorGroups = [];
-			this.subagentViewActiveId = undefined;
-			this.subagentCycleSignature = undefined;
-			this.subagentCycleIndex = -1;
-			this.subagentNestedCycleIndex = -1;
-			this.subagentNestedArrowMode = false;
-			if (!this.subagentSessionViewer) {
-				this.statusLine.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
-			}
-			this.ui.requestRender();
-		};
-		const navigator = new SubagentNavigatorComponent(
+		const navigator = new SubagentNavigatorModal(
 			groups,
 			{ groupIndex: this.subagentCycleIndex, nestedIndex: this.subagentNestedCycleIndex },
 			{
-				leaderKey,
 				onSelectionChange: selection => this.applySubagentNavigatorSelection(selection, groups),
 				onOpenSelection: selection => {
 					void this.openSubagentTranscriptFromNavigator(selection);
 				},
-				onClose: closeNavigator,
+				onClose: () => this.exitSubagentView(),
 			},
 		);
 		this.subagentNavigatorComponent = navigator;
-		this.subagentNavigatorClose = closeNavigator;
 		this.subagentNavigatorOverlay = this.ui.showOverlay(navigator, {
 			width: "92%",
 			maxHeight: "80%",
@@ -1613,22 +1603,28 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private async openSubagentTranscriptFromNavigator(selection: SubagentNavigatorSelection): Promise<void> {
-		const groups = this.subagentNavigatorGroups;
+		await this.openSubagentTranscriptFromGroups(this.subagentNavigatorGroups, selection);
+	}
+
+	private async openSubagentTranscriptFromGroups(
+		groups: SubagentViewGroup[],
+		selection: SubagentNavigatorSelection,
+	): Promise<void> {
 		if (groups.length === 0) {
-			this.showWarning("No subagent transcripts found in this session yet.");
+			this.showWarning(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 		const groupIndex = Math.max(0, Math.min(selection.groupIndex, groups.length - 1));
 		const selectedGroup = groups[groupIndex] ?? groups[0];
 		if (!selectedGroup) {
-			this.showWarning("No subagent transcripts found in this session yet.");
+			this.showWarning(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 		const nestedIndex = this.clampSubagentNestedSelection(selectedGroup, selection.nestedIndex);
 		const openedFromRootSelection = nestedIndex < 0;
 		const selected = this.getSubagentSelectionRef(selectedGroup, nestedIndex);
 		if (!selected) {
-			this.showWarning("No subagent transcripts found in this session yet.");
+			this.showWarning(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 		const requestToken = ++this.subagentViewRequestToken;
@@ -1639,7 +1635,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		this.closeSubagentNavigator();
+		// Hide the navigator overlay (do not destroy) — viewer close returns to it
+		this.subagentNavigatorOverlay?.setHidden(true);
 		this.subagentCycleSignature = this.buildSubagentCycleSignature(groups);
 		const confirmedSelection = this.findSubagentSelection(groups, selected.id);
 		if (confirmedSelection) {
@@ -1649,32 +1646,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNestedArrowMode = openedFromRootSelection;
 		this.subagentViewActiveId = selected.id;
 		await this.renderSubagentSession(selected, transcript, groups);
-		this.startSubagentViewRefresh();
 	}
 
 	private closeSubagentNavigator(): void {
-		if (!this.subagentNavigatorClose) {
-			this.subagentNavigatorOverlay?.hide();
-			this.subagentNavigatorOverlay = undefined;
-			this.subagentNestedArrowMode = false;
-			return;
-		}
-		const closeNavigator = this.subagentNavigatorClose;
-		closeNavigator();
+		this.subagentNavigatorOverlay?.hide();
+		this.subagentNavigatorOverlay = undefined;
+		this.subagentNavigatorComponent = undefined;
+		this.subagentNavigatorGroups = [];
+		this.subagentNestedArrowMode = false;
 	}
 
 	private async navigateSubagentView(scope: "root" | "nested", direction: 1 | -1): Promise<void> {
-		const refs = this.collectSubagentViewRefs();
-		if (refs.length === 0) {
-			this.exitSubagentView();
-			this.showStatus("No subagent transcripts found in this session yet.");
-			return;
-		}
-
-		const groups = this.buildSubagentViewGroups(refs);
+		const groups = this.getSnapshotGroups();
 		if (groups.length === 0) {
 			this.exitSubagentView();
-			this.showStatus("No subagent transcripts found in this session yet.");
+			this.showStatus(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 
@@ -1718,7 +1704,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNestedCycleIndex = this.clampSubagentNestedSelection(selectedGroup, this.subagentNestedCycleIndex);
 		const selected = this.getSubagentSelectionRef(selectedGroup, this.subagentNestedCycleIndex);
 		if (!selected) {
-			this.showWarning("No subagent transcripts found in this session yet.");
+			this.showWarning(SUBAGENT_EMPTY_STATE_MESSAGE);
 			return;
 		}
 		const requestToken = ++this.subagentViewRequestToken;
@@ -1731,15 +1717,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.subagentViewActiveId = selected.id;
 		await this.renderSubagentSession(selected, transcript, groups);
-		this.startSubagentViewRefresh();
 	}
 
 	exitSubagentView(): void {
-		if (this.subagentNavigatorClose || this.subagentNavigatorOverlay) {
-			this.closeSubagentNavigator();
-			return;
-		}
-		this.stopSubagentViewRefresh();
+		this.closeSubagentNavigator();
 		this.subagentViewRequestToken += 1;
 		this.closeSubagentSessionViewer();
 		this.subagentViewActiveId = undefined;
@@ -1748,47 +1729,35 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentNestedCycleIndex = -1;
 		this.subagentNestedArrowMode = false;
 		this.subagentNavigatorComponent = undefined;
-		this.subagentNavigatorClose = undefined;
 		this.subagentNavigatorOverlay = undefined;
 		this.subagentNavigatorGroups = [];
 		this.statusLine.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
 		this.ui.requestRender();
 	}
 
-	isSubagentViewActive(): boolean {
-		return Boolean(
-			this.subagentNavigatorClose ||
-				this.subagentNavigatorOverlay ||
-				this.subagentSessionOverlay ||
-				this.subagentViewActiveId,
-		);
-	}
-
-	isSubagentNestedArrowModeEnabled(): boolean {
-		return this.subagentNestedArrowMode;
-	}
-
-	private startSubagentViewRefresh(): void {
-		if (this.subagentViewRefreshInterval) return;
-		this.subagentViewRefreshInterval = setInterval(() => {
-			void this.refreshSubagentView();
-		}, 900);
-	}
-
-	private stopSubagentViewRefresh(): void {
-		if (!this.subagentViewRefreshInterval) return;
-		clearInterval(this.subagentViewRefreshInterval);
-		this.subagentViewRefreshInterval = undefined;
-	}
-
-	private async refreshSubagentView(): Promise<void> {
-		if (!this.subagentViewActiveId) return;
-		const refs = this.collectSubagentViewRefs();
-		if (refs.length === 0) {
-			this.exitSubagentView();
+	/**
+	 * Called when the viewer's Esc is pressed. If a hidden navigator exists,
+	 * unhide it and hide the viewer. Otherwise, perform a full exit.
+	 */
+	private returnToNavigatorOrExit(): void {
+		if (this.subagentNavigatorComponent && this.subagentNavigatorOverlay) {
+			// Return to navigator: hide viewer, unhide navigator
+			this.subagentSessionOverlay?.setHidden(true);
+			this.subagentNavigatorOverlay.setHidden(false);
+			this.subagentNestedArrowMode = false;
+			this.ui.requestRender();
 			return;
 		}
-		const groups = this.buildSubagentViewGroups(refs);
+		this.exitSubagentView();
+	}
+
+	isSubagentViewActive(): boolean {
+		return Boolean(this.subagentNavigatorOverlay || this.subagentSessionOverlay);
+	}
+
+	private async refreshActiveViewerTranscript(): Promise<void> {
+		if (!this.subagentViewActiveId) return;
+		const groups = this.getSnapshotGroups();
 		if (groups.length === 0) {
 			this.exitSubagentView();
 			return;
@@ -1813,6 +1782,182 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (requestToken !== this.subagentViewRequestToken || !transcript) return;
 		this.subagentViewActiveId = selected.id;
 		await this.renderSubagentSession(selected, transcript, groups);
+	}
+
+	private createSubagentIndex(): SubagentIndex {
+		const sessionFile = this.sessionManager.getSessionFile();
+		const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : undefined;
+		return new SubagentIndex({ artifactsDir });
+	}
+
+	private getSnapshotRefs(): SubagentViewRef[] {
+		return this.subagentSnapshot?.refs ?? [];
+	}
+
+	private getSnapshotGroups(): SubagentViewGroup[] {
+		if (Array.isArray(this.subagentSnapshot?.groups) && this.subagentSnapshot.groups.length > 0) {
+			return this.subagentSnapshot.groups;
+		}
+		if (Array.isArray(this.subagentSnapshot?.refs) && this.subagentSnapshot.refs.length > 0) {
+			return this.buildSubagentViewGroups(this.subagentSnapshot.refs);
+		}
+		return [];
+	}
+
+	private collectTaskResultsFromSessionEntries(): unknown[] {
+		const results: unknown[] = [];
+		for (const entry of this.sessionManager.getEntries()) {
+			if (entry.type !== "message") continue;
+			const message = (entry as { message?: Record<string, unknown> }).message;
+			if (!message || message.role !== "toolResult" || message.toolName !== "task") continue;
+			const details = message.details as Record<string, unknown> | undefined;
+			const entries = Array.isArray(details?.results) ? details.results : [];
+			results.push(...entries);
+		}
+		return results;
+	}
+
+	private requestIndexRefresh(reason: SubagentRefreshReason): void {
+		this.subagentRefreshQueuedReason = reason;
+		if (this.subagentRefreshInFlight) return;
+		this.subagentRefreshInFlight = this.runRequestedSubagentRefreshes();
+	}
+
+	private async runRequestedSubagentRefreshes(): Promise<void> {
+		try {
+			while (this.subagentRefreshQueuedReason) {
+				const reason = this.subagentRefreshQueuedReason;
+				this.subagentRefreshQueuedReason = undefined;
+				await this.refreshSubagentIndex(reason);
+			}
+		} finally {
+			this.subagentRefreshInFlight = undefined;
+		}
+	}
+
+	private async refreshSubagentIndex(reason: SubagentRefreshReason): Promise<void> {
+		const refreshGeneration = this.subagentRefreshGeneration;
+		const isBootstrap = reason === "bootstrap";
+
+		// Show loading state during bootstrap so the UI signals activity
+		if (isBootstrap && this.isInitialized) {
+			this.statusLine?.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, "loading\u2026");
+		}
+
+		const taskResults = this.collectTaskResultsFromSessionEntries();
+		if (taskResults.length > 0) {
+			this.subagentIndex.ingestTaskResults(taskResults);
+		}
+		const snapshot = await this.subagentIndex.reconcile();
+		if (refreshGeneration !== this.subagentRefreshGeneration) return;
+
+		// Clear bootstrap loading state
+		if (isBootstrap && this.isInitialized) {
+			this.statusLine?.setHookStatus(SUBAGENT_VIEWER_STATUS_KEY, undefined);
+		}
+
+		// Start watch manager after first bootstrap if not already watching
+		if (isBootstrap && !this.subagentWatchManager) {
+			this.startSubagentWatchManager();
+		}
+
+		const previousVersion = this.subagentSnapshot.version;
+		this.subagentSnapshot = snapshot;
+		if (snapshot.version !== previousVersion) {
+			await this.syncSubagentOverlaysForSnapshotChange(snapshot, reason);
+			return;
+		}
+		if (this.isInitialized) {
+			this.ui.requestRender();
+		}
+	}
+
+	private async syncSubagentOverlaysForSnapshotChange(
+		snapshot: SubagentIndexSnapshot,
+		reason: SubagentRefreshReason,
+	): Promise<void> {
+		const groups = snapshot.groups;
+		if (this.subagentNavigatorComponent) {
+			if (groups.length === 0) {
+				this.exitSubagentView();
+				if (reason !== "bootstrap") {
+					this.showStatus(SUBAGENT_EMPTY_STATE_MESSAGE);
+				}
+				return;
+			}
+			const selection =
+				this.subagentViewActiveId !== undefined
+					? this.findSubagentSelection(groups, this.subagentViewActiveId)
+					: undefined;
+			if (selection) {
+				this.subagentCycleIndex = selection.groupIndex;
+				this.subagentNestedCycleIndex = selection.refIndex;
+			} else if (this.subagentCycleIndex < 0 || this.subagentCycleIndex >= groups.length) {
+				this.subagentCycleIndex = 0;
+				this.subagentNestedCycleIndex = -1;
+			}
+			const selectedGroup = groups[this.subagentCycleIndex] ?? groups[0]!;
+			this.subagentNestedCycleIndex = this.clampSubagentNestedSelection(
+				selectedGroup,
+				this.subagentNestedCycleIndex,
+			);
+			this.subagentCycleSignature = this.buildSubagentCycleSignature(groups);
+			this.subagentNavigatorGroups = groups;
+			const selectionState = { groupIndex: this.subagentCycleIndex, nestedIndex: this.subagentNestedCycleIndex };
+			this.subagentNavigatorComponent.setGroups(groups, selectionState);
+			this.applySubagentNavigatorSelection(selectionState, groups);
+			void this.loadMissingTokensForGroups(groups);
+		}
+		if (this.subagentSessionViewer && this.subagentViewActiveId) {
+			await this.refreshActiveViewerTranscript();
+			return;
+		}
+		if (this.isInitialized) {
+			this.ui.requestRender();
+		}
+	}
+
+	private disposeSubagentWatchCleanup(): void {
+		if (this.subagentWatchManager) {
+			this.subagentWatchManager.dispose();
+			this.subagentWatchManager = undefined;
+		}
+		if (this.subagentWatchCleanup) {
+			const disposeWatch = this.subagentWatchCleanup;
+			this.subagentWatchCleanup = undefined;
+			disposeWatch();
+		}
+	}
+
+	private startSubagentWatchManager(): void {
+		const sessionFile = this.sessionManager.getSessionFile();
+		const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : undefined;
+		if (!artifactsDir) return;
+
+		const manager = new SubagentArtifactsWatchManager({
+			artifactsDir,
+			onInvalidate: () => {
+				this.requestSubagentRefresh("watch");
+			},
+		});
+
+		this.subagentWatchManager = manager;
+		manager
+			.start()
+			.then(() => {
+				if (manager.state === "degraded") {
+					const hint = this.keybindings?.getDisplayString("Ctrl+X") ?? "Ctrl+X";
+					try {
+						this.showWarning(`Watch unavailable. Use ${hint} then Ctrl+R to manually refresh subagent data.`);
+					} catch {
+						// UI may not be fully initialized yet
+					}
+					logger.warn("Subagent watch entered degraded mode", { reason: manager.degradedReason });
+				}
+			})
+			.catch(() => {
+				// Watch startup failures are non-fatal
+			});
 	}
 
 	private buildSubagentViewGroups(refs: SubagentViewRef[]): SubagentViewGroup[] {
@@ -1909,185 +2054,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private getSubagentRecencyScore(ref: SubagentViewRef): number {
 		return ref.lastUpdatedMs ?? ref.lastSeenOrder ?? 0;
-	}
-
-	private collectSubagentViewRefs(): SubagentViewRef[] {
-		const refs = new Map<string, SubagentViewRef>();
-		const sessionFile = this.sessionManager.getSessionFile();
-		const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : undefined;
-		let seenOrder = 0;
-
-		const readLastUpdatedMs = (candidatePath?: string): number | undefined => {
-			if (!candidatePath) return undefined;
-			try {
-				return fs.statSync(candidatePath).mtimeMs;
-			} catch {
-				return undefined;
-			}
-		};
-
-		const upsert = (input: {
-			id: string;
-			sessionPath?: string;
-			outputPath?: string;
-			agent?: string;
-			description?: string;
-			model?: string;
-			tokens?: number;
-			contextPreview?: string;
-			lastUpdatedMs?: number;
-			lastSeenOrder?: number;
-		}) => {
-			const {
-				id,
-				sessionPath,
-				outputPath,
-				agent,
-				description,
-				model,
-				tokens,
-				contextPreview,
-				lastUpdatedMs,
-				lastSeenOrder,
-			} = input;
-			const normalizedId = id.trim();
-			if (!normalizedId) return;
-
-			const hierarchy = this.getSubagentHierarchy(normalizedId);
-			const existing = refs.get(normalizedId) ?? {
-				id: normalizedId,
-				rootId: hierarchy.rootId,
-				parentId: hierarchy.parentId,
-				depth: hierarchy.depth,
-			};
-
-			existing.rootId = existing.rootId ?? hierarchy.rootId;
-			existing.parentId = existing.parentId ?? hierarchy.parentId;
-			existing.depth = existing.depth ?? hierarchy.depth;
-
-			if (sessionPath && !existing.sessionPath) {
-				existing.sessionPath = sessionPath;
-			}
-
-			if (outputPath && !existing.outputPath) {
-				existing.outputPath = outputPath;
-			}
-
-			if (!existing.outputPath && existing.sessionPath?.endsWith(".jsonl")) {
-				existing.outputPath = `${existing.sessionPath.slice(0, -6)}.md`;
-			}
-
-			if (!existing.outputPath && artifactsDir) {
-				existing.outputPath = path.join(artifactsDir, `${normalizedId}.md`);
-			}
-
-			if (!existing.sessionPath) {
-				if (existing.outputPath?.endsWith(".md")) {
-					existing.sessionPath = `${existing.outputPath.slice(0, -3)}.jsonl`;
-				} else if (artifactsDir) {
-					existing.sessionPath = path.join(artifactsDir, `${normalizedId}.jsonl`);
-				}
-			}
-
-			if (agent && !existing.agent) existing.agent = agent;
-			if (description && !existing.description) existing.description = description;
-			if (model && !existing.model) existing.model = model;
-			if (typeof tokens === "number" && Number.isFinite(tokens)) existing.tokens = tokens;
-			if (contextPreview && !existing.contextPreview) existing.contextPreview = contextPreview;
-			if (typeof lastUpdatedMs === "number" && Number.isFinite(lastUpdatedMs)) {
-				existing.lastUpdatedMs = Math.max(existing.lastUpdatedMs ?? 0, lastUpdatedMs);
-			}
-			if (typeof lastSeenOrder === "number" && Number.isFinite(lastSeenOrder)) {
-				existing.lastSeenOrder = Math.max(existing.lastSeenOrder ?? 0, lastSeenOrder);
-			}
-
-			refs.set(normalizedId, existing);
-		};
-
-		if (artifactsDir) {
-			try {
-				for (const rel of new Bun.Glob("**/*.jsonl").scanSync(artifactsDir)) {
-					const id = path.basename(rel, ".jsonl");
-					if (!id) continue;
-					const sessionPath = path.join(artifactsDir, rel);
-					seenOrder += 1;
-					upsert({ id, sessionPath, lastUpdatedMs: readLastUpdatedMs(sessionPath), lastSeenOrder: seenOrder });
-				}
-			} catch (error) {
-				if (!isEnoent(error)) {
-					logger.warn("Failed to scan subagent transcript artifacts", {
-						artifactsDir,
-						error: String(error),
-					});
-				}
-			}
-		}
-
-		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type !== "message") continue;
-			const message = (entry as { message?: Record<string, unknown> }).message;
-			if (!message) continue;
-
-			const role = message.role;
-			if (role !== "toolResult" || message.toolName !== "task") continue;
-
-			const details = message.details as Record<string, unknown> | undefined;
-			const results = Array.isArray(details?.results) ? details.results : [];
-			for (const result of results) {
-				if (!result || typeof result !== "object") continue;
-				const record = result as Record<string, unknown>;
-				const id = typeof record.id === "string" ? record.id : "";
-				const outputPath = typeof record.outputPath === "string" ? record.outputPath : undefined;
-				const agent = typeof record.agent === "string" ? record.agent : undefined;
-				const description = typeof record.description === "string" ? record.description : undefined;
-				const model = this.formatSubagentModel(record.modelOverride);
-				const usageTokens = this.extractUncachedUsageTokens(record.usage);
-				const tokens = usageTokens ?? (typeof record.tokens === "number" ? record.tokens : undefined);
-				const task = typeof record.task === "string" ? record.task : "";
-				const contextPreview = this.extractTaskContextPreview(task);
-				const sessionPath = outputPath?.endsWith(".md") ? `${outputPath.slice(0, -3)}.jsonl` : undefined;
-				seenOrder += 1;
-				upsert({
-					id,
-					outputPath,
-					sessionPath,
-					agent,
-					description,
-					model,
-					tokens,
-					contextPreview,
-					lastUpdatedMs: readLastUpdatedMs(sessionPath) ?? readLastUpdatedMs(outputPath),
-					lastSeenOrder: seenOrder,
-				});
-			}
-
-			const textContent = this.extractTextContent(message.content);
-			for (const match of textContent.matchAll(/agent:\/\/([A-Za-z0-9._-]+)/g)) {
-				const id = match[1];
-				if (!id) continue;
-				seenOrder += 1;
-				upsert({ id, lastSeenOrder: seenOrder });
-			}
-		}
-
-		return Array.from(refs.values()).sort((a, b) => {
-			const recencyDelta = this.getSubagentRecencyScore(b) - this.getSubagentRecencyScore(a);
-			if (recencyDelta !== 0) return recencyDelta;
-			return a.id.localeCompare(b.id);
-		});
-	}
-
-	private extractTextContent(content: unknown): string {
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return "";
-		const lines: string[] = [];
-		for (const block of content) {
-			if (!block || typeof block !== "object") continue;
-			const item = block as { type?: unknown; text?: unknown };
-			if (item.type !== "text" || typeof item.text !== "string") continue;
-			lines.push(item.text);
-		}
-		return lines.join("\n");
 	}
 
 	private closeSubagentSessionViewer(): void {
@@ -2308,7 +2274,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const viewer = new SubagentSessionViewerComponent({
 				getTerminalRows: () => this.ui.terminal.rows,
 				leaderKey,
-				onClose: () => this.exitSubagentView(),
+				onClose: () => this.returnToNavigatorOrExit(),
 				onNavigateRoot: direction => {
 					void this.navigateSubagentView("root", direction);
 				},
@@ -2331,6 +2297,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			headerLines,
 			bodyLines,
 			nestedArrowMode: this.subagentNestedArrowMode,
+			metadata: {
+				agentName: selected.agent ?? selected.id,
+				role: selected.agent,
+				model: transcript.model ?? selected.model,
+				tokens: selected.tokens ?? transcript.tokens,
+				tokenCapacity: selected.tokenCapacity,
+				status: selected.status,
+				thinkingLevel: selected.thinkingLevel,
+			},
 		});
 		this.statusLine.setHookStatus(
 			SUBAGENT_VIEWER_STATUS_KEY,
@@ -2409,21 +2384,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				.trim();
 		}
 		return tail.replace(/[_-]+/g, " ").trim();
-	}
-
-	private formatSubagentModel(modelOverride: unknown): string | undefined {
-		if (typeof modelOverride === "string") {
-			return modelOverride;
-		}
-		if (Array.isArray(modelOverride)) {
-			const values = modelOverride.filter(
-				(item): item is string => typeof item === "string" && item.trim().length > 0,
-			);
-			if (values.length > 0) {
-				return values.join(", ");
-			}
-		}
-		return undefined;
 	}
 
 	private extractTaskContextPreview(task: string): string | undefined {

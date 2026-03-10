@@ -1,14 +1,26 @@
-import { type Component, matchesKey, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { type Component, matchesKey, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import type { SubagentStatus } from "../subagent-view/types";
 import { theme } from "../theme/theme";
 
 const MIN_WIDTH = 40;
 const MIN_BODY_HEIGHT = 4;
 
+export interface SubagentSessionViewerMetadata {
+	agentName?: string;
+	role?: string;
+	model?: string;
+	tokens?: number;
+	tokenCapacity?: number;
+	status?: SubagentStatus;
+	thinkingLevel?: string;
+}
+
 export interface SubagentSessionViewerContent {
 	headerLines: string[];
 	bodyLines: string[];
 	nestedArrowMode: boolean;
+	metadata?: SubagentSessionViewerMetadata;
 }
 
 export interface SubagentSessionViewerOptions {
@@ -18,6 +30,28 @@ export interface SubagentSessionViewerOptions {
 	onNavigateRoot: (direction: 1 | -1) => void;
 	onNavigateNested: (direction: 1 | -1) => void;
 	onCycleAgentMode: () => void;
+}
+
+function renderStatusGlyph(status?: SubagentStatus): string {
+	switch (status) {
+		case "running":
+			return `${theme.fg("success", "●")} ${theme.fg("success", "RUNNING")}`;
+		case "completed":
+			return `${theme.fg("muted", "◉")} ${theme.fg("muted", "DONE")}`;
+		case "failed":
+			return `${theme.fg("error", "✗")} ${theme.fg("error", "FAILED")}`;
+		case "cancelled":
+			return `${theme.fg("muted", "⊘")} ${theme.fg("muted", "CANCEL")}`;
+		default:
+			return `${theme.fg("dim", "◌")} ${theme.fg("dim", "PENDING")}`;
+	}
+}
+
+function formatTokenCount(tokens?: number): string {
+	if (tokens == null) return "---";
+	if (tokens < 1000) return String(tokens);
+	if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`;
+	return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 export class SubagentSessionViewerComponent implements Component {
@@ -46,6 +80,16 @@ export class SubagentSessionViewerComponent implements Component {
 			headerLines: content.headerLines.map(line => sanitizeText(line)),
 			bodyLines: content.bodyLines.map(line => sanitizeText(line)),
 			nestedArrowMode: content.nestedArrowMode,
+			metadata: content.metadata
+				? {
+						...content.metadata,
+						agentName: content.metadata.agentName != null ? sanitizeText(content.metadata.agentName) : undefined,
+						role: content.metadata.role != null ? sanitizeText(content.metadata.role) : undefined,
+						model: content.metadata.model != null ? sanitizeText(content.metadata.model) : undefined,
+						thinkingLevel:
+							content.metadata.thinkingLevel != null ? sanitizeText(content.metadata.thinkingLevel) : undefined,
+					}
+				: undefined,
 		};
 		const maxOffset = this.#maxScrollOffset(this.#lastRenderWidth);
 		this.#scrollOffset = wasAtBottom ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
@@ -71,6 +115,14 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 		if (matchesKey(keyData, "end")) {
 			this.#scrollOffset = this.#maxScrollOffset(this.#lastRenderWidth);
+			return;
+		}
+		if (keyData === "k") {
+			this.#scrollBy(-1);
+			return;
+		}
+		if (keyData === "j") {
+			this.#scrollBy(1);
 			return;
 		}
 		if (matchesKey(keyData, "tab")) {
@@ -117,10 +169,16 @@ export class SubagentSessionViewerComponent implements Component {
 	render(width: number): string[] {
 		this.#lastRenderWidth = Math.max(MIN_WIDTH, width);
 		const innerWidth = Math.max(1, this.#lastRenderWidth - 2);
+		const metadataRows = this.#buildMetadataLines();
 		const headerRows = this.#wrapLines(this.#content.headerLines, innerWidth);
 		const bodyRows = this.#wrapLines(this.#content.bodyLines, innerWidth);
 		const footerRows = this.#wrapLines(this.#footerLines(bodyRows.length), innerWidth);
-		const bodyHeight = this.#bodyHeight(this.#lastRenderWidth, headerRows.length, footerRows.length);
+		const bodyHeight = this.#bodyHeight(
+			this.#lastRenderWidth,
+			headerRows.length,
+			footerRows.length,
+			metadataRows.length,
+		);
 		const maxOffset = Math.max(0, bodyRows.length - bodyHeight);
 		this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset, maxOffset));
 		const visibleBodyRows = bodyRows.slice(this.#scrollOffset, this.#scrollOffset + bodyHeight);
@@ -129,6 +187,12 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 
 		const lines: string[] = [this.#frameTop(innerWidth)];
+		if (metadataRows.length > 0) {
+			for (const row of metadataRows) {
+				lines.push(this.#frameLine(row, innerWidth));
+			}
+			lines.push(this.#frameSeparator(innerWidth));
+		}
 		for (const row of headerRows) {
 			lines.push(this.#frameLine(row, innerWidth));
 		}
@@ -144,19 +208,62 @@ export class SubagentSessionViewerComponent implements Component {
 		return lines;
 	}
 
+	#buildMetadataLines(): string[] {
+		const meta = this.#content.metadata;
+		if (!meta) return [];
+
+		const hasContent =
+			meta.agentName ||
+			meta.role ||
+			meta.model ||
+			meta.tokens != null ||
+			meta.tokenCapacity != null ||
+			meta.status ||
+			meta.thinkingLevel;
+		if (!hasContent) return [];
+
+		const lines: string[] = [];
+
+		// Line 1: Agent name + status glyph
+		const nameLabel = meta.agentName ? theme.bold(theme.fg("accent", meta.agentName)) : "";
+		const statusLabel = renderStatusGlyph(meta.status);
+		lines.push(` ${nameLabel}  ${statusLabel}`);
+
+		// Line 2: Role + Model
+		const infoParts: string[] = [];
+		if (meta.role) infoParts.push(`Role: ${theme.fg("dim", meta.role)}`);
+		if (meta.model) infoParts.push(`Model: ${theme.fg("dim", meta.model)}`);
+		if (infoParts.length > 0) {
+			lines.push(` ${infoParts.join("  ")}`);
+		}
+
+		// Line 3: Tokens + Thinking level
+		const statParts: string[] = [];
+		const tokenStr = formatTokenCount(meta.tokens);
+		if (meta.tokenCapacity != null) {
+			statParts.push(`Tokens: ${theme.fg("dim", `${tokenStr}/${formatTokenCount(meta.tokenCapacity)}`)}`);
+		} else if (meta.tokens != null) {
+			statParts.push(`Tokens: ${theme.fg("dim", tokenStr)}`);
+		}
+		if (meta.thinkingLevel) {
+			statParts.push(`Thinking: ${theme.fg("dim", meta.thinkingLevel)}`);
+		}
+		if (statParts.length > 0) {
+			lines.push(` ${statParts.join("  ")}`);
+		}
+
+		return lines;
+	}
+
 	#footerLines(totalBodyRows: number): string[] {
 		const bodyHeight = this.#bodyHeight(this.#lastRenderWidth);
 		const maxOffset = Math.max(0, totalBodyRows - bodyHeight);
 		const start = totalBodyRows === 0 ? 0 : Math.min(totalBodyRows, this.#scrollOffset + 1);
 		const end = Math.min(totalBodyRows, this.#scrollOffset + bodyHeight);
-		const navMode = this.#content.nestedArrowMode ? "Up/Down nested" : "Up/Down task";
-		const status = theme.fg("dim", ` lines ${start}-${end}/${totalBodyRows} `);
-		const controls = theme.fg(
-			"dim",
-			`${this.#leaderKey} toggle  ${navMode}  Left/Right task  Tab nested  PgUp/PgDn scroll  Home/End jump  Esc exit  A mode`,
-		);
 		const pinned = maxOffset === 0 || this.#scrollOffset >= maxOffset ? theme.fg("success", " newest") : "";
-		return [status + pinned, controls];
+		const status = theme.fg("dim", ` lines ${start}-${end}/${totalBodyRows} `) + pinned;
+		const controls = theme.fg("dim", " ↑↓/j/k scroll  PgUp/PgDn page  Home/End  Esc back to navigator");
+		return [status, controls];
 	}
 
 	#wrapLines(lines: string[], width: number): string[] {
@@ -170,12 +277,17 @@ export class SubagentSessionViewerComponent implements Component {
 		return wrapped;
 	}
 
-	#bodyHeight(width: number, headerRows?: number): number {
+	#bodyHeight(width: number, headerRows?: number, footerRows?: number, metadataRows?: number): number {
 		const maxHeight = Math.max(12, Math.floor(this.#getTerminalRows() * 0.82));
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
 		const resolvedHeaderRows = headerRows ?? this.#wrapLines(this.#content.headerLines, innerWidth).length;
-		const footerRows = 2;
-		return Math.max(MIN_BODY_HEIGHT, maxHeight - resolvedHeaderRows - footerRows - 4);
+		const resolvedFooterRows = footerRows ?? 2;
+		const resolvedMetadataRows = metadataRows ?? this.#buildMetadataLines().length;
+		const metaSep = resolvedMetadataRows > 0 ? 1 : 0;
+		return Math.max(
+			MIN_BODY_HEIGHT,
+			maxHeight - resolvedHeaderRows - resolvedFooterRows - resolvedMetadataRows - metaSep - 4,
+		);
 	}
 
 	#maxScrollOffset(width: number): number {
@@ -194,20 +306,37 @@ export class SubagentSessionViewerComponent implements Component {
 	}
 
 	#frameTop(innerWidth: number): string {
-		return `${theme.boxSharp.topLeft}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.topRight}`;
+		const b = (s: string) => theme.fg("borderAccent", s);
+		const agentName = this.#content.metadata?.agentName;
+		const titleText = agentName ? `Subagent Viewer: ${agentName}` : "Subagent Viewer";
+		const maxTitleWidth = innerWidth - 6;
+		if (maxTitleWidth < 3) {
+			return `${b(theme.boxSharp.topLeft)}${b(theme.boxSharp.horizontal.repeat(innerWidth))}${b(theme.boxSharp.topRight)}`;
+		}
+		const clippedText =
+			visibleWidth(titleText) > maxTitleWidth ? truncateToWidth(titleText, maxTitleWidth) : titleText;
+		const titleRaw = `━━ ${clippedText} ━━`;
+		const titleWidth = visibleWidth(titleRaw);
+		const fillWidth = Math.max(0, innerWidth - titleWidth);
+		const titleColored = theme.bold(theme.fg("accent", titleRaw));
+		const fill = b(theme.boxSharp.horizontal.repeat(fillWidth));
+		return `${b(theme.boxSharp.topLeft)}${titleColored}${fill}${b(theme.boxSharp.topRight)}`;
 	}
 
 	#frameSeparator(innerWidth: number): string {
-		return `${theme.boxSharp.teeRight}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.teeLeft}`;
+		const b = (s: string) => theme.fg("borderAccent", s);
+		return `${b(theme.boxSharp.teeRight)}${b(theme.boxSharp.horizontal.repeat(innerWidth))}${b(theme.boxSharp.teeLeft)}`;
 	}
 
 	#frameBottom(innerWidth: number): string {
-		return `${theme.boxSharp.bottomLeft}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.bottomRight}`;
+		const b = (s: string) => theme.fg("borderAccent", s);
+		return `${b(theme.boxSharp.bottomLeft)}${b(theme.boxSharp.horizontal.repeat(innerWidth))}${b(theme.boxSharp.bottomRight)}`;
 	}
 
 	#frameLine(content: string, innerWidth: number): string {
 		const truncated = truncateToWidth(content, innerWidth);
 		const remaining = Math.max(0, innerWidth - visibleWidth(truncated));
-		return `${theme.boxSharp.vertical}${truncated}${padding(remaining)}${theme.boxSharp.vertical}`;
+		const border = theme.fg("borderAccent", theme.boxSharp.vertical);
+		return `${border}${truncated}${padding(remaining)}${border}`;
 	}
 }

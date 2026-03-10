@@ -788,7 +788,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: progress => {
 							progressMap.set(index, {
 								...structuredClone(progress),
@@ -840,7 +840,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: progress => {
 							progressMap.set(index, {
 								...structuredClone(progress),

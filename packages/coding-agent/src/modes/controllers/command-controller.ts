@@ -490,6 +490,17 @@ export class CommandController {
 | \`!!\` | Run bash command (excluded from context) |
 | \`$\` | Run Python in shared kernel |
 | \`$$\` | Run Python (excluded from context) |
+
+		**Subagent Navigator (Ctrl+X chord)**
+
+		| Key | Action |
+		|-----|--------|
+		| \`Ctrl+X\` | Open subagent navigator (or close if already open) |
+		| \`Ctrl+X, Ctrl+N\` | Next subagent |
+		| \`Ctrl+X, Ctrl+P\` | Previous subagent |
+		| \`Ctrl+X, Ctrl+O\` | View most recently updated subagent |
+		| \`Ctrl+X, Ctrl+R\` | Refresh subagent list |
+		| \`Ctrl+X, Ctrl+V\` | Open navigator (explicit) |
 `;
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new DynamicBorder());
@@ -559,6 +570,7 @@ export class CommandController {
 			}
 		}
 		await this.ctx.session.newSession();
+		this.ctx.handleSessionRootChange();
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorTopBorder();

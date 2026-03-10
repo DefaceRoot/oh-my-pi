@@ -11,9 +11,9 @@ import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import { STTController, type SttState } from "../../stt";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
-import { type SttState, STTController } from "../../stt";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
 
 import { WORKFLOW_MENUS } from "../action-buttons";
@@ -25,7 +25,6 @@ interface Expandable {
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
-
 
 export function detectLazygitInstallCommand(): { command: string; args: string[] } | null {
 	if (process.platform === "win32") return null;
@@ -52,10 +51,22 @@ export function detectLazygitInstallCommand(): { command: string; args: string[]
 	return null;
 }
 
+const CTRL_X_BYTE = "\x18";
+const CTRL_N_BYTE = "\x0e";
+const CTRL_P_BYTE = "\x10";
+const CTRL_O_BYTE = "\x0f";
+const CTRL_R_BYTE = "\x12";
+const CTRL_V_BYTE = "\x16";
+const ESC_BYTE = "\x1b";
+const CTRLX_CHORD_TIMEOUT_MS = 350;
+
 export class InputController {
 	#askModePreviousRole: "default" | "orchestrator" | "plan" | "custom" | undefined;
 	#askModePreviousModel: Model | undefined;
 	#sttController = new STTController();
+	#chordArmed = false;
+	#chordTimer: ReturnType<typeof setTimeout> | undefined;
+	#unsubscribeChord: (() => void) | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -109,10 +120,6 @@ export class InputController {
 		this.ctx.editor.onCtrlD = () => this.handleCtrlD();
 		this.ctx.editor.onCtrlZ = () => this.handleCtrlZ();
 		this.ctx.editor.onShiftTab = () => {
-			if (this.ctx.isSubagentViewActive()) {
-				void this.ctx.cycleSubagentNestedView(-1);
-				return;
-			}
 			this.cycleThinkingLevel();
 		};
 		this.ctx.editor.onCtrlP = () => this.cycleRoleModel();
@@ -178,7 +185,9 @@ export class InputController {
 			});
 		}
 		for (const menu of WORKFLOW_MENUS) {
-			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction as import("../../config/keybindings").AppAction)) {
+			for (const key of this.ctx.keybindings.getKeys(
+				menu.hotkeyAction as import("../../config/keybindings").AppAction,
+			)) {
 				this.ctx.editor.setCustomKeyHandler(key, () => {
 					this.ctx.statusLine.toggleMenu(menu.id);
 					this.ctx.ui.requestRender();
@@ -201,12 +210,6 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
-		for (const key of this.ctx.keybindings.getKeys("cycleSubagentForward")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.handleSubagentNavigatorToggle());
-		}
-		for (const key of this.ctx.keybindings.getKeys("cycleSubagentBackward")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.handleSubagentRootNavigation(-1, { allowOpen: true }));
-		}
 		for (const key of this.ctx.keybindings.getKeys("cycleAgentMode")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.cycleAgentMode());
 		}
@@ -216,7 +219,7 @@ export class InputController {
 				this.ctx.ui.requestRender();
 				return true;
 			}
-			return this.handleSubagentRootNavigation(-1);
+			return false;
 		});
 		this.ctx.editor.setCustomKeyHandler("right", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
@@ -224,7 +227,7 @@ export class InputController {
 				this.ctx.ui.requestRender();
 				return true;
 			}
-			return this.handleSubagentRootNavigation(1);
+			return false;
 		});
 		this.ctx.editor.setCustomKeyHandler("up", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
@@ -232,7 +235,7 @@ export class InputController {
 				this.ctx.ui.requestRender();
 				return true;
 			}
-			return this.handleSubagentArrowNavigation(-1);
+			return false;
 		});
 		this.ctx.editor.setCustomKeyHandler("down", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
@@ -240,11 +243,13 @@ export class InputController {
 				this.ctx.ui.requestRender();
 				return true;
 			}
-			return this.handleSubagentArrowNavigation(1);
+			return false;
 		});
-		this.ctx.editor.setCustomKeyHandler("tab", () => this.handleSubagentNestedNavigation(1));
-		this.ctx.editor.setCustomKeyHandler("a", () => this.handleSubagentAgentToggle());
-		this.ctx.editor.setCustomKeyHandler("A" as import("../../config/keybindings").KeyId, () => this.handleSubagentAgentToggle());
+
+		// Register Ctrl+X chord as global input listener (above component focus)
+		this.#unsubscribeChord = this.ctx.ui.addInputListener((data: string) => {
+			return this.#handleChordInput(data);
+		});
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
@@ -716,7 +721,9 @@ export class InputController {
 				this.ctx.showStatus("");
 				break;
 			case "recording":
-				this.ctx.showStatus(`${theme.symbol("icon.mic")} Recording… Press Alt+H again to transcribe.`, { dim: false });
+				this.ctx.showStatus(`${theme.symbol("icon.mic")} Recording… Press Alt+H again to transcribe.`, {
+					dim: false,
+				});
 				break;
 			case "transcribing":
 				this.ctx.showStatus(`${theme.symbol("icon.mic")} Transcribing…`, { dim: false });
@@ -752,51 +759,72 @@ export class InputController {
 		}
 	}
 
-	private handleSubagentNavigatorToggle(): boolean {
-		if (this.ctx.isSubagentViewActive()) {
-			this.ctx.exitSubagentView();
-			return true;
-		}
-		this.ctx.showStatus("Subagent navigator: Up/Down task, Tab cycle nested, Enter open transcript, Esc close");
-		void this.ctx.cycleSubagentView(1);
-		return true;
-	}
-
-	private handleSubagentArrowNavigation(direction: 1 | -1): boolean {
-		if (this.ctx.isSubagentViewActive() && this.ctx.isSubagentNestedArrowModeEnabled()) {
-			void this.ctx.cycleSubagentNestedView(direction);
-			return true;
-		}
-		return this.handleSubagentRootNavigation(direction);
-	}
-
-	private handleSubagentRootNavigation(direction: 1 | -1, options?: { allowOpen?: boolean }): boolean {
-		if (!this.ctx.isSubagentViewActive()) {
-			if (!options?.allowOpen) {
-				return false;
+	#handleChordInput(data: string): { consume?: boolean; data?: string } | undefined {
+		if (data === CTRL_X_BYTE) {
+			// State-B: subagent view already active → immediately exit
+			if (this.ctx.isSubagentViewActive()) {
+				this.ctx.exitSubagentView();
+				return { consume: true };
 			}
-			this.ctx.showStatus("Subagent navigator: Up/Down task, Tab cycle nested, Enter open transcript, Esc close");
-			void this.ctx.cycleSubagentView(direction);
-			return true;
+			// State-A: arm chord
+			this.#armChord();
+			return { consume: true };
 		}
-		void this.ctx.cycleSubagentView(direction);
-		return true;
+
+		if (this.#chordArmed) {
+			this.#disarmChord();
+			switch (data) {
+				case CTRL_N_BYTE:
+					void this.ctx.openSubagentViewerForRoot(1);
+					return { consume: true };
+				case CTRL_P_BYTE:
+					void this.ctx.openSubagentViewerForRoot(-1);
+					return { consume: true };
+				case CTRL_O_BYTE:
+					void this.ctx.openSubagentViewerNewest();
+					return { consume: true };
+				case CTRL_R_BYTE:
+					this.ctx.requestSubagentRefresh("manual");
+					return { consume: true };
+				case CTRL_V_BYTE:
+					this.ctx.openSubagentNavigator();
+					return { consume: true };
+				case ESC_BYTE:
+					// Cancel chord, no action
+					return { consume: true };
+				default:
+					// Unknown follow-up: disarm and don't consume
+					return undefined;
+			}
+		}
+
+		return undefined;
 	}
 
-	private handleSubagentNestedNavigation(direction: 1 | -1): boolean {
-		if (!this.ctx.isSubagentViewActive()) {
-			return false;
-		}
-		void this.ctx.cycleSubagentNestedView(direction);
-		return true;
+	#armChord(): void {
+		this.#disarmChord();
+		this.#chordArmed = true;
+		this.#chordTimer = setTimeout(() => {
+			this.#chordArmed = false;
+			this.#chordTimer = undefined;
+			this.ctx.openSubagentNavigator();
+		}, CTRLX_CHORD_TIMEOUT_MS);
 	}
 
-	private handleSubagentAgentToggle(): boolean {
-		if (!this.ctx.isSubagentViewActive()) {
-			return false;
+	#disarmChord(): void {
+		this.#chordArmed = false;
+		if (this.#chordTimer !== undefined) {
+			clearTimeout(this.#chordTimer);
+			this.#chordTimer = undefined;
 		}
-		void this.cycleAgentMode();
-		return true;
+	}
+
+	dispose(): void {
+		this.#disarmChord();
+		if (this.#unsubscribeChord) {
+			this.#unsubscribeChord();
+			this.#unsubscribeChord = undefined;
+		}
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
@@ -1286,7 +1314,7 @@ export class InputController {
 					const child = spawn(installCmd.command, installCmd.args, {
 						stdio: "inherit",
 					});
-					child.once("exit", (code) => {
+					child.once("exit", code => {
 						if (code === 0) resolve();
 						else reject(new Error(`Install command exited with code ${code}`));
 					});

@@ -499,7 +499,6 @@ export class SubagentIndex {
 		return path.basename(candidatePath, expectedExt) === refId;
 	}
 
-
 	#isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
 		const normalizedCandidate = process.platform === "win32" ? candidatePath.toLowerCase() : candidatePath;
 		const normalizedRoot = process.platform === "win32" ? rootPath.toLowerCase() : rootPath;
@@ -540,9 +539,7 @@ export class SubagentIndex {
 		if (!Array.isArray(modelOverride)) {
 			return undefined;
 		}
-		const values = modelOverride.filter(
-			(item): item is string => typeof item === "string" && item.trim().length > 0,
-		);
+		const values = modelOverride.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 		return values.length > 0 ? values.join(", ") : undefined;
 	}
 

@@ -442,6 +442,8 @@ export class SelectorController {
 						return;
 					}
 
+					this.ctx.handleSessionRootChange();
+
 					this.ctx.chatContainer.clear();
 					this.ctx.renderInitialMessages();
 					this.ctx.editor.setText(result.selectedText);
@@ -624,6 +626,7 @@ export class SelectorController {
 
 		// Switch session via AgentSession (emits hook and tool session events)
 		await this.ctx.session.switchSession(sessionPath);
+		this.ctx.handleSessionRootChange();
 
 		// Clear and re-render the chat
 		this.ctx.chatContainer.clear();

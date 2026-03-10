@@ -166,6 +166,9 @@ export class ExtensionUiController {
 					return { cancelled: true };
 				}
 
+				// Reset subagent state for new session root
+				this.ctx.handleSessionRootChange();
+
 				// Call setup callback if provided
 				if (options?.setup) {
 					await options.setup(this.ctx.sessionManager);
@@ -193,6 +196,8 @@ export class ExtensionUiController {
 				if (result.cancelled) {
 					return { cancelled: true };
 				}
+
+				this.ctx.handleSessionRootChange();
 
 				// Update UI
 				this.ctx.chatContainer.clear();
@@ -235,6 +240,7 @@ export class ExtensionUiController {
 				if (!result) {
 					return { cancelled: true };
 				}
+				this.ctx.handleSessionRootChange();
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages();
 				await this.ctx.reloadTodos();
@@ -361,6 +367,9 @@ export class ExtensionUiController {
 					return { cancelled: true };
 				}
 
+				// Reset subagent state for new session root
+				this.ctx.handleSessionRootChange();
+
 				// Call setup callback if provided
 				if (options?.setup) {
 					await options.setup(this.ctx.sessionManager);
@@ -391,6 +400,8 @@ export class ExtensionUiController {
 				if (result.cancelled) {
 					return { cancelled: true };
 				}
+
+				this.ctx.handleSessionRootChange();
 
 				// Update UI
 				this.ctx.chatContainer.clear();
@@ -439,6 +450,7 @@ export class ExtensionUiController {
 				if (!result) {
 					return { cancelled: true };
 				}
+				this.ctx.handleSessionRootChange();
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages();
 				await this.ctx.reloadTodos();
