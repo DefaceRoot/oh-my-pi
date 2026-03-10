@@ -18,6 +18,13 @@ const assertNestedPlanArtifactContract = (source: string): void => {
 	expect(source).not.toMatch(/plan-verifier agents?.*update `plan\.md`/i);
 };
 
+const assertPlanAuthoringWriteEditContract = (source: string): void => {
+	expect(source).toMatch(/^tools: .*\bwrite\b.*\bedit\b/m);
+	expect(source).toContain("Use `write` only");
+	expect(source).toContain("Use `edit`");
+};
+
+
 describe("plan ask-tool guardrails", () => {
 	test("plan-mode prompt requires ask-tool-only questioning and inherited workspace planning", async () => {
 		const source = await readFile(planModePath);
@@ -33,6 +40,7 @@ describe("plan ask-tool guardrails", () => {
 		const source = await readFile(standalonePlanAgentPath);
 
 		assertNestedPlanArtifactContract(source);
+		assertPlanAuthoringWriteEditContract(source);
 		expect(source).not.toMatch(/base[-\s]branch/i);
 		expect(source).not.toMatch(/branch\s+name/i);
 		expect(source).not.toMatch(/worktree\s+setup/i);
@@ -42,6 +50,7 @@ describe("plan ask-tool guardrails", () => {
 		const source = await readFile(packagedPlanAgentPath);
 
 		assertNestedPlanArtifactContract(source);
+		assertPlanAuthoringWriteEditContract(source);
 		expect(source).toContain("Spawn subagents aggressively for read-only work");
 		expect(source).toContain("Re-delegate if important gaps remain");
 	});
