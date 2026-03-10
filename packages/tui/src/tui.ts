@@ -359,8 +359,8 @@ export class TUI extends Container {
 	showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false };
 		this.overlayStack.push(entry);
-		// Only focus if overlay is actually visible
-		if (this.#isOverlayVisible(entry)) {
+		// Only focus overlays that are visible and can actually receive input.
+		if (this.#isOverlayVisible(entry) && this.#canReceiveInput(component)) {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
@@ -374,8 +374,7 @@ export class TUI extends Container {
 					this.overlayStack.splice(index, 1);
 					// Restore focus if this overlay had focus
 					if (this.#focusedComponent === component) {
-						const topVisible = this.#getTopmostVisibleOverlay();
-						this.setFocus(topVisible?.component ?? entry.preFocus);
+						this.setFocus(this.#resolveOverlayFocusTarget(entry.preFocus));
 					}
 					if (this.overlayStack.length === 0) this.terminal.hideCursor();
 					this.requestRender();
@@ -386,14 +385,13 @@ export class TUI extends Container {
 				entry.hidden = hidden;
 				// Update focus when hiding/showing
 				if (hidden) {
-					// If this overlay had focus, move focus to next visible or preFocus
+					// If this overlay had focus, move focus to the next interactive target or preFocus.
 					if (this.#focusedComponent === component) {
-						const topVisible = this.#getTopmostVisibleOverlay();
-						this.setFocus(topVisible?.component ?? entry.preFocus);
+						this.setFocus(this.#resolveOverlayFocusTarget(entry.preFocus));
 					}
 				} else {
-					// Restore focus to this overlay when showing (if it's actually visible)
-					if (this.#isOverlayVisible(entry)) {
+					// Restore focus to this overlay when showing if it can receive input.
+					if (this.#isOverlayVisible(entry) && this.#canReceiveInput(component)) {
 						this.setFocus(component);
 					}
 				}
@@ -407,9 +405,7 @@ export class TUI extends Container {
 	hideOverlay(): void {
 		const overlay = this.overlayStack.pop();
 		if (!overlay) return;
-		// Find topmost visible overlay, or fall back to preFocus
-		const topVisible = this.#getTopmostVisibleOverlay();
-		this.setFocus(topVisible?.component ?? overlay.preFocus);
+		this.setFocus(this.#resolveOverlayFocusTarget(overlay.preFocus));
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
 		this.requestRender();
 	}
@@ -428,15 +424,21 @@ export class TUI extends Container {
 		return true;
 	}
 
-	/** Find the topmost visible overlay, if any */
-	#getTopmostVisibleOverlay(): (typeof this.overlayStack)[number] | undefined {
+	#canReceiveInput(component: Component | null | undefined): component is Component {
+		return Boolean(component && typeof component.handleInput === "function");
+	}
+
+	#resolveOverlayFocusTarget(preFocus: Component | null): Component | null {
 		for (let i = this.overlayStack.length - 1; i >= 0; i--) {
-			if (this.#isOverlayVisible(this.overlayStack[i])) {
-				return this.overlayStack[i];
+			const entry = this.overlayStack[i];
+			if (this.#isOverlayVisible(entry) && this.#canReceiveInput(entry.component)) {
+				return entry.component;
 			}
 		}
-		return undefined;
+
+		return preFocus;
 	}
+
 
 	override invalidate(): void {
 		super.invalidate();
@@ -685,14 +687,7 @@ export class TUI extends Container {
 		// (visibility can change due to terminal resize or visible() callback)
 		const focusedOverlay = this.overlayStack.find(o => o.component === this.#focusedComponent);
 		if (focusedOverlay && !this.#isOverlayVisible(focusedOverlay)) {
-			// Focused overlay is no longer visible, redirect to topmost visible overlay
-			const topVisible = this.#getTopmostVisibleOverlay();
-			if (topVisible) {
-				this.setFocus(topVisible.component);
-			} else {
-				// No visible overlays, restore to preFocus
-				this.setFocus(focusedOverlay.preFocus);
-			}
+			this.setFocus(this.#resolveOverlayFocusTarget(focusedOverlay.preFocus));
 		}
 
 		// Pass input to focused component (including Ctrl+C)
