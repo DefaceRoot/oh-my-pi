@@ -11,7 +11,7 @@
 #   2. Installs OMP globally via bun
 #   3. Sets up ~/.omp/agent/ from this git repo
 #   4. Creates settings.json from template (prompts for API keys)
-#   5. Applies all patches
+#   5. Relies on runtime workflow changes shipped directly with OMP package source
 #   6. Adds tmux session browser keybinding
 set -euo pipefail
 
@@ -83,8 +83,8 @@ else
   info "settings.json already exists, skipping."
 fi
 
-# ─── 5. Runtime workflow files ──────────────────────────────────────────
-info "Skipping archived workflow patch bundles; reinstall:fork now ships the live runtime changes directly from package source."
+# ─── 5. Runtime workflow model ───────────────────────────────────────────
+info "Runtime workflow changes now come directly from OMP package source; restart omp after upgrades to load updates."
 
 
 # ─── 6. Tmux session browser keybinding ────────────────────────────────────

@@ -146,7 +146,6 @@ BASE_PATHS=(
 	".omp/agent/extensions"
 	".omp/agent/skills"
 	".omp/agent/hooks"
-	".omp/agent/patches"
 	".config/ghostty/config"
 	".tmux.conf"
 	".tmux.conf.local"
@@ -225,7 +224,7 @@ fi
 
 rewrite_paths_in_file "${TARGET_HOME}/.omp/agent/extensions/implementation-engine/index.ts"
 
-log_info "Skipping archived workflow patch bundle migration; reinstall:fork now carries the live runtime changes directly from package source."
+log_info "Runtime workflow changes are loaded from OMP package source after reinstall:fork; no extra runtime migration step is required."
 
 if [[ "$DRY_RUN" == false ]]; then
 	log_info "Migration complete"
