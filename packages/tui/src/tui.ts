@@ -274,7 +274,7 @@ export class TUI extends Container {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
 	/** Global callback for parsed mouse events (SGR mode). Return true when handled. */
-	onMouse?: (event: TerminalMouseEvent) => boolean | void;
+	onMouse?: (event: TerminalMouseEvent) => boolean | undefined;
 	#renderRequested = false;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
@@ -438,7 +438,6 @@ export class TUI extends Container {
 
 		return preFocus;
 	}
-
 
 	override invalidate(): void {
 		super.invalidate();
@@ -669,7 +668,8 @@ export class TUI extends Container {
 		const mouseEvent = parseSgrMouseEvent(data);
 		if (mouseEvent) {
 			const lineIndex = this.#viewportTopRow + Math.max(0, mouseEvent.y - 1);
-			const lineText = lineIndex >= 0 && lineIndex < this.#previousLines.length ? this.#previousLines[lineIndex] : "";
+			const lineText =
+				lineIndex >= 0 && lineIndex < this.#previousLines.length ? this.#previousLines[lineIndex] : "";
 			const handled = this.onMouse?.({ ...mouseEvent, lineIndex, lineText });
 			if (handled) {
 				this.requestRender();
@@ -882,10 +882,10 @@ export class TUI extends Container {
 		}
 	}
 
-	#normalizeOverlayLines(lines: readonly unknown[]): string[] {
+	#normalizeOverlayLines(lines: unknown): string[] {
+		if (!Array.isArray(lines)) return [];
 		return lines.map(line => (typeof line === "string" ? line : ""));
 	}
-
 
 	/** Composite all overlays into content lines (in stack order, later = on top). */
 	#compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
@@ -952,7 +952,8 @@ export class TUI extends Container {
 
 					// Defensive: truncate overlay line to declared width before compositing
 					// (components should already respect width, but this ensures it)
-					const truncatedOverlayLine = visibleWidth(overlayLine) > w ? sliceByColumn(overlayLine, 0, w, true) : overlayLine;
+					const truncatedOverlayLine =
+						visibleWidth(overlayLine) > w ? sliceByColumn(overlayLine, 0, w, true) : overlayLine;
 					result[idx] = this.#compositeLineAt(result[idx], truncatedOverlayLine, col, w, termWidth);
 					modifiedLines.add(idx);
 				}

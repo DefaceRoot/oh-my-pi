@@ -899,8 +899,6 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
-	});
-
 		it("tolerates non-string overlay lines while preserving valid line placement and truncation", async () => {
 			const term = new VirtualTerminal(20, 6);
 			const tui = new TUI(term);
@@ -910,7 +908,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				tui.showOverlay(new RawLinesComponent([{ length: 1 }, null, "VALID-OVERLAY-LINE"]), {
+				tui.showOverlay(new RawLinesComponent([{ length: 1 }, null, "VALID-OVERLAY-LINE", undefined, 42]), {
 					anchor: "top-left",
 					row: 1,
 					col: 1,
@@ -918,11 +916,17 @@ describe("TUI terminal-state regressions", () => {
 				});
 				await settle(term);
 
-				expect(visible(term)[3]?.includes("VALID-OV")).toBeTruthy();
+				const viewport = visible(term);
+				expect(viewport[1]?.trim()).toBe("");
+				expect(viewport[2]?.trim()).toBe("");
+				expect(viewport[3]?.includes("VALID-OV")).toBeTruthy();
+				expect(viewport[4]?.trim()).toBe("");
+				expect(viewport[5]?.trim()).toBe("");
 			} finally {
 				tui.stop();
 			}
 		});
+	});
 
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {
