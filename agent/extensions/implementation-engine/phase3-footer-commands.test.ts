@@ -3,22 +3,16 @@ import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const implementationEnginePath = path.join(repoRoot, "agent/extensions/implementation-engine/index.ts");
-const interactiveModePath = path.join(
-	repoRoot,
-"agent/patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/modes/interactive-mode.ts",
-);
+const actionButtonsPath = path.join(repoRoot, "packages/coding-agent/src/modes/action-buttons.ts");
 
 const readExtensionSource = async (): Promise<string> => Bun.file(implementationEnginePath).text();
-const readInteractiveSource = async (): Promise<string> => Bun.file(interactiveModePath).text();
+const readActionButtonsSource = async (): Promise<string> => Bun.file(actionButtonsPath).text();
 
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 
-interface ActionButtonSnapshot {
+interface WorkflowActionSnapshot {
 	label: string;
 	command: string;
-	statusKey: string;
-	normalText: string;
-	hoverText: string;
 }
 
 interface HoverFixture {
@@ -34,34 +28,33 @@ function stripAnsi(text: string): string {
 	return text.replace(ANSI_ESCAPE_PATTERN, "");
 }
 
+function extractBlock(source: string, startMarker: string, endMarker: string): string {
+	const start = source.indexOf(startMarker);
+	expect(start).toBeGreaterThan(-1);
+	const end = source.indexOf(endMarker, start + 1);
+	expect(end).toBeGreaterThan(start);
+	return source.slice(start, end);
+}
+
 function extractConstString(source: string, name: string): string {
 	const match = source.match(new RegExp(`const\\s+${name}\\s*=\\s*\"([^\"]+)\"`));
 	expect(match).toBeTruthy();
 	return match?.[1] ?? "";
 }
 
-function resolveStatusKeyValue(source: string, token: string): string {
-	const match = source.match(new RegExp(`const\\s+${token}\\s*=\\s*\"([^\"]+)\"`));
-	return match?.[1] ?? token;
-}
+function extractWorkflowActions(source: string): WorkflowActionSnapshot[] {
+	const workflowMenusBlock = extractBlock(
+		source,
+		"export const WORKFLOW_MENUS: WorkflowMenu[] = [",
+		"];",
+	);
+	const actionRegex = /\{\s*id:\s*"([^"]+)",\s*label:\s*"([^"]+)",\s*command:\s*"([^"]+)"[\s\S]*?\}/g;
+	const parsed: WorkflowActionSnapshot[] = [];
 
-function extractActionButtons(source: string): ActionButtonSnapshot[] {
-	const start = source.indexOf("const ACTION_BUTTONS: ActionButtonUi[] = [");
-	expect(start).toBeGreaterThan(-1);
-	const end = source.indexOf("];", start);
-	expect(end).toBeGreaterThan(start);
-	const block = source.slice(start, end);
-
-	const buttonRegex = /\{\s*label:\s*"([^"]+)",[\s\S]*?command:\s*"([^"]+)",[\s\S]*?statusKey:\s*([A-Z_]+),[\s\S]*?normalText:\s*"([^"]+)",[\s\S]*?hoverText:\s*"([^"]+)",[\s\S]*?\}/g;
-	const parsed: ActionButtonSnapshot[] = [];
-
-	for (const match of block.matchAll(buttonRegex)) {
+	for (const match of workflowMenusBlock.matchAll(actionRegex)) {
 		parsed.push({
-			label: match[1] ?? "",
-			command: match[2] ?? "",
-			statusKey: resolveStatusKeyValue(source, match[3] ?? ""),
-			normalText: match[4] ?? "",
-			hoverText: match[5] ?? "",
+			label: match[2] ?? "",
+			command: match[3] ?? "",
 		});
 	}
 
@@ -81,10 +74,10 @@ function extractHoverFixture(source: string): HoverFixture {
 }
 
 function resolveHoveredButton(
-	buttons: ActionButtonSnapshot[],
+	buttons: WorkflowActionSnapshot[],
 	lineText: string,
 	x: number,
-): ActionButtonSnapshot | undefined {
+): WorkflowActionSnapshot | undefined {
 	const line = stripAnsi(lineText);
 	for (const button of buttons) {
 		const labelIndex = line.indexOf(button.label);
@@ -99,19 +92,30 @@ function resolveHoveredButton(
 	return undefined;
 }
 
+function statusKeyForLabel(fixture: HoverFixture, label: string): string {
+	if (label === "Freeform") return fixture.planKey;
+	if (label === "Planned") return fixture.implementKey;
+	return fixture.cleanupKey;
+}
+
+function statusTextForLabel(fixture: HoverFixture, label: string): string {
+	if (label === "Freeform") return fixture.freeformText;
+	if (label === "Planned") return fixture.plannedText;
+	return fixture.cleanupText;
+}
+
 function applyHoverTransition(
 	statuses: Map<string, string>,
-	buttons: ActionButtonSnapshot[],
+	fixture: HoverFixture,
 	previousLabel: string | undefined,
-	nextButton: ActionButtonSnapshot | undefined,
+	nextButton: WorkflowActionSnapshot | undefined,
 ): string | undefined {
 	if (previousLabel) {
-		const previous = buttons.find(candidate => candidate.label === previousLabel);
-		if (previous) statuses.set(previous.statusKey, previous.normalText);
+		statuses.set(statusKeyForLabel(fixture, previousLabel), statusTextForLabel(fixture, previousLabel));
 	}
 
 	if (nextButton) {
-		statuses.set(nextButton.statusKey, nextButton.hoverText);
+		statuses.set(statusKeyForLabel(fixture, nextButton.label), statusTextForLabel(fixture, nextButton.label));
 	}
 
 	return nextButton?.label;
@@ -146,37 +150,39 @@ describe("implementation-engine phase 3 footer actions and command wiring (RED)"
 		expect(distinct.size).toBe(3);
 	});
 
-	test("interactive mapping wires Freeform/Planned/Cleanup to the new commands and status slots", async () => {
+	test("workflow menu wires Freeform/Planned/Cleanup to current commands", async () => {
 		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
+		const actionButtonsSource = await readActionButtonsSource();
 		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+		const actions = extractWorkflowActions(actionButtonsSource);
 
-		const freeform = buttons.find(button => button.label === "Freeform");
+		const freeform = actions.find(action => action.label === "Freeform");
 		expect(freeform).toBeDefined();
 		expect(freeform?.command).toBe("/freeform-worktree");
-		expect(freeform?.statusKey).toBe(fixture.planKey);
+		expect(fixture.freeformText).toContain("Freeform");
 
-		const planned = buttons.find(button => button.label === "Planned");
+		const planned = actions.find(action => action.label === "Planned");
 		expect(planned).toBeDefined();
 		expect(planned?.command).toBe("/planned-worktree");
-		expect(planned?.statusKey).toBe(fixture.implementKey);
+		expect(fixture.plannedText).toContain("Planned");
 
-		const cleanup = buttons.find(button => button.label === "Cleanup");
+		const cleanup = actions.find(action => action.label === "Cleanup");
 		expect(cleanup).toBeDefined();
 		expect(cleanup?.command).toBe("/cleanup-worktrees");
-		expect(cleanup?.statusKey).toBe(fixture.cleanupKey);
+		expect(fixture.cleanupText).toContain("Cleanup");
 	});
 
 	test("hovering the Planned footer action should resolve Planned, not another button label", async () => {
 		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
+		const actionButtonsSource = await readActionButtonsSource();
 		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+		const actions = extractWorkflowActions(actionButtonsSource).filter(
+			action => action.label === "Freeform" || action.label === "Planned" || action.label === "Cleanup",
+		);
 		const lineText = `${fixture.freeformText} ${fixture.plannedText} ${fixture.cleanupText}`;
 
 		const hovered = resolveHoveredButton(
-			buttons,
+			actions,
 			lineText,
 			centerColumnForLabel(lineText, "Planned"),
 		);
@@ -186,9 +192,11 @@ describe("implementation-engine phase 3 footer actions and command wiring (RED)"
 
 	test("hover transition Planned -> Cleanup preserves each button's own status text slot", async () => {
 		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
+		const actionButtonsSource = await readActionButtonsSource();
 		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+		const actions = extractWorkflowActions(actionButtonsSource).filter(
+			action => action.label === "Freeform" || action.label === "Planned" || action.label === "Cleanup",
+		);
 		const lineText = `${fixture.freeformText} ${fixture.plannedText} ${fixture.cleanupText}`;
 
 		const statuses = new Map<string, string>([
@@ -199,21 +207,21 @@ describe("implementation-engine phase 3 footer actions and command wiring (RED)"
 
 		let previousLabel: string | undefined;
 		const plannedHover = resolveHoveredButton(
-			buttons,
+			actions,
 			lineText,
 			centerColumnForLabel(lineText, "Planned"),
 		);
 		expect(plannedHover?.label).toBe("Planned");
 		expect(plannedHover).toBeDefined();
-		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, plannedHover);
+		previousLabel = applyHoverTransition(statuses, fixture, previousLabel, plannedHover);
 
 		const cleanupHover = resolveHoveredButton(
-			buttons,
+			actions,
 			lineText,
 			centerColumnForLabel(lineText, "Cleanup"),
 		);
 		expect(cleanupHover?.label).toBe("Cleanup");
-		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, cleanupHover);
+		previousLabel = applyHoverTransition(statuses, fixture, previousLabel, cleanupHover);
 
 		expect(statuses.get(fixture.planKey)).toBe(fixture.freeformText);
 		expect(statuses.get(fixture.implementKey)).toContain("Planned");

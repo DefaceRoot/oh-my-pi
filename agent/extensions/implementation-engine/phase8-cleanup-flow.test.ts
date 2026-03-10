@@ -4,14 +4,11 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const implementationEnginePath = path.join(repoRoot, "agent/extensions/implementation-engine/index.ts");
 const cleanupPath = path.join(repoRoot, "agent/extensions/implementation-engine/cleanup.ts");
-const interactiveModePath = path.join(
-	repoRoot,
-	"agent/patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/modes/interactive-mode.ts",
-);
+const actionButtonsPath = path.join(repoRoot, "packages/coding-agent/src/modes/action-buttons.ts");
 
 const readExtensionSource = async (): Promise<string> => Bun.file(implementationEnginePath).text();
 const readCleanupSource = async (): Promise<string> => Bun.file(cleanupPath).text();
-const readInteractiveSource = async (): Promise<string> => Bun.file(interactiveModePath).text();
+const readActionButtonsSource = async (): Promise<string> => Bun.file(actionButtonsPath).text();
 
 function extractBlock(source: string, startMarker: string, endMarker: string): string {
 	const start = source.indexOf(startMarker);
@@ -33,14 +30,6 @@ function extractFreeformKickoffLines(source: string): string[] {
 		.split("\n")
 		.map(line => line.trim())
 		.filter(line => line.length > 0);
-}
-
-function extractActionButtonsBlock(source: string): string {
-	return extractBlock(
-		source,
-		"const ACTION_BUTTONS: ActionButtonUi[] = [",
-		"];",
-	);
 }
 
 describe("implementation-engine phase 8 cleanup + dead-menu hardening (RED)", () => {
@@ -90,12 +79,11 @@ describe("implementation-engine phase 8 cleanup + dead-menu hardening (RED)", ()
 
 	test("legacy worktree-menu command path and strings are fully removed", async () => {
 		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
-		const actionButtonsBlock = extractActionButtonsBlock(interactiveSource);
+		const actionButtonsSource = await readActionButtonsSource();
 
 		expect(extensionSource).not.toMatch(/registerCommand\("worktree-menu",\s*\{/);
 		expect(extensionSource).not.toMatch(/Worktree Actions|Plan first|Use existing plan|Cleanup old worktrees/);
-		expect(actionButtonsBlock).not.toContain('/worktree-menu');
+		expect(actionButtonsSource).not.toContain('/worktree-menu');
 	});
 
 	test("typed /cleanup command remains registered and wired", async () => {

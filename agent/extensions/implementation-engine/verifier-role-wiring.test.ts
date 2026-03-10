@@ -2,30 +2,25 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
-const modelRegistryPath = path.join(
-	repoRoot,
-	"agent/patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/config/model-registry.ts",
-);
-const taskIndexPath = path.join(
-	repoRoot,
-	"agent/patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/task/index.ts",
-);
+const modelRegistryPath = path.join(repoRoot, "packages/coding-agent/src/config/model-registry.ts");
+const modelRolePath = path.join(repoRoot, "packages/coding-agent/src/task/model-role.ts");
 const verifierAgentPath = path.join(repoRoot, "agent/agents/verifier.md");
 
 describe("verifier model role wiring", () => {
 	test("registers verifier in model role registry type and metadata", async () => {
 		const content = await Bun.file(modelRegistryPath).text();
 
-		expect(content).toMatch(/export type ModelRole = [^;]*"verifier"[^;]*;/s);
+		expect(content).toMatch(/export type ModelRole\s*=\s*[\s\S]*"verifier"[\s\S]*;/s);
 		expect(content).toMatch(/verifier:\s*\{[^}]*name:\s*"Verifier"[^}]*\}/s);
 		expect(content).toMatch(/MODEL_ROLE_IDS:\s*ModelRole\[]\s*=\s*\[[^\]]*"verifier"/s);
 	});
 
 	test("recognizes verifier as a first-class subagent role", async () => {
-		const content = await Bun.file(taskIndexPath).text();
+		const content = await Bun.file(modelRolePath).text();
 
-		expect(content).toMatch(/const SUBAGENT_MODEL_ROLES = new Set\(\[[\s\S]*"verifier"[\s\S]*\]\);/);
-		expect(content).toMatch(/function resolveSubagentRole\(agentName: string\): string \{\s*return SUBAGENT_MODEL_ROLES\.has\(agentName\) \? agentName : "implement";\s*\}/s);
+		expect(content).toMatch(/const SUBAGENT_MODEL_ROLES = new Set<ModelRole>\(\[[\s\S]*"verifier"[\s\S]*\]\);/);
+		expect(content).toMatch(/const SUBAGENT_MODEL_ROLE_ALIASES:\s*Readonly<Record<string,\s*ModelRole>>\s*=\s*\{[\s\S]*reviewer:\s*"code-reviewer"[\s\S]*\};/);
+		expect(content).toMatch(/export function resolveSubagentRole\(agentName: string\): ModelRole \{[\s\S]*SUBAGENT_MODEL_ROLE_ALIASES\[agentName\][\s\S]*SUBAGENT_MODEL_ROLES\.has\(agentName as ModelRole\)\s*\?\s*\(agentName as ModelRole\)\s*:\s*"implement";[\s\S]*\}/s);
 	});
 });
 

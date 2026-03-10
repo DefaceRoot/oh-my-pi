@@ -1,140 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
+import {
+type ActionButtonUi,
+ACTION_BUTTONS,
+findActionButtonBounds,
+hasSameVisibleText,
+stripAnsi,
+} from "../../../packages/coding-agent/src/modes/action-buttons.ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const implementationEnginePath = path.join(repoRoot, "agent/extensions/implementation-engine/index.ts");
-const interactiveModePath = path.join(
-	repoRoot,
-	"agent/patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/modes/interactive-mode.ts",
-);
 
 const readExtensionSource = async (): Promise<string> => Bun.file(implementationEnginePath).text();
-const readInteractiveSource = async (): Promise<string> => Bun.file(interactiveModePath).text();
-
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
-
-interface ActionButtonSnapshot {
-	label: string;
-	command: string;
-	statusKey: string;
-	normalText: string;
-	hoverText: string;
-}
-
-interface HoverFixture {
-	planKey: string;
-	implementKey: string;
-	reviewKey: string;
-	freeformText: string;
-	plannedText: string;
-	cleanupText: string;
-}
-
-function stripAnsi(text: string): string {
-	return text.replace(ANSI_ESCAPE_PATTERN, "");
-}
-
-function decodeAnsiEscapes(text: string): string {
-	return text.replace(/\\x1b/g, "\x1b");
-}
-
-function extractConstString(source: string, name: string): string {
-	const match = source.match(new RegExp(`const\\s+${name}\\s*=\\s*\"([^\"]+)\"`));
-	expect(match).toBeTruthy();
-	return decodeAnsiEscapes(match?.[1] ?? "");
-}
-
-function resolveStatusKeyValue(source: string, token: string): string {
-	const match = source.match(new RegExp(`const\\s+${token}\\s*=\\s*\"([^\"]+)\"`));
-	return match?.[1] ?? token;
-}
-
-function extractActionButtons(source: string): ActionButtonSnapshot[] {
-	const start = source.indexOf("const ACTION_BUTTONS: ActionButtonUi[] = [");
-	expect(start).toBeGreaterThan(-1);
-	const end = source.indexOf("];", start);
-	expect(end).toBeGreaterThan(start);
-	const block = source.slice(start, end);
-
-	const buttonRegex =
-		/\{\s*label:\s*"([^"]+)",[\s\S]*?command:\s*"([^"]+)",[\s\S]*?statusKey:\s*([A-Z_]+),[\s\S]*?normalText:\s*"([^"]+)",[\s\S]*?hoverText:\s*"([^"]+)",[\s\S]*?\}/g;
-	const parsed: ActionButtonSnapshot[] = [];
-
-	for (const match of block.matchAll(buttonRegex)) {
-		parsed.push({
-			label: match[1] ?? "",
-			command: match[2] ?? "",
-			statusKey: resolveStatusKeyValue(source, match[3] ?? ""),
-			normalText: decodeAnsiEscapes(match[4] ?? ""),
-			hoverText: decodeAnsiEscapes(match[5] ?? ""),
-		});
-	}
-
-	expect(parsed.length).toBeGreaterThan(0);
-	return parsed;
-}
-
-function extractHoverFixture(source: string): HoverFixture {
-	return {
-		planKey: extractConstString(source, "PLAN_WORKFLOW_STATUS_KEY"),
-		implementKey: extractConstString(source, "IMPLEMENT_WORKFLOW_STATUS_KEY"),
-		reviewKey: extractConstString(source, "REVIEW_COMPLETE_STATUS_KEY"),
-		freeformText: extractConstString(source, "FREEFORM_WORKTREE_ACTION_TEXT"),
-		plannedText: extractConstString(source, "PLANNED_WORKTREE_ACTION_TEXT"),
-		cleanupText: extractConstString(source, "CLEANUP_WORKTREES_ACTION_TEXT"),
-	};
-}
-
-function findActionButtonBounds(
-	line: string,
-	button: ActionButtonSnapshot,
-	mouseCol: number,
-): { startCol: number; endCol: number; matchLength: number } | undefined {
-	const renderedCandidates = new Set<string>();
-	for (const renderedText of [button.hoverText, button.normalText]) {
-		const rendered = stripAnsi(renderedText);
-		if (!rendered.includes(button.label)) continue;
-		renderedCandidates.add(rendered);
-		const withoutTrailingSpace = rendered.trimEnd();
-		if (withoutTrailingSpace !== rendered && withoutTrailingSpace.includes(button.label)) {
-			renderedCandidates.add(withoutTrailingSpace);
-		}
-	}
-
-	let bestMatch: { startCol: number; endCol: number; matchLength: number } | undefined;
-	for (const rendered of renderedCandidates) {
-		const labelOffset = rendered.indexOf(button.label);
-		if (labelOffset === -1) continue;
-
-		let searchFrom = 0;
-		while (searchFrom < line.length) {
-			const renderedIndex = line.indexOf(rendered, searchFrom);
-			if (renderedIndex === -1) break;
-			searchFrom = renderedIndex + 1;
-
-			const labelIndex = renderedIndex + labelOffset;
-			const startCol = line.slice(0, labelIndex).length + 1;
-			const endCol = startCol + button.label.length - 1;
-			if (mouseCol < startCol || mouseCol > endCol) continue;
-
-			const matchLength = rendered.length;
-			if (!bestMatch || matchLength > bestMatch.matchLength) {
-				bestMatch = { startCol, endCol, matchLength };
-			}
-		}
-	}
-
-	return bestMatch;
-}
 
 function getActionButtonUnderMouse(
-	buttons: ActionButtonSnapshot[],
+	buttons: ActionButtonUi[],
 	lineText: string,
 	x: number,
-): ActionButtonSnapshot | undefined {
+): ActionButtonUi | undefined {
 	const line = stripAnsi(lineText);
 
-	let bestHit: { button: ActionButtonSnapshot; matchLength: number } | undefined;
+	let bestHit: { button: ActionButtonUi; matchLength: number } | undefined;
 	for (const button of buttons) {
 		const bounds = findActionButtonBounds(line, button, x);
 		if (!bounds) continue;
@@ -146,10 +32,7 @@ function getActionButtonUnderMouse(
 	return bestHit?.button;
 }
 
-function hasSameVisibleText(left: string, right: string): boolean {
-	return stripAnsi(left).trim() === stripAnsi(right).trim();
-}
-function shouldUpdateActionButtonStatus(statuses: Map<string, string>, button: ActionButtonSnapshot): boolean {
+function shouldUpdateActionButtonStatus(statuses: Map<string, string>, button: ActionButtonUi): boolean {
 	const currentText = statuses.get(button.statusKey);
 	if (!currentText) return false;
 	return (
@@ -162,9 +45,9 @@ function shouldUpdateActionButtonStatus(statuses: Map<string, string>, button: A
 
 function applyHoverTransition(
 	statuses: Map<string, string>,
-	buttons: ActionButtonSnapshot[],
+	buttons: ActionButtonUi[],
 	previousLabel: string | undefined,
-	nextButton: ActionButtonSnapshot | undefined,
+	nextButton: ActionButtonUi | undefined,
 ): string | undefined {
 	if (previousLabel) {
 		const previous = buttons.find(candidate => candidate.label === previousLabel);
@@ -188,111 +71,81 @@ function centerColumnForLabel(lineText: string, label: string): number {
 	return index + Math.ceil(label.length / 2) + 1;
 }
 
-function renderNoWorktreeFooterLine(statuses: Map<string, string>, fixture: HoverFixture): string {
-	const values = [
-		statuses.get(fixture.planKey),
-		statuses.get(fixture.implementKey),
-		statuses.get(fixture.reviewKey),
-	].filter((value): value is string => Boolean(value));
-	return values.join(" ");
-}
-
 describe("implementation-engine phase 9 footer hover/click glitch reproduction (RED)", () => {
-	test("ANSI-rendered Freeform/Planned/Cleanup line resolves each segment hit target", async () => {
-		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
-		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
-		const lineText = `${fixture.freeformText} ${fixture.plannedText} ${fixture.cleanupText}`;
+	test("ANSI-rendered footer line resolves each segment hit target", async () => {
+		const buttons = ACTION_BUTTONS;
+		const lineText = buttons.map(button => button.normalText).join(" ");
 
-		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Freeform"))?.label,
-		).toBe("Freeform");
-		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Planned"))?.label,
-		).toBe("Planned");
-		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Cleanup"))?.label,
-		).toBe("Cleanup");
+		for (const button of buttons) {
+			expect(
+				getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, button.label))?.label,
+			).toBe(button.label);
+		}
 	});
 
-	test("hovering Freeform -> Planned -> Cleanup -> off keeps labels stable and visible buttons clickable", async () => {
-		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
-		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+	test("hovering Git -> Merge OMP -> off keeps labels stable and visible buttons clickable", async () => {
+		const buttons = ACTION_BUTTONS;
+		const lineText = buttons.map(button => button.normalText).join(" ");
 
-		const statuses = new Map<string, string>([
-			[fixture.planKey, fixture.freeformText],
-			[fixture.implementKey, fixture.plannedText],
-			[fixture.reviewKey, fixture.cleanupText],
-		]);
+		const statuses = new Map<string, string>(
+			buttons.map(button => [button.statusKey, button.normalText]),
+		);
 
 		let previousLabel: string | undefined;
-		let lineText = renderNoWorktreeFooterLine(statuses, fixture);
+		const gitHover = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Git"));
+		expect(gitHover?.label).toBe("Git");
+		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, gitHover);
 
-		const freeformHover = getActionButtonUnderMouse(
+		const mergeHover = getActionButtonUnderMouse(
 			buttons,
 			lineText,
-			centerColumnForLabel(lineText, "Freeform"),
+			centerColumnForLabel(lineText, "Merge OMP"),
 		);
-		expect(freeformHover?.label).toBe("Freeform");
-		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, freeformHover);
-
-		lineText = renderNoWorktreeFooterLine(statuses, fixture);
-		const plannedHover = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Planned"));
-		expect(plannedHover?.label).toBe("Planned");
-		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, plannedHover);
-
-		lineText = renderNoWorktreeFooterLine(statuses, fixture);
-		const cleanupHover = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Cleanup"));
-		expect(cleanupHover?.label).toBe("Cleanup");
-		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, cleanupHover);
+		expect(mergeHover?.label).toBe("Merge OMP");
+		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, mergeHover);
 
 		previousLabel = applyHoverTransition(statuses, buttons, previousLabel, undefined);
 		expect(previousLabel).toBeUndefined();
-		expect(statuses.get(fixture.planKey)).toBe(fixture.freeformText);
-		expect(statuses.get(fixture.implementKey)).toBe(fixture.plannedText);
-		expect(statuses.get(fixture.reviewKey)).toBe(fixture.cleanupText);
 
-		lineText = renderNoWorktreeFooterLine(statuses, fixture);
+		for (const button of buttons) {
+			expect(statuses.get(button.statusKey)).toBe(button.normalText);
+		}
+
 		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Freeform"))?.label,
-		).toBe("Freeform");
+			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Git"))?.label,
+		).toBe("Git");
 		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Planned"))?.label,
-		).toBe("Planned");
-		expect(
-			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Cleanup"))?.label,
-		).toBe("Cleanup");
+			getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Merge OMP"))?.label,
+		).toBe("Merge OMP");
 	});
 
-	test("Planned should still be hit-testable when visible text loses trailing ANSI reset during rapid status churn", async () => {
-		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
-		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+	test("Merge OMP should still be hit-testable when visible text loses trailing ANSI reset", () => {
+		const buttons = ACTION_BUTTONS;
+		const git = buttons.find(button => button.label === "Git");
+		const merge = buttons.find(button => button.label === "Merge OMP");
+		expect(git).toBeDefined();
+		expect(merge).toBeDefined();
 
-		const plannedWithoutReset = fixture.plannedText.replace(/\x1b\[0m$/, "");
-		const lineText = `${fixture.freeformText} ${plannedWithoutReset} ${fixture.cleanupText}`;
-		expect(stripAnsi(lineText)).toContain("Planned");
+		const mergeWithoutReset = merge!.normalText.replace(/\x1b\[0m$/, "");
+		const lineText = `${git!.normalText} ${mergeWithoutReset}`;
+		expect(stripAnsi(lineText)).toContain("Merge OMP");
 
-		const plannedHit = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Planned"));
-		expect(plannedHit?.label).toBe("Planned");
-		expect(plannedHit?.label).not.toBe("Plan");
+		const mergeHit = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Merge OMP"));
+		expect(mergeHit?.label).toBe("Merge OMP");
 	});
 
-	test("Cleanup remains clickable while visible even if shared review slot text is updated without full ANSI envelope", async () => {
-		const extensionSource = await readExtensionSource();
-		const interactiveSource = await readInteractiveSource();
-		const fixture = extractHoverFixture(extensionSource);
-		const buttons = extractActionButtons(interactiveSource);
+	test("Git remains clickable while visible even if rendered without ANSI envelope", () => {
+		const buttons = ACTION_BUTTONS;
+		const git = buttons.find(button => button.label === "Git");
+		const merge = buttons.find(button => button.label === "Merge OMP");
+		expect(git).toBeDefined();
+		expect(merge).toBeDefined();
 
-		const lineText = `${fixture.freeformText} ${fixture.plannedText} Cleanup`;
-		expect(stripAnsi(lineText)).toContain("Cleanup");
+		const lineText = `${stripAnsi(git!.normalText)} ${merge!.normalText}`;
+		expect(stripAnsi(lineText)).toContain("Git");
 
-		const cleanupHit = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Cleanup"));
-		expect(cleanupHit?.label).toBe("Cleanup");
+		const gitHit = getActionButtonUnderMouse(buttons, lineText, centerColumnForLabel(lineText, "Git"));
+		expect(gitHit?.label).toBe("Git");
 	});
 
 	test("startup no longer auto-applies archived workflow patch bundles", async () => {
