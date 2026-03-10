@@ -145,7 +145,7 @@ describe("sanitizeSchemaForGoogle", () => {
 		expect(sanitized.enum).toEqual([null]);
 	});
 
-	it("preserves a property schema literally named additionalProperties inside properties", () => {
+	it("converts boolean schema false inside properties to empty enum schema", () => {
 		const sanitized = sanitizeSchemaForGoogle({
 			type: "object",
 			properties: {
@@ -156,10 +156,10 @@ describe("sanitizeSchemaForGoogle", () => {
 
 		const properties = sanitized.properties as Record<string, unknown>;
 		expect(Object.hasOwn(properties, "additionalProperties")).toBe(true);
-		expect(properties.additionalProperties).toBe(false);
+		expect(properties.additionalProperties).toEqual({ type: "string", enum: [] });
 	});
 
-	it("preserves boolean schemas for a single property literally named additionalProperties", () => {
+	it("converts boolean schema false for a single property to empty enum schema", () => {
 		const schema = {
 			type: "object",
 			properties: {
@@ -168,7 +168,13 @@ describe("sanitizeSchemaForGoogle", () => {
 			required: ["additionalProperties"],
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual(schema);
+		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+			type: "object",
+			properties: {
+				additionalProperties: { type: "string", enum: [] },
+			},
+			required: ["additionalProperties"],
+		});
 	});
 
 	it("strips unresolved $ref and $defs entries for Google compatibility", () => {

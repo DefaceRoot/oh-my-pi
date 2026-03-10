@@ -82,17 +82,31 @@ function renderTodoLine(todo: SidebarTodoItem, frame?: number): string {
 	}
 }
 
-function renderSubagentLine(subagent: SidebarSubagent): string {
-	const context = subagent.description ? `${subagent.agentName} · ${subagent.description}` : subagent.agentName;
-
-	if (subagent.status === "running") {
-		return `${chalk.cyan("◐")} ${context}`;
+function renderSubagentLine(status: SidebarSubagent["status"], label: string, prefix = ""): string {
+	if (status === "running") {
+		return `${prefix}${chalk.cyan("◐")} ${chalk.cyan(label)}`;
 	}
-	if (subagent.status === "failed") {
-		return `${chalk.red("✗")} ${context}`;
+	if (status === "failed") {
+		return `${prefix}${chalk.red("✗")} ${label}`;
 	}
 
-	return chalk.gray(`${chalk.green("✓")} ${context}`);
+	return chalk.gray(`${prefix}${chalk.green("✓")} ${label}`);
+}
+
+function renderSubagentLines(subagent: SidebarSubagent): string[] {
+	const lines = [renderSubagentLine(subagent.status, subagent.agentName)];
+	if (subagent.title) {
+		lines.push(`   ${chalk.dim(subagent.title)}`);
+	}
+
+	const children = subagent.children ?? [];
+	for (let index = 0; index < children.length; index += 1) {
+		const child = children[index]!;
+		const branch = index === children.length - 1 ? "└─ " : "├─ ";
+		lines.push(renderSubagentLine(child.status, child.agentName, `  ${branch}`));
+	}
+
+	return lines;
 }
 
 function getModifiedFileIcon(status: SidebarModifiedFile["status"]): string {
@@ -157,13 +171,13 @@ export function renderSidebar(model: SidebarModel): string[] {
 		sections.push({ header: "LSP", lines: model.lspServers.map(renderLspLine) });
 	}
 
-	if (model.subagents && model.subagents.length > 0) {
-		sections.push({ header: "Subagents", lines: model.subagents.map(renderSubagentLine) });
-	}
-
 	const modifiedFilesSection = buildModifiedFilesSection(model);
 	if (modifiedFilesSection) {
 		sections.push(modifiedFilesSection);
+	}
+
+	if (model.subagents && model.subagents.length > 0) {
+		sections.push({ header: "Subagents", lines: model.subagents.flatMap(renderSubagentLines) });
 	}
 	if (sections.length === 0) {
 		return [fit("(no data)", width)];

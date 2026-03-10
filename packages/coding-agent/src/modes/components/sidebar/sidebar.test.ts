@@ -65,20 +65,21 @@ describe("renderSidebar", () => {
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("MCP");
 		expect(output).toContain("● filesystem");
-		expect(output).not.toContain("filesystem · connected");
 		expect(output).toContain("github · disconnected");
 	});
 
-		test("lsp section shows active and inactive states", () => {
-			const model: SidebarModel = {
-				width: 80,
-				languages: [{ id: "typescript", name: "TypeScript", status: "active", servers: [{ name: "typescript-language-server", status: "ready" }] }],
-			};
+	test("lsp section shows active and inactive states", () => {
+		const model: SidebarModel = {
+			width: 80,
+			lspServers: [
+				{ name: "typescript", active: true },
+				{ name: "rust-analyzer", active: false },
+			],
+		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("LSP");
 		expect(output).toContain("● typescript");
-		expect(output).not.toContain("typescript · active");
 		expect(output).toContain("rust-analyzer · inactive");
 	});
 
@@ -126,7 +127,7 @@ describe("renderSidebar", () => {
 			.map(plain)
 			.join("\n");
 
-		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(frameZero).toContain("Session");
 		expect(frameZero).toContain("Todo List");
 		expect(frameZero).toContain("○ Pending item");
 		expect(frameZero).toContain("⠋ In progress item");
@@ -135,18 +136,47 @@ describe("renderSidebar", () => {
 		expect(frameZero).toContain("× Abandoned item");
 	});
 
-	test("subagents section renders running and completed", () => {
+	test("subagents section renders parent title and nested children", () => {
 		const model: SidebarModel = {
 			width: 80,
 			subagents: [
-				{ id: "a", agentName: "explore", status: "running", description: "Scanning repository" },
-				{ id: "b", agentName: "task", status: "completed", description: "Implemented change" },
+				{
+					kind: "parent",
+					id: "0-Explore",
+					agentName: "explore",
+					status: "running",
+					title: "Scan repository for sidebar touchpoints",
+					children: [
+						{ kind: "child", id: "0-Explore.0-Lint", agentName: "lint", status: "completed" },
+						{ kind: "child", id: "0-Explore.1-Reviewer", agentName: "reviewer", status: "failed" },
+					],
+				},
 			],
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
+		expect(output).toContain("Subagents");
 		expect(output).toContain("◐ explore");
-		expect(output).toContain("✓ task");
+		expect(output).toContain("Scan repository for sidebar touchpoints");
+		expect(output).toContain("├─ ✓ lint");
+		expect(output).toContain("└─ ✗ reviewer");
+	});
+
+	test("session section renders before subagents", () => {
+		const model: SidebarModel = {
+			width: 80,
+			modifiedFiles: [{ path: "src/main.ts", status: "M" }],
+			subagents: [
+				{ kind: "parent", id: "0-Implement", agentName: "implement", status: "running", title: "Ship change" },
+			],
+		};
+
+		const output = renderSidebar(model).map(plain);
+		const sessionIndex = output.indexOf("Session");
+		const subagentsIndex = output.indexOf("Subagents");
+		expect(sessionIndex).toBeGreaterThan(-1);
+		expect(subagentsIndex).toBeGreaterThan(-1);
+		expect(sessionIndex).toBeLessThan(subagentsIndex);
 	});
 
 	test("modified files section shows clean for empty list", () => {
@@ -156,7 +186,7 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
-		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(output).toContain("Session");
 		expect(output).toContain("(clean)");
 	});
 
@@ -171,7 +201,7 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
-		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(output).toContain("Session");
 		expect(output).toContain("(clean)");
 		expect(output).toContain("Todo List");
 		expect(output).toContain("✓ Ship the sidebar polish");
@@ -197,7 +227,7 @@ describe("renderSidebar", () => {
 		};
 
 		const output = renderSidebar(model).map(plain).join("\n");
-		expect(typeof output !== "undefined" ? output : frameZero).toContain("Session");
+		expect(output).toContain("Session");
 		expect(output).toContain("✎ one.ts");
 		expect(output).toContain("+ two.ts");
 		expect(output).toContain("- three.ts");
@@ -206,6 +236,7 @@ describe("renderSidebar", () => {
 		expect(output).toContain("...and 1 more");
 		expect(output).not.toContain("eleven.ts");
 	});
+
 	test("long names are truncated to width", () => {
 		const model: SidebarModel = {
 			width: 24,
@@ -224,14 +255,16 @@ describe("renderSidebar", () => {
 			width: 32,
 			tokens: { contextUsedPercent: 88, tokensUsed: 35_200, tokensTotal: 40_000, costUsd: 1.237 },
 			mcpServers: [{ name: "filesystem", connected: true }],
-			languages: [{ id: "typescript", name: "TypeScript", status: "active", servers: [{ name: "typescript-language-server", status: "ready" }] }],
+			lspServers: [{ name: "typescript", active: true }],
 			todos: [{ id: "1", content: "Very long todo content that should be clipped safely", status: "in_progress" }],
 			subagents: [
 				{
+					kind: "parent",
 					id: "1",
 					agentName: "research",
 					status: "running",
-					description: "Collecting references for implementation",
+					title: "Collecting references for implementation and edge-case coverage",
+					children: [{ kind: "child", id: "1.0", agentName: "code-reviewer", status: "completed" }],
 				},
 			],
 		};

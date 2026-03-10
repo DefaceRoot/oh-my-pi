@@ -21,12 +21,25 @@ export interface SidebarTodoItem {
 	status: "pending" | "in_progress" | "completed" | "abandoned";
 }
 
-export interface SidebarSubagent {
+export type SidebarSubagentStatus = "running" | "completed" | "failed";
+
+interface SidebarSubagentRowBase {
 	id: string;
 	agentName: string;
-	status: "running" | "completed" | "failed";
-	description?: string;
+	status: SidebarSubagentStatus;
 }
+
+export interface SidebarSubagentChildRow extends SidebarSubagentRowBase {
+	kind: "child";
+}
+
+export interface SidebarSubagentParentRow extends SidebarSubagentRowBase {
+	kind: "parent";
+	title?: string;
+	children?: SidebarSubagentChildRow[];
+}
+
+export type SidebarSubagent = SidebarSubagentParentRow;
 
 export interface SidebarModifiedFile {
 	path: string;

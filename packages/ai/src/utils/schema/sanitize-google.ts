@@ -39,6 +39,17 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
 		options.seen.add(value);
 		return value.map(entry => sanitizeSchemaImpl(entry, options));
 	}
+	if (value === true) {
+		// Boolean schema `true` means "accept any value" in JSON Schema 2020-12,
+		// but Google's Schema proto requires an object with a type field.
+		// Convert to a generic object schema.
+		return { type: "object", properties: {} };
+	}
+	if (value === false) {
+		// Boolean schema `false` means "reject everything".
+		// Google's API doesn't support this; use an empty enum to reject all values.
+		return { type: "string", enum: [] };
+	}
 	if (!value || typeof value !== "object") {
 		return value;
 	}

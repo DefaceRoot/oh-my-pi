@@ -61,7 +61,7 @@ const ESC_BYTE = "\x1b";
 const CTRLX_CHORD_TIMEOUT_MS = 350;
 
 export class InputController {
-	#askModePreviousRole: "default" | "orchestrator" | "plan" | "custom" | undefined;
+	#askModePreviousRole: "default" | "ask" | "orchestrator" | "plan" | "custom" | undefined;
 	#askModePreviousModel: Model | undefined;
 	#sttController = new STTController();
 	#chordArmed = false;
@@ -215,7 +215,7 @@ export class InputController {
 		}
 		this.ctx.editor.setCustomKeyHandler("left", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenu(-1);
+				this.ctx.statusLine.navigateMenuHorizontal(-1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -223,7 +223,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("right", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenu(1);
+				this.ctx.statusLine.navigateMenuHorizontal(1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -231,7 +231,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("up", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenu(-1);
+				this.ctx.statusLine.navigateMenuVertical(-1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -239,7 +239,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("down", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenu(1);
+				this.ctx.statusLine.navigateMenuVertical(1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -1117,7 +1117,7 @@ export class InputController {
 				: targetRole === "plan"
 					? planModel!
 					: targetRole === "ask"
-						? askModel
+						? askModel!
 						: defaultModel!;
 		const nextModelRef = `${nextModel.provider}/${nextModel.id}`;
 
@@ -1310,7 +1310,7 @@ export class InputController {
 
 				process.stdout.write(`\nRunning: ${cmdStr}\n`);
 
-				await new Promise((resolve, reject) => {
+				await new Promise<void>((resolve, reject) => {
 					const child = spawn(installCmd.command, installCmd.args, {
 						stdio: "inherit",
 					});
