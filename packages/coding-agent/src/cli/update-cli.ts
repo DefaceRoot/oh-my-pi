@@ -16,7 +16,8 @@ const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 export const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
 export const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
-export const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} run reinstall:fork`;
+export const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} install`;
+export const FORK_DIRECT_ENTRY = `${FORK_REPO_ROOT}/packages/coding-agent/src/cli.ts`;
 
 interface ReleaseInfo {
 	tag: string;
@@ -75,7 +76,7 @@ export function _resolveUpdateMethodForTest(ompPath: string, bunBinDir: string |
 }
 
 function buildForkReinstallGuidance(): string {
-	return `Reinstall from this fork with: ${FORK_REINSTALL_COMMAND}\nThen verify PATH precedence with: ${PATH_PRECEDENCE_CHECK_COMMAND}`;
+	return `Refresh dependencies with: ${FORK_REINSTALL_COMMAND}\nThen verify PATH precedence with: ${PATH_PRECEDENCE_CHECK_COMMAND}`;
 }
 
 export function _buildForkReinstallGuidanceForTest(): string {
@@ -238,9 +239,9 @@ async function printVerification(expectedVersion: string, expectedMethod: "bun" 
  */
 async function updateViaBun(): Promise<void> {
 	console.log(chalk.dim("Updating via bun..."));
-	const result = await $`bun run reinstall:fork`.cwd(FORK_REPO_ROOT).nothrow();
+	const result = await $`bun install`.cwd(FORK_REPO_ROOT).nothrow();
 	if (result.exitCode !== 0) {
-		throw new Error(`bun reinstall failed with exit code ${result.exitCode}`);
+		throw new Error(`bun install failed with exit code ${result.exitCode}`);
 	}
 
 	await printVerification(VERSION, "bun");

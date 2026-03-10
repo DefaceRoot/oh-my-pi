@@ -83,7 +83,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	cycleAgentMode: "alt+a",
 	pasteImage: "ctrl+v",
 	newSession: [],
-	tree: "a",
+	tree: [],
 	fork: [],
 	resume: [],
 	toggleWorktreeMenu: "ctrl+w",

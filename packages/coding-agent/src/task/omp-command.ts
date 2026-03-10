@@ -1,6 +1,8 @@
 import process from "node:process";
+import { existsSync } from "node:fs";
 
 import { $env } from "@oh-my-pi/pi-utils";
+import { FORK_DIRECT_ENTRY } from "../cli/update-cli";
 
 interface OmpCommand {
 	cmd: string;
@@ -25,6 +27,11 @@ export function resolveOmpCommand(): OmpCommand {
 	const entry = process.argv[1];
 	if (entry && (entry.endsWith(".ts") || entry.endsWith(".js"))) {
 		return { cmd: process.execPath, args: [entry], shell: false };
+	}
+
+	// Fork-direct path: prefer fork entry when available (even if launched from global binary)
+	if (existsSync(FORK_DIRECT_ENTRY)) {
+		return { cmd: process.execPath, args: [FORK_DIRECT_ENTRY], shell: false };
 	}
 
 	return { cmd: DEFAULT_CMD, args: [], shell: DEFAULT_SHELL };
