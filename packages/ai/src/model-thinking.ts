@@ -100,16 +100,14 @@ export const CLOUDFLARE_FALLBACK_MODEL: ApiModel<"anthropic-messages"> = {
 export function enrichModelThinking<TApi extends Api>(model: ApiModel<TApi>): ApiModel<TApi> {
 	const normalizedThinking = normalizeThinkingConfig(model.thinking);
 	if (!model.reasoning) {
-		return normalizedThinking === undefined && model.thinking === undefined
-			? model
-			: { ...model, thinking: undefined };
+		const normalizedModel =
+			normalizedThinking === undefined && model.thinking === undefined ? model : { ...model, thinking: undefined };
+		return applyCanonicalModelPolicies(normalizedModel);
 	}
 
 	const thinking = normalizedThinking ?? inferModelThinking(model);
-	if (thinkingsEqual(normalizedThinking, thinking)) {
-		return model;
-	}
-	return { ...model, thinking };
+	const normalizedModel = thinkingsEqual(normalizedThinking, thinking) ? model : { ...model, thinking };
+	return applyCanonicalModelPolicies(normalizedModel);
 }
 
 /**
@@ -117,13 +115,20 @@ export function enrichModelThinking<TApi extends Api>(model: ApiModel<TApi>): Ap
  * canonical rules, replacing any existing `thinking`.
  */
 export function refreshModelThinking<TApi extends Api>(model: ApiModel<TApi>): ApiModel<TApi> {
+	const normalizedThinking = normalizeThinkingConfig(model.thinking);
 	if (!model.reasoning) {
-		const normalizedThinking = normalizeThinkingConfig(model.thinking);
-		return normalizedThinking === undefined && model.thinking === undefined
-			? model
-			: { ...model, thinking: undefined };
+		const normalizedModel =
+			normalizedThinking === undefined && model.thinking === undefined ? model : { ...model, thinking: undefined };
+		return applyCanonicalModelPolicies(normalizedModel);
 	}
-	return { ...model, thinking: inferModelThinking(model) };
+
+	return applyCanonicalModelPolicies({ ...model, thinking: inferModelThinking(model) });
+}
+
+function applyCanonicalModelPolicies<TApi extends Api>(model: ApiModel<TApi>): ApiModel<TApi> {
+	const normalizedModel = { ...model } as ApiModel<TApi>;
+	applyGeneratedModelPolicy(normalizedModel as ApiModel<Api>);
+	return normalizedModel;
 }
 
 /**
@@ -134,9 +139,7 @@ export function refreshModelThinking<TApi extends Api>(model: ApiModel<TApi>): A
  */
 export function applyGeneratedModelPolicies(models: ApiModel<Api>[]): void {
 	for (let index = 0; index < models.length; index++) {
-		const model = refreshModelThinking(models[index]!);
-		applyGeneratedModelPolicy(model);
-		models[index] = model;
+		models[index] = refreshModelThinking(models[index]!);
 	}
 }
 
@@ -223,7 +226,6 @@ export function clampThinkingLevelForModel<TApi extends Api>(
 
 	return clamped ?? levels[0];
 }
-
 
 /**
  * Resolves an explicitly requested thinking level using model capability metadata.
@@ -349,6 +351,11 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 }
 
 function applyOpenAICatalogPolicy(model: ApiModel<Api>, parsedModel: OpenAIModel): void {
+	if (semverEqual(parsedModel.version, "5.4")) {
+		model.contextWindow = parsedModel.variant === "codex-max" ? 1000000 : 256000;
+		return;
+	}
+
 	// Legacy Codex models: 400K figure includes output budget; input window is 272K.
 	if (
 		parsedModel.variant.startsWith("codex") &&

@@ -52,7 +52,13 @@ providers:
         name: GPT-5.4
         reasoning: true
         input: [text, image]
-        contextWindow: 1050000
+        contextWindow: 256000
+        maxTokens: 128000
+      - id: gpt-5.4-codex-max
+        name: GPT-5.4 1M
+        reasoning: true
+        input: [text, image]
+        contextWindow: 1000000
         maxTokens: 128000
 
   anthropic:

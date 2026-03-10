@@ -9,6 +9,7 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 } from "@oh-my-pi/pi-ai/model-thinking";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import type { Api, Model, Provider } from "@oh-my-pi/pi-ai/types";
 
 function createModel<TApi extends Api>(overrides: {
@@ -160,8 +161,8 @@ describe("generated model policies", () => {
 				maxTokens: 32000,
 			},
 			{
-				id: "gpt-5.4-codex",
-				name: "GPT-5.4 Codex",
+				id: "gpt-5.4",
+				name: "GPT-5.4",
 				api: "openai-codex-responses",
 				provider: "openai-codex",
 				baseUrl: "https://example.com",
@@ -169,6 +170,18 @@ describe("generated model policies", () => {
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1050000,
+				maxTokens: 128000,
+			},
+			{
+				id: "gpt-5.4-codex-max",
+				name: "GPT-5.4 Codex Max",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1000000,
 				maxTokens: 128000,
 			},
 		];
@@ -191,7 +204,13 @@ describe("generated model policies", () => {
 		expect(models[1]?.cost.cacheWrite).toBe(6.25);
 		expect(models[1]?.contextWindow).toBe(200000);
 		expect(models[2]?.contextWindow).toBe(272000);
-		expect(models[3]?.contextWindow).toBe(1050000);
+		expect(models[3]?.contextWindow).toBe(256000);
+		expect(models[4]?.contextWindow).toBe(1000000);
+	});
+
+	it("normalizes bundled GPT-5.4 Codex to the 256K standard window", () => {
+		const model = getBundledModel("openai-codex", "gpt-5.4");
+		expect(model?.contextWindow).toBe(256000);
 	});
 
 	it("falls back to 200K for Anthropic 4.6 without the context-1m beta header", () => {
@@ -304,7 +323,6 @@ describe("model thinking runtime helpers", () => {
 		expect(clampThinkingLevelForModel(model, Effort.XHigh)).toBe(Effort.XHigh);
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
-
 
 	it("rejects reasoning models that are missing thinking metadata at runtime", () => {
 		const model = {

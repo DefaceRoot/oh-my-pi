@@ -352,6 +352,55 @@ describe("ModelRegistry", () => {
 		});
 	});
 
+	test("preserves split GPT-5.4 context windows for openai-codex custom models without automatic promotion", () => {
+		writeRawModelsJson({
+			"openai-codex": {
+				baseUrl: "https://chatgpt.com/backend-api",
+				apiKey: "OPENAI_CODEX_API_KEY",
+				api: "openai-codex-responses",
+				models: [
+					{
+						id: "gpt-5.4",
+						name: "GPT-5.4",
+						reasoning: true,
+						input: ["text", "image"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 256000,
+						maxTokens: 128000,
+					},
+					{
+						id: "gpt-5.4-codex-max",
+						name: "GPT-5.4 1M",
+						reasoning: true,
+						input: ["text", "image"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 1000000,
+						maxTokens: 128000,
+					},
+				],
+			},
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const standardModel = registry.find("openai-codex", "gpt-5.4");
+		const longContextModel = registry.find("openai-codex", "gpt-5.4-codex-max");
+
+		expect(standardModel?.contextWindow).toBe(256000);
+		expect(standardModel?.contextPromotionTarget).toBeUndefined();
+		expect(longContextModel?.contextWindow).toBe(1000000);
+	});
+
+	test("loads GPT-5.4 standard and 1M variants distinctly from the repo model config", () => {
+		const repoModelsPath = path.resolve(import.meta.dirname, "../../../agent/models.yml");
+		const registry = new ModelRegistry(authStorage, repoModelsPath);
+
+		const standardModel = registry.find("openai-codex", "gpt-5.4");
+		const longContextModel = registry.find("openai-codex", "gpt-5.4-codex-max");
+
+		expect(standardModel?.contextWindow).toBe(256000);
+		expect(longContextModel?.contextWindow).toBe(1000000);
+	});
+
 	describe("thinking metadata normalization", () => {
 		test("custom models preserve explicit thinking", () => {
 			const thinking: ThinkingConfig = {
