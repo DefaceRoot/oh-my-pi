@@ -24,7 +24,7 @@ When coordinating implementation workers:
 </implementation_parallelism>
 <quality_loop>
 To complete assigned implementation work (planned or ad hoc), run this loop before reporting completion:
-1. Quality and commit gates are implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` for in-progress implementation slices.
+1. Quality and commit gates are implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` for active implementation slices.
 2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
 3. Otherwise spawn a `lint` agent to run lint, typecheck, and tests for the changed scope.
 4. Send changed files to `code-reviewer` for independent evidence-first review.
