@@ -508,6 +508,17 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			const markMeaningfulStreamOutput = (value: string): void => {
 				if (value.trim().length > 0) sawMeaningfulStreamOutput = true;
 			};
+			const resetStreamAttemptState = (): void => {
+				currentItem = null;
+				currentBlock = null;
+				output.content.length = 0;
+				nativeOutputItems.length = 0;
+				output.stopReason = "stop";
+				sawTerminalEvent = false;
+				sawMeaningfulStreamOutput = false;
+				firstTokenTime = undefined;
+			};
+
 			while (true) {
 				try {
 					for await (const rawEvent of eventStream) {
@@ -758,6 +769,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							activated: activateFallback,
 							fatal: isFatal,
 						});
+						resetStreamAttemptState();
 						if (!activateFallback) {
 							websocketStreamRetries += 1;
 							await abortableSleep(getCodexWebSocketRetryDelayMs(websocketStreamRetries), options?.signal);
@@ -815,14 +827,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							retryBudget: CODEX_MAX_RETRIES,
 							transport: usingWebsocket ? "websocket" : "sse",
 						});
-						currentItem = null;
-						currentBlock = null;
-						output.content.length = 0;
-						nativeOutputItems.length = 0;
-						output.stopReason = "stop";
-						sawTerminalEvent = false;
-						sawMeaningfulStreamOutput = false;
-						firstTokenTime = undefined;
+						resetStreamAttemptState();
 						await abortableSleep(CODEX_RETRY_DELAY_MS * providerRetryAttempt, options?.signal);
 						if (usingWebsocket && websocketState) {
 							const websocketRequest = buildCodexWebSocketRequest(transformedBody, websocketState);
