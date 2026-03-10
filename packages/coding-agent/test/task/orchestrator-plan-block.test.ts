@@ -102,6 +102,13 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		});
 	}
 
+	test("blocks orchestrator boundary when runtime role casing varies", async () => {
+		const result = await executeWithAgent("commit", { getRuntimeRole: () => "  ORCHESTRATOR  " });
+		const text = collectText(result);
+		expect(text).toContain("Cannot spawn 'commit' from orchestrator parent sessions");
+		expect(runSubprocessAgents).toHaveLength(0);
+	});
+
 	test("blocks forbidden orchestrator spawns before async scheduling", async () => {
 		const asyncSettings = Settings.isolated({
 			"task.isolation.mode": "none",
