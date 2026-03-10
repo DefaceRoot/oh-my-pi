@@ -59,10 +59,7 @@ mock.module("../../modes/theme/theme", () => ({
 import { CommandController } from "./command-controller";
 
 type HotkeyMap = Partial<
-	Record<
-		"lazygit" | "externalEditor" | "expandTools" | "cycleAgentMode" | "togglePlanMode" | "toggleSTT",
-		string
-	>
+	Record<"lazygit" | "externalEditor" | "expandTools" | "cycleAgentMode" | "togglePlanMode" | "toggleSTT", string>
 >;
 
 function renderHotkeys(bindings: HotkeyMap): string {
@@ -126,5 +123,34 @@ describe("CommandController hotkeys viewer lazygit rows", () => {
 		expect(hotkeysMarkdown).not.toContain("Open Lazygit");
 		expect(hotkeysMarkdown).not.toContain("Edit message in external editor");
 		expect(hotkeysMarkdown).not.toContain("| `Ctrl+G` |");
+	});
+});
+
+describe("CommandController hotkeys Ctrl+X chord rows", () => {
+	it("documents the Ctrl+X leader key to open/close navigator", () => {
+		const md = renderHotkeys({});
+		expect(md).toContain("| `Ctrl+X` | Open subagent navigator (or close if already open) |");
+	});
+
+	it("documents all Ctrl+X chord follow-ups", () => {
+		const md = renderHotkeys({});
+		expect(md).toContain("| `Ctrl+X, Ctrl+N` | Next subagent |");
+		expect(md).toContain("| `Ctrl+X, Ctrl+P` | Previous subagent |");
+		expect(md).toContain("| `Ctrl+X, Ctrl+O` | View most recently updated subagent |");
+		expect(md).toContain("| `Ctrl+X, Ctrl+R` | Refresh subagent list |");
+		expect(md).toContain("| `Ctrl+X, Ctrl+V` | Open navigator (explicit) |");
+	});
+
+	it("renders Subagent Navigator section heading", () => {
+		const md = renderHotkeys({});
+		expect(md).toContain("**Subagent Navigator (Ctrl+X chord)**");
+	});
+
+	it("preserves existing hotkey sections alongside chord section", () => {
+		const md = renderHotkeys({});
+		expect(md).toContain("**Navigation**");
+		expect(md).toContain("**Editing**");
+		expect(md).toContain("**Other**");
+		expect(md).toContain("**Subagent Navigator (Ctrl+X chord)**");
 	});
 });
