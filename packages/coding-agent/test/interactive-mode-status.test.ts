@@ -71,7 +71,7 @@ describe("UiHelpers.isKnownSlashCommand", () => {
 		};
 		const helpers = new UiHelpers(ctx);
 
-		expect(helpers.isKnownSlashCommand("/refresh-fork")).toBe(true);
+		expect(helpers.isKnownSlashCommand("/merge-omp")).toBe(true);
 	});
 
 	test("returns false for unknown slash commands", () => {

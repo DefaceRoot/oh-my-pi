@@ -104,26 +104,52 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 		scanSyncSpy.mockRestore();
 	});
 
-	test("buildSidebarSubagents reads from snapshot without sync FS", () => {
-		const ref1 = makeRef("0-Explore");
-		const ref2 = makeRef("1-Research", { agent: "research", tokens: 3400 });
-		const group1 = makeGroup("0-Explore", [ref1]);
-		const group2 = makeGroup("1-Research", [ref2]);
-		const mode = createModeWithSnapshot([ref1, ref2], [group1, group2]) as any;
+	test("buildSidebarSubagents builds parent and child rows from snapshot groups without sync FS", () => {
+		const rootRef = makeRef("0-Explore", {
+			status: "running",
+			tokens: 5600,
+			description: "Scan repository for sidebar touchpoints",
+		});
+		const childRef = makeRef("0-Explore.0-Lint", {
+			rootId: "0-Explore",
+			parentId: "0-Explore",
+			depth: 1,
+			agent: "lint",
+			status: "completed",
+			tokens: 1300,
+		});
+		const siblingRef = makeRef("1-Research", { agent: "research", tokens: 3400, status: "completed" });
+		const group1 = makeGroup("0-Explore", [rootRef, childRef]);
+		const group2 = makeGroup("1-Research", [siblingRef]);
+		const mode = createModeWithSnapshot([rootRef, childRef, siblingRef], [group1, group2]) as any;
 
 		const rows = mode.buildSidebarSubagents();
 
 		expect(rows).toBeDefined();
-		expect(rows.length).toBe(2);
-		expect(rows[0].id).toBe("0-Explore");
-		expect(rows[0].agentName).toBe("explore");
-		expect(rows[1].id).toBe("1-Research");
-		expect(rows[1].agentName).toBe("research");
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toMatchObject({
+			kind: "parent",
+			id: "0-Explore",
+			agentName: "explore",
+			status: "running",
+			title: "Scan repository for sidebar touchpoints",
+			tokens: 5600,
+		});
+		expect(rows[0]?.children).toEqual([
+			{ kind: "child", id: "0-Explore.0-Lint", agentName: "lint", status: "completed", tokens: 1300 },
+		]);
+		expect(rows[1]).toMatchObject({
+			kind: "parent",
+			id: "1-Research",
+			agentName: "research",
+			status: "completed",
+			tokens: 3400,
+		});
 		expect(statSyncSpy).not.toHaveBeenCalled();
 		expect(scanSyncSpy).not.toHaveBeenCalled();
 	});
 
-	test("buildSidebarSubagents returns undefined for empty snapshot refs without sync FS", () => {
+	test("buildSidebarSubagents returns undefined for empty snapshot groups without sync FS", () => {
 		const mode = createModeWithSnapshot([], []) as any;
 
 		const rows = mode.buildSidebarSubagents();

@@ -102,7 +102,7 @@ describe("status-line model segment agent modes", () => {
 	it("renders distinct labels and colors for each main agent role", () => {
 		const cases = [
 			{ role: "default", label: "Default", style: theme.fg("success", "Default") },
-			{ role: "ask", label: "Ask", style: theme.fg("statusLineSubagents", "Ask") },
+			{ role: "ask", label: "Ask", style: theme.fg("muted", "Ask") },
 			{ role: "orchestrator", label: "Orchestrator", style: theme.fg("warning", "Orchestrator") },
 			{ role: "plan", label: "Plan", style: theme.fg("error", "Plan") },
 		] as const;

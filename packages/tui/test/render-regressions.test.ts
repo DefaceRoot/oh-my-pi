@@ -20,6 +20,20 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+class RawLinesComponent implements Component {
+	readonly #lines: unknown[];
+
+	constructor(lines: unknown[]) {
+		this.#lines = [...lines];
+	}
+
+	invalidate(): void {}
+
+	render(_width: number): string[] {
+		return [...this.#lines] as string[];
+	}
+}
+
 class RecordingTerminal {
 	#inner: VirtualTerminal;
 	writes: string[] = [];
@@ -886,6 +900,29 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 	});
+
+		it("tolerates non-string overlay lines while preserving valid line placement and truncation", async () => {
+			const term = new VirtualTerminal(20, 6);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["", "", "", "", "", ""]));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				tui.showOverlay(new RawLinesComponent([{ length: 1 }, null, "VALID-OVERLAY-LINE"]), {
+					anchor: "top-left",
+					row: 1,
+					col: 1,
+					width: 8,
+				});
+				await settle(term);
+
+				expect(visible(term)[3]?.includes("VALID-OV")).toBeTruthy();
+			} finally {
+				tui.stop();
+			}
+		});
 
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {

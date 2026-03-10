@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTION_BUTTONS, WORKFLOW_MENUS, flattenWorkflowMenuActions } from "../src/modes/action-buttons";
+import { ACTION_BUTTONS, flattenWorkflowMenuActions, WORKFLOW_MENUS } from "../src/modes/action-buttons";
 
 describe("Action Buttons Model", () => {
 	test("keeps Worktree as a stable top-level workflow menu", () => {
@@ -11,7 +11,9 @@ describe("Action Buttons Model", () => {
 	test("groups create actions under Worktree with explicit group model", () => {
 		const worktreeMenu = WORKFLOW_MENUS.find(menu => menu.id === "worktree");
 		const createGroup = worktreeMenu?.actions.find(entry => "actions" in entry && entry.id === "create-worktree");
-		const flattenedLabels = new Set(worktreeMenu ? flattenWorkflowMenuActions(worktreeMenu).map(action => action.label) : []);
+		const flattenedLabels = new Set(
+			worktreeMenu ? flattenWorkflowMenuActions(worktreeMenu).map(action => action.label) : [],
+		);
 
 		expect(createGroup).toBeDefined();
 		expect(flattenedLabels.has("[Create] Freeform")).toBe(true);
@@ -19,7 +21,7 @@ describe("Action Buttons Model", () => {
 	});
 
 	test("keeps direct action buttons focused on standalone actions", () => {
-		expect(ACTION_BUTTONS.some(button => button.label === "Refresh OMP")).toBe(true);
+		expect(ACTION_BUTTONS.some(button => button.label === "Merge OMP")).toBe(true);
 		expect(ACTION_BUTTONS.some(button => button.label === "Worktree")).toBe(false);
 	});
 

@@ -15,13 +15,13 @@ PI_CODING_AGENT_DIR=<fork-root>/agent \
   bun --cwd=<fork-root>/packages/coding-agent src/cli.ts
 ```
 
-This means changes to fork source take effect immediately on the next `omp` launch.
+This means changes to fork source take effect on the next `omp` restart (next launch).
 
 ## What Updates Mean Now
 
-- Changes under `<fork-root>/packages/` take effect immediately on next `omp` launch (no reinstall needed)
-- Changes under `<fork-root>/agent/` take effect immediately on next `omp` launch
-- The refresh button in the UI runs `bun install` to update dependencies, then relaunches
+- Changes under `<fork-root>/packages/` take effect on the next `omp` restart (no reinstall needed)
+- Changes under `<fork-root>/agent/` take effect on the next `omp` restart
+- The refresh button in the UI runs `bun install` to update dependencies, then restarts `omp`
 
 ## Upstream Sync
 
@@ -33,7 +33,7 @@ git fetch upstream && git rebase upstream/main
 bun install
 ```
 
-Then launch `omp` normally. The launcher runs the updated source immediately.
+Then restart `omp` normally. The launcher runs the updated source immediately.
 
 ## Legacy Global Install
 
@@ -62,13 +62,13 @@ Interpretation:
 - `file -h ~/.omp/agent` should report a symlink to `<fork-root>/agent`
 - The launcher script at `<fork-root>/omp` should exist and be executable
 
-Then launch `omp` and confirm the UI reflects fork-managed assets:
+Then restart `omp` and confirm the UI reflects fork-managed assets:
 
 - model list comes from `<fork-root>/agent/models.yml`
 - keybindings/help reflect `<fork-root>/agent/keybindings.json`
 
 ## Editing Workflow
 
-- Product changes: edit files under `<fork-root>/packages/`, then run `omp`
-- Agent customization changes: edit files under `<fork-root>/agent/`, then run `omp`
-- Dependency updates: run `bun install` in `<fork-root>`, then run `omp`
+- Product changes: edit files under `<fork-root>/packages/`, then restart `omp`
+- Agent customization changes: edit files under `<fork-root>/agent/`, then restart `omp`
+- Dependency updates: run `bun install` in `<fork-root>`, then restart `omp`

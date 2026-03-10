@@ -504,6 +504,10 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			let websocketStreamRetries = 0;
 			let providerRetryAttempt = 0;
 			let sawTerminalEvent = false;
+			let sawMeaningfulStreamOutput = false;
+			const markMeaningfulStreamOutput = (value: string): void => {
+				if (value.trim().length > 0) sawMeaningfulStreamOutput = true;
+			};
 			while (true) {
 				try {
 					for await (const rawEvent of eventStream) {
@@ -551,6 +555,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 									const delta = (rawEvent as { delta?: string }).delta || "";
 									currentBlock.thinking += delta;
 									lastPart.text += delta;
+									markMeaningfulStreamOutput(delta);
 									stream.push({
 										type: "thinking_delta",
 										contentIndex: blockIndex(),
@@ -592,6 +597,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 									const delta = (rawEvent as { delta?: string }).delta || "";
 									currentBlock.text += delta;
 									lastPart.text += delta;
+									markMeaningfulStreamOutput(delta);
 									stream.push({
 										type: "text_delta",
 										contentIndex: blockIndex(),
@@ -610,6 +616,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 									const delta = (rawEvent as { delta?: string }).delta || "";
 									currentBlock.text += delta;
 									lastPart.refusal += delta;
+									markMeaningfulStreamOutput(delta);
 									stream.push({
 										type: "text_delta",
 										contentIndex: blockIndex(),
@@ -623,6 +630,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 								const delta = (rawEvent as { delta?: string }).delta || "";
 								currentBlock.partialJson += delta;
 								currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+								markMeaningfulStreamOutput(delta);
 								stream.push({
 									type: "toolcall_delta",
 									contentIndex: blockIndex(),
@@ -648,6 +656,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							if (item.type === "reasoning" && currentBlock?.type === "thinking") {
 								currentBlock.thinking = item.summary?.map(s => s.text).join("\n\n") || "";
 								currentBlock.thinkingSignature = JSON.stringify(item);
+								markMeaningfulStreamOutput(currentBlock.thinking);
 								stream.push({
 									type: "thinking_end",
 									contentIndex: blockIndex(),
@@ -660,6 +669,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 									.map(c => (c.type === "output_text" ? c.text : c.refusal))
 									.join("");
 								currentBlock.textSignature = item.id;
+								markMeaningfulStreamOutput(currentBlock.text);
 								stream.push({
 									type: "text_end",
 									contentIndex: blockIndex(),
@@ -674,6 +684,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 									name: item.name,
 									arguments: parseStreamingJson(item.arguments || "{}"),
 								};
+								sawMeaningfulStreamOutput = true;
 								stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 							}
 						} else if (eventType === "response.created") {
@@ -733,7 +744,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						usingWebsocket &&
 						websocketState &&
 						isCodexWebSocketRetryableStreamError(error) &&
-						output.content.length === 0 &&
+						!sawMeaningfulStreamOutput &&
 						!options?.signal?.aborted
 					) {
 						const streamError = error instanceof Error ? error : new Error(String(error));
@@ -789,7 +800,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 					if (
 						isRetryableCodexProviderError(error) &&
-						output.content.length === 0 &&
+						!sawMeaningfulStreamOutput &&
 						providerRetryAttempt < CODEX_MAX_RETRIES &&
 						!options?.signal?.aborted
 					) {
@@ -807,8 +818,10 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						currentItem = null;
 						currentBlock = null;
 						output.content.length = 0;
+						nativeOutputItems.length = 0;
 						output.stopReason = "stop";
 						sawTerminalEvent = false;
+						sawMeaningfulStreamOutput = false;
 						firstTokenTime = undefined;
 						await abortableSleep(CODEX_RETRY_DELAY_MS * providerRetryAttempt, options?.signal);
 						if (usingWebsocket && websocketState) {
@@ -1596,7 +1609,6 @@ function isDifferentModelAssistantMessage(
 		assistantMessage.api === model.api
 	);
 }
-
 
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
 	const messages: ResponseInput = [];

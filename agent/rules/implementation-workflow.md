@@ -65,7 +65,7 @@ A clickable footer action area is shown with workflow controls:
 
 ### Runtime Source of Truth
 
-- Workflow UI/runtime behavior now ships through the packaged source under `packages/`; do not mutate the live Bun global install from `agent/patches/...` during startup or refresh.
+- Workflow UI/runtime behavior now comes from repository source under `packages/` and is picked up on the next `omp` restart; do not mutate archived `agent/patches/...` snapshots during startup or refresh.
 
 ### Environment Variables
 

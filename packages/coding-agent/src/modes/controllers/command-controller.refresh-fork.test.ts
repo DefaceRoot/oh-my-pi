@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, vi } from "bun:test";
-import { FORK_REINSTALL_COMMAND } from "../../cli/update-cli";
+import { FORK_REINSTALL_COMMAND, FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
 import type { InteractiveModeContext } from "../../modes/types";
 
 class MockBashExecutionComponent {
@@ -69,24 +69,34 @@ type BashResult = {
 	outputBytes: number;
 };
 
-function makeBashResult(exitCode: number | undefined, cancelled = false): BashResult {
+function makeBashResult({
+	exitCode,
+	cancelled = false,
+	output = "",
+}: {
+	exitCode: number | undefined;
+	cancelled?: boolean;
+	output?: string;
+}): BashResult {
 	return {
-		output: "done",
+		output,
 		exitCode,
 		cancelled,
 		truncated: false,
-		totalLines: 1,
-		totalBytes: 4,
-		outputLines: 1,
-		outputBytes: 4,
+		totalLines: output.length > 0 ? output.split("\n").length : 0,
+		totalBytes: output.length,
+		outputLines: output.length > 0 ? output.split("\n").length : 0,
+		outputBytes: output.length,
 	};
 }
 
-function createContext(result: BashResult) {
-	const executeBash = vi.fn(async () => result);
+function createContext(results: BashResult[], options?: { confirmResult?: boolean }) {
+	const queue = [...results];
+	const executeBash = vi.fn(async () => queue.shift() ?? makeBashResult({ exitCode: 0 }));
 	const showError = vi.fn();
 	const showStatus = vi.fn();
 	const showWarning = vi.fn();
+	const showHookConfirm = vi.fn(async () => options?.confirmResult ?? true);
 	const shutdown = vi.fn(async () => {});
 	const addChatChild = vi.fn();
 	const addPendingChild = vi.fn();
@@ -114,6 +124,7 @@ function createContext(result: BashResult) {
 		showError,
 		showStatus,
 		showWarning,
+		showHookConfirm,
 		shutdown,
 		bashComponent: undefined,
 	} as unknown as InteractiveModeContext;
@@ -122,19 +133,39 @@ function createContext(result: BashResult) {
 		controller: new CommandController(ctx),
 		executeBash,
 		showError,
+		showWarning,
+		showHookConfirm,
 		shutdown,
 	};
 }
 
-describe("CommandController refresh fork flow", () => {
-	it("relaunches omp into the current session after a successful fork reinstall", async () => {
+describe("CommandController merge OMP flow", () => {
+	it("fetches, rebases, reinstalls, and relaunches when upstream changes are safe", async () => {
 		spawnMock.mockClear();
 		unrefMock.mockClear();
-		const { controller, executeBash, shutdown, showError } = createContext(makeBashResult(0));
+		const { controller, executeBash, shutdown, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "main\n" }),
+			makeBashResult({ exitCode: 0, output: "2\n" }),
+			makeBashResult({ exitCode: 0, output: "src/foo.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "src/bar.ts\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0 }),
+		]);
 
-		await controller.handleRefreshForkInstall();
+		await controller.handleMergeUpstreamFork();
 
-		expect(executeBash).toHaveBeenCalledWith(FORK_REINSTALL_COMMAND, expect.any(Function), {
+		expect(executeBash).toHaveBeenNthCalledWith(1, `cd ${FORK_REPO_ROOT} && git remote`, expect.any(Function), {
+			excludeFromContext: false,
+		});
+		expect(executeBash).toHaveBeenNthCalledWith(
+			2,
+			`cd ${FORK_REPO_ROOT} && git fetch ${FORK_UPSTREAM_REMOTE}`,
+			expect.any(Function),
+			{ excludeFromContext: true },
+		);
+		expect(executeBash).toHaveBeenLastCalledWith(FORK_REINSTALL_COMMAND, expect.any(Function), {
 			excludeFromContext: true,
 		});
 		expect(spawnMock).toHaveBeenCalledWith(
@@ -147,16 +178,102 @@ describe("CommandController refresh fork flow", () => {
 		expect(showError).not.toHaveBeenCalled();
 	});
 
-	it("does not relaunch omp when the fork reinstall fails", async () => {
+	it("shows a clear error when upstream remote is missing", async () => {
 		spawnMock.mockClear();
 		unrefMock.mockClear();
-		const { controller, shutdown, showError } = createContext(makeBashResult(17));
+		const { controller, shutdown, showError } = createContext([makeBashResult({ exitCode: 0, output: "origin\n" })]);
 
-		await controller.handleRefreshForkInstall();
+		await controller.handleMergeUpstreamFork();
 
 		expect(spawnMock).not.toHaveBeenCalled();
 		expect(unrefMock).not.toHaveBeenCalled();
 		expect(shutdown).not.toHaveBeenCalled();
-		expect(showError).toHaveBeenCalledWith(expect.stringContaining("exit code 17"));
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining(`No '${FORK_UPSTREAM_REMOTE}' remote found`));
+	});
+
+	it("warns when upstream remote inspection is cancelled", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, showWarning, showError, shutdown } = createContext([
+			makeBashResult({ exitCode: undefined, cancelled: true }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showWarning).toHaveBeenCalledWith("Upstream remote check cancelled.");
+		expect(showError).not.toHaveBeenCalled();
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(unrefMock).not.toHaveBeenCalled();
+		expect(shutdown).not.toHaveBeenCalled();
+	});
+
+	it("reports successful cleanup when cancelled rebase aborts cleanly", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, showWarning, showError, shutdown } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "main\n" }),
+			makeBashResult({ exitCode: 0, output: "1\n" }),
+			makeBashResult({ exitCode: 0, output: "src/a.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: undefined, cancelled: true }),
+			makeBashResult({ exitCode: 0 }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showWarning).toHaveBeenCalledWith("Merge cancelled. Rebase aborted.");
+		expect(showError).not.toHaveBeenCalled();
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(unrefMock).not.toHaveBeenCalled();
+		expect(shutdown).not.toHaveBeenCalled();
+	});
+
+	it("asks for confirmation on overlapping files and cancels when declined", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, executeBash, showWarning, showHookConfirm, shutdown } = createContext(
+			[
+				makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+				makeBashResult({ exitCode: 0 }),
+				makeBashResult({ exitCode: 0, output: "main\n" }),
+				makeBashResult({ exitCode: 0, output: "1\n" }),
+				makeBashResult({ exitCode: 0, output: "src/a.ts\nsrc/b.ts\n" }),
+				makeBashResult({ exitCode: 0, output: "src/a.ts\n" }),
+			],
+			{ confirmResult: false },
+		);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showHookConfirm).toHaveBeenCalledTimes(1);
+		expect(showWarning).toHaveBeenCalledWith("Merge cancelled.");
+		expect(executeBash).toHaveBeenCalledTimes(6);
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(unrefMock).not.toHaveBeenCalled();
+		expect(shutdown).not.toHaveBeenCalled();
+	});
+
+	it("reports abort failure when rebase cancellation cannot be cleaned up", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, showError, shutdown } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "main\n" }),
+			makeBashResult({ exitCode: 0, output: "1\n" }),
+			makeBashResult({ exitCode: 0, output: "src/a.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: undefined, cancelled: true }),
+			makeBashResult({ exitCode: 1 }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining("automatic rebase abort failed"));
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(unrefMock).not.toHaveBeenCalled();
+		expect(shutdown).not.toHaveBeenCalled();
 	});
 });

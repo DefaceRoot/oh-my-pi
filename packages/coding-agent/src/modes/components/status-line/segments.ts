@@ -123,9 +123,9 @@ const modelSegment: StatusLineSegment = {
 		if (agentModeLabel !== "custom") {
 			const modeStyle = {
 				default: { label: "Default", color: "success" },
-				ask: { label: "Ask", color: "statusLineSubagents" },
+				ask: { label: "Ask", color: "muted" },
 				orchestrator: { label: "Orchestrator", color: "warning" },
-			plan: { label: "Plan", color: "error" },
+				plan: { label: "Plan", color: "error" },
 			} as const;
 			const { label, color } = modeStyle[agentModeLabel];
 			content += `${theme.sep.dot}${theme.fg(color, label)}`;

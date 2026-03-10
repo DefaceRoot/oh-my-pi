@@ -14,9 +14,10 @@ Definitions for this skill:
 Edit the repo files directly and use `UPDATING.md` for the supported refresh loop.
 
 Refresh rules for this fork:
-- If you change files under `<fork-root>/packages/`, run `bun --cwd=<fork-root> run reinstall:fork` and restart `omp`.
+- If you change files under `<fork-root>/packages/`, restart `omp` to load the updated source.
 - If you only change files under `<fork-root>/agent/`, restart `omp`.
-- Git commit and push do not update the live local `omp` install.
+- If dependencies changed, run `bun install` in `<fork-root>` before restarting `omp`.
+- Git commit and push do not update the live local `omp` process.
 
 ## Extension Points Overview
 
@@ -582,13 +583,12 @@ For workflows that usually auto-read session metadata (e.g., `/plan-new` output)
 
 This prevents restarts/session loss from blocking implementation.
 
-### 21. Treat repo source as the customization surface and reinstall globally after edits
+### 21. Treat repo source as the customization surface and restart after edits
 For this fork, do not patch files inside the global Bun install. Edit repo files under `<fork-root>` and `<fork-root>/agent`, then follow `UPDATING.md`:
-- `bun install`
-- `bun run reinstall:fork`
-- `command -v omp && bun pm bin -g`
+- run `bun install` only when dependencies changed
+- restart `omp` so the launcher picks up repo changes
 
-If you change files under `<fork-root>/packages/`, run `bun --cwd=<fork-root> run reinstall:fork` and restart `omp`. If you only change files under `<fork-root>/agent/`, restart `omp`. Commit and push are for source control only; they do not refresh the live local install.
+`bun run reinstall:fork` remains available only for legacy global-install compatibility checks; it is not part of the normal edit loop. Commit and push are for source control only and do not refresh the live local `omp` process.
 
 ### 22. Use `effectiveAgent` when spawning subagents
 If Task tool mutates an agent for runtime mode behavior (e.g., plan-mode system prompt/tool restrictions), pass that **effective** agent object into `runSubprocess`. Passing the original agent can silently ignore mode-specific behavior and confuse debugging.
@@ -649,12 +649,12 @@ If you leave this ambiguous, orchestrators may pick cheaper but incorrect delega
 
 ### 30. Runtime workflow changes must live in package source
 
-The live OMP runtime now comes from the packaged source under `packages/`, not from auto-applied snapshots under `agent/patches/`.
+The live OMP runtime now comes from the repository source under `packages/`, loaded by the fork launcher on the next `omp` restart, not from auto-applied snapshots under `agent/patches/`.
 
 Practical guardrails:
-- If a workflow/UI change must survive `reinstall:fork` plus relaunches, implement it in the package source that gets packed and installed globally.
+- If a workflow/UI change must survive restarts, implement it in the package source under `packages/`.
 - Treat archived patch bundles as historical recovery artifacts, not as the normal refresh path.
-- Verify durability by reinstalling, launching `omp`, exiting, and launching it again.
+- Verify durability by restarting `omp`, exiting, and restarting it again.
 
 ---
 
@@ -677,7 +677,7 @@ See `<fork-root>/agent/extensions/implementation-engine/index.ts` for a complete
 - Persists active plan file path/workspace metadata in worktree state so follow-on workflow actions (like review) use the exact plan bound to that worktree
 - Supports manual review-plan selection via `/review-complete @.omp/sessions/plans/<plan-slug>/plan.md` and UI input fallback when metadata is missing
 - Uses section-aware + deduplicated phase extraction to avoid double-counting phases in review kickoff
-- Keeps workflow runtime changes in package source so `reinstall:fork` remains durable across relaunches
+- Keeps workflow runtime changes in package source so restart-based launches stay durable across relaunches
 - Adds a dedicated `Implementation Agent` model role (red badge) and routes implementation Task subagents to it by default
 - Uses high thinking level for bundled `task` subagents, with user override via `<fork-root>/agent/agents/task.md`
 - Resolves `Implementation Agent` model role at per-task launch so `/model` updates apply immediately (no restart required)
@@ -730,7 +730,7 @@ OMP's `/model` list comes from **built-in models shipped in** `@oh-my-pi/pi-ai` 
 
 ### Temporary workaround while iterating on model definitions
 
-Edit `packages/ai/src/models.generated.ts` in this repo, then reinstall from the fork with `bun run reinstall:fork`.
+Edit `packages/ai/src/models.generated.ts` in this repo, then restart `omp` from the fork to load the local source change.
 
 ---
 

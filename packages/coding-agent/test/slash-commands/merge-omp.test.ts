@@ -2,9 +2,9 @@ import { describe, expect, it } from "bun:test";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
-describe("/refresh-fork slash command", () => {
-	it("delegates fork refresh to interactive mode so successful refreshes can relaunch omp", async () => {
-		let refreshCalls = 0;
+describe("/merge-omp slash command", () => {
+	it("delegates fork merge to interactive mode so successful merges can relaunch omp", async () => {
+		let mergeCalls = 0;
 		let editorText = "unchanged";
 		const runtime = {
 			ctx: {
@@ -13,17 +13,17 @@ describe("/refresh-fork slash command", () => {
 						editorText = value;
 					},
 				} as InteractiveModeContext["editor"],
-				refreshForkInstall: async () => {
-					refreshCalls += 1;
+				mergeUpstreamFork: async () => {
+					mergeCalls += 1;
 				},
 			} as InteractiveModeContext,
 			handleBackgroundCommand: () => {},
 		};
 
-		const handled = await executeBuiltinSlashCommand("/refresh-fork", runtime);
+		const handled = await executeBuiltinSlashCommand("/merge-omp", runtime);
 
 		expect(handled).toBe(true);
 		expect(editorText).toBe("");
-		expect(refreshCalls).toBe(1);
+		expect(mergeCalls).toBe(1);
 	});
 });

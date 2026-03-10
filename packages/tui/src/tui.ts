@@ -882,6 +882,11 @@ export class TUI extends Container {
 		}
 	}
 
+	#normalizeOverlayLines(lines: readonly unknown[]): string[] {
+		return lines.map(line => (typeof line === "string" ? line : ""));
+	}
+
+
 	/** Composite all overlays into content lines (in stack order, later = on top). */
 	#compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
 		if (this.overlayStack.length === 0) return lines;
@@ -902,7 +907,7 @@ export class TUI extends Container {
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 
 			// Render component at calculated width
-			let overlayLines = component.render(width);
+			let overlayLines = this.#normalizeOverlayLines(component.render(width));
 
 			// Apply maxHeight if specified
 			if (maxHeight !== undefined && overlayLines.length > maxHeight) {

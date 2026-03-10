@@ -21,23 +21,23 @@ Edit the fork directly. Do not patch Bun's global install.
 
 ## Refresh Rules
 
-- Changes under `<fork-root>/packages/` require reinstall plus restart
-- Changes under `<fork-root>/agent/` usually only require restart
-- Commit and push do not update the live local `omp` install
+- Changes under `<fork-root>/packages/` take effect on the next `omp` restart.
+- Changes under `<fork-root>/agent/` take effect on the next `omp` restart.
+- If dependencies changed, run `bun install` in `<fork-root>` before restarting `omp`.
+- Commit and push do not update the live local `omp` process.
 
-## Reinstall Loop
+## Restart Loop
 
 From `<fork-root>`:
 1. `git fetch upstream && git rebase upstream/main`
-2. `bun install`
-3. `bun run reinstall:fork`
-4. `command -v omp && bun pm bin -g`
-5. restart `omp`
+2. `bun install` (when dependencies changed)
+3. restart `omp`
 
-From any working directory:
+## Legacy Global Reinstall (Compatibility Only)
+
 - `bun --cwd=<fork-root> run reinstall:fork`
-
-`bun run reinstall:fork` packs the local workspace packages into tarballs, reinstalls them globally, relinks internal workspace dependencies, and verifies that `omp` can start. Use that instead of `bun link`.
+- `bun run reinstall:fork` repacks workspace packages into tarballs and reinstalls them globally.
+- Use this only when you intentionally need the legacy global-install behavior.
 
 See `UPDATING.md` for the full workflow, PATH checks, and smoke verification steps.
 

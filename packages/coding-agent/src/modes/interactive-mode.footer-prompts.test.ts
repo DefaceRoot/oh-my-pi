@@ -43,7 +43,7 @@ describe("interactive mode footer prompts", () => {
 	test("includes required direct action buttons and workflow labels", () => {
 		const actionButtonsBlock = extractActionButtonsBlock(actionButtonsSource);
 		const workflowMenusBlock = extractWorkflowMenusBlock(actionButtonsSource);
-		const requiredDirectActionLabels = ["Git", "Refresh OMP"];
+		const requiredDirectActionLabels = ["Git", "Merge OMP"];
 		const requiredWorkflowLabels = [
 			"Plan Review",
 			"Fix Plan",
@@ -55,7 +55,11 @@ describe("interactive mode footer prompts", () => {
 		];
 
 		expect(actionButtonsBlock).toContain("LAZYGIT_BUTTON");
-		expect(actionButtonsBlock).toContain("FORK_REFRESH_BUTTON");
+		expect(actionButtonsBlock).toContain("FORK_MERGE_BUTTON");
+
+		expect(actionButtonsSource).toContain('export const FORK_MERGE_STATUS_KEY = "yyy-omp-merge"');
+		expect(actionButtonsSource).toContain('command: "/merge-omp"');
+		expect(actionButtonsSource).toContain("statusKey: FORK_MERGE_STATUS_KEY");
 
 		for (const label of requiredDirectActionLabels) {
 			expect(actionButtonsSource).toContain(`label: "${label}"`);
