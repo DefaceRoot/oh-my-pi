@@ -89,11 +89,12 @@ module.main()
     assert "Traceback" not in result.stderr
 
 
-def test_patch_shutdown_emits_via_mode_controller() -> None:
-    patch_source = (
-        Path(__file__).resolve().parents[3]
-        / "patches/implement-workflow-clickable-v11.7.2/files/pi-coding-agent/src/modes/interactive-mode.ts"
-    ).read_text()
+def test_shutdown_emits_via_mode_controller() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[4]
+        / "packages/coding-agent/src/modes/interactive-mode.ts"
+    )
+    source = source_path.read_text()
 
-    assert 'this.session.emitCustomToolSessionEvent("shutdown")' not in patch_source
-    assert 'this.emitCustomToolSessionEvent("shutdown")' in patch_source
+    assert 'this.session.emitCustomToolSessionEvent("shutdown")' not in source
+    assert 'this.emitCustomToolSessionEvent("shutdown")' in source

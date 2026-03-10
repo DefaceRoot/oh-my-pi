@@ -25,7 +25,7 @@ The status line reads `state.thinkingLevel` at render time but this value is onl
 
 ### Files
 - `/home/colin/.omp/agent/extensions/implementation-engine/index.ts` (lines 1791-1812, 2234-2262)
-- `/home/colin/.omp/agent/patches/.../selector-controller.ts` (lines 550-580)
+- `/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/modes/controllers/selector-controller.ts` (current source location; older patch snapshot location was removed)
 
 ---
 

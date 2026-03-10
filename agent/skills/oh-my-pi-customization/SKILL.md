@@ -653,7 +653,7 @@ The live OMP runtime now comes from the repository source under `packages/`, loa
 
 Practical guardrails:
 - If a workflow/UI change must survive restarts, implement it in the package source under `packages/`.
-- Treat archived patch bundles as historical recovery artifacts, not as the normal refresh path.
+- Treat archived patch snapshots as historical recovery artifacts, not as the normal refresh path.
 - Verify durability by restarting `omp`, exiting, and restarting it again.
 
 ---
