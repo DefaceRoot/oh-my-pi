@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fork-direct OMP launcher — runs the coding harness directly from the fork repo.
+# This replaces the need for global package reinstalls.
+set -euo pipefail
+
+FORK_ROOT="$(cd "$(dirname "$(readlink -f "$0")" )" && pwd)"
+
+export PI_CODING_AGENT_DIR="$FORK_ROOT/agent"
+
+exec bun --cwd="$FORK_ROOT/packages/coding-agent" src/cli.ts "$@"
