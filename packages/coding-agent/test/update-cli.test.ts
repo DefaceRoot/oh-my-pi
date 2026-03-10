@@ -30,12 +30,13 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("binary");
 	});
 
-	it("includes local fork reinstall and PATH precedence checks in guidance", () => {
+	it("includes fork dependency-refresh and PATH precedence checks in guidance", () => {
 		const guidance = _buildForkReinstallGuidanceForTest();
 
-		expect(guidance).toContain("bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi run reinstall:fork");
-		expect(guidance).toContain("command -v omp");
-		expect(guidance).toContain("bun pm bin -g");
+		expect(guidance).toContain(
+			"Refresh dependencies with: bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi install",
+		);
+		expect(guidance).toContain("Then verify PATH precedence with: command -v omp && bun pm bin -g");
 	});
 
 	it("reinstalls the local fork for bun-managed installs without consulting the npm registry", async () => {
@@ -72,7 +73,7 @@ describe("update-cli install target detection", () => {
 		expect(events).not.toContain("binary");
 	});
 
-	it("prints fork guidance instead of reinstalling during bun-managed check mode", async () => {
+	it("prints fork dependency-refresh guidance instead of reinstalling during bun-managed check mode", async () => {
 		const events: string[] = [];
 
 		await _runUpdateCommandForTest(
@@ -99,6 +100,10 @@ describe("update-cli install target detection", () => {
 
 		expect(events).not.toContain("bun");
 		expect(events).not.toContain("binary");
-		expect(events.some(event => event.includes("bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi run reinstall:fork"))).toBeTrue();
+		expect(
+			events.some(event =>
+				event.includes("Refresh dependencies with: bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi install"),
+			),
+		).toBeTrue();
 	});
 });

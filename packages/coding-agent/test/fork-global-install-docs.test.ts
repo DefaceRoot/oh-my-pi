@@ -20,43 +20,60 @@ async function readText(filePath: string): Promise<string> {
 }
 
 describe("fork global install documentation", () => {
-	test("UPDATING.md explains when reinstall versus restart is required", async () => {
+	test("UPDATING.md documents restart-based workflow with legacy reinstall compatibility", async () => {
 		const updatingDoc = await readText(updatingDocPath);
 
 		expect(updatingDoc).toContain("git fetch upstream && git rebase upstream/main");
 		expect(updatingDoc).toContain("bun install");
-		expect(updatingDoc).toContain("bun run reinstall:fork");
-		expect(updatingDoc).toContain("bun --cwd=<fork-root> run reinstall:fork");
-		expect(updatingDoc).toContain("Git commit and push do not update the live local omp install");
-		expect(updatingDoc).toContain("Changes under `<fork-root>/packages/` require `bun run reinstall:fork` plus an `omp` restart");
-		expect(updatingDoc).toContain("Changes under `<fork-root>/agent/` usually only require restarting `omp`");
+		expect(updatingDoc).toContain("No global package reinstall is needed for day-to-day use.");
+		expect(updatingDoc).toContain(
+			"Changes under `<fork-root>/packages/` take effect on the next `omp` restart (no reinstall needed)",
+		);
+		expect(updatingDoc).toContain("Changes under `<fork-root>/agent/` take effect on the next `omp` restart");
+		expect(updatingDoc).toContain("Then restart `omp` normally. The launcher runs the updated source immediately.");
+		expect(updatingDoc).toContain(
+			"`bun run reinstall:fork` still exists for backward compatibility but is no longer the recommended workflow.",
+		);
+		expect(updatingDoc).not.toContain("require `bun run reinstall:fork` plus an `omp` restart");
 		expect(updatingDoc).toContain("command -v omp");
-		expect(updatingDoc).toContain("bun pm bin -g");
-		expect(updatingDoc.toLowerCase()).toContain("bun link");
 		expect(updatingDoc).toContain(forkRootPlaceholder);
 		expect(updatingDoc).not.toContain("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
 	});
 
-	test("customization skill points users at fork placeholders and correct refresh steps", async () => {
+	test("customization skill points users at fork placeholders and restart-based refresh steps", async () => {
 		const skillDoc = await readText(customizationSkillPath);
 
 		expect(skillDoc).toContain("UPDATING.md");
 		expect(skillDoc).toContain(forkAgentPlaceholder);
 		expect(skillDoc).toContain("~/.omp/agent -> <fork-root>/agent");
-		expect(skillDoc).toContain("If you change files under `<fork-root>/packages/`, run `bun --cwd=<fork-root> run reinstall:fork` and restart `omp`");
-		expect(skillDoc).toContain("If you only change files under `<fork-root>/agent/`, restart `omp`");
+		expect(skillDoc).toContain(
+			"If you change files under `<fork-root>/packages/`, restart `omp` to load the updated source.",
+		);
+		expect(skillDoc).toContain("If you only change files under `<fork-root>/agent/`, restart `omp`.");
+		expect(skillDoc).toContain(
+			"If dependencies changed, run `bun install` in `<fork-root>` before restarting `omp`.",
+		);
+		expect(skillDoc).toContain(
+			"`bun run reinstall:fork` remains available only for legacy global-install compatibility checks; it is not part of the normal edit loop.",
+		);
+		expect(skillDoc).toContain("Git commit and push do not update the live local `omp` process.");
 		expect(skillDoc).not.toContain("~/.bun/install/global/node_modules");
 		expect(skillDoc).not.toContain("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
 	});
 
-	test("customization quick reference uses fork placeholders instead of machine-local paths", async () => {
+	test("customization quick reference keeps restart-based defaults and legacy reinstall notes", async () => {
 		const quickReference = await readText(customizationQuickReferencePath);
 
 		expect(quickReference).toContain(`${forkAgentPlaceholder}/extensions/*.ts`);
 		expect(quickReference).toContain(`${forkAgentPlaceholder}/agents/*.md`);
+		expect(quickReference).toContain("Changes under `<fork-root>/packages/` take effect on the next `omp` restart.");
+		expect(quickReference).toContain("Changes under `<fork-root>/agent/` take effect on the next `omp` restart.");
+		expect(quickReference).toContain(
+			"If dependencies changed, run `bun install` in `<fork-root>` before restarting `omp`.",
+		);
+		expect(quickReference).toContain("Legacy Global Reinstall (Compatibility Only)");
 		expect(quickReference).toContain("bun --cwd=<fork-root> run reinstall:fork");
-		expect(quickReference).toContain("Changes under `<fork-root>/packages/` require reinstall plus restart");
-		expect(quickReference).toContain("Changes under `<fork-root>/agent/` usually only require restart");
+		expect(quickReference).toContain("Use this only when you intentionally need the legacy global-install behavior.");
 		expect(quickReference).toContain("UPDATING.md");
 		expect(quickReference).not.toContain("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
 	});
