@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as readlinePromises from "node:readline/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
-import { $env, getProjectDir } from "@oh-my-pi/pi-utils";
+import { $env } from "@oh-my-pi/pi-utils";
+import { getWorktreeBaseDir } from "@oh-my-pi/pi-utils/dirs";
+import { $ } from "bun";
 import type { SettingPath, SettingValue } from "../../config/settings";
 import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
@@ -12,11 +15,12 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { STTController, type SttState } from "../../stt";
+import { cleanupWorktree, ensureWorktree, getRepoRoot } from "../../task/worktree";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
 
-import { WORKFLOW_MENUS } from "../action-buttons";
+import { type FlattenedWorkflowMenuAction, WORKFLOW_MENUS } from "../action-buttons";
 
 interface Expandable {
 	setExpanded(expanded: boolean): void;
@@ -215,7 +219,7 @@ export class InputController {
 		}
 		this.ctx.editor.setCustomKeyHandler("left", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenuHorizontal(-1);
+				this.ctx.statusLine.navigateMenu(-1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -223,7 +227,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("right", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenuHorizontal(1);
+				this.ctx.statusLine.navigateMenu(1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -231,7 +235,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("up", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenuVertical(-1);
+				this.ctx.statusLine.navigateMenu(-1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -239,7 +243,7 @@ export class InputController {
 		});
 		this.ctx.editor.setCustomKeyHandler("down", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
-				this.ctx.statusLine.navigateMenuVertical(1);
+				this.ctx.statusLine.navigateMenu(1);
 				this.ctx.ui.requestRender();
 				return true;
 			}
@@ -268,10 +272,13 @@ export class InputController {
 			if (this.ctx.statusLine.getActiveMenu()) {
 				const action = this.ctx.statusLine.executeSelectedMenuAction();
 				if (action) {
-					if (action.editorText) {
-						this.ctx.editor.setText(action.editorText);
-					} else {
-						void this.ctx.session.prompt(action.command);
+					const handled = await this.handleWorkflowMenuAction(action);
+					if (!handled) {
+						if (action.editorText) {
+							this.ctx.editor.setText(action.editorText);
+						} else {
+							void this.ctx.session.prompt(action.command);
+						}
 					}
 				}
 				this.ctx.ui.requestRender();
@@ -1122,7 +1129,7 @@ export class InputController {
 		const nextModelRef = `${nextModel.provider}/${nextModel.id}`;
 
 		try {
-			await this.ctx.session.setModelTemporary(nextModel);
+			await this.ctx.session.setModelTemporary(nextModel, targetRole);
 			this.ctx.sessionManager.appendModelChange(nextModelRef, targetRole);
 			if (targetRole !== "ask") {
 				this.#clearAskModeState();
@@ -1223,6 +1230,97 @@ export class InputController {
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
+
+	private resolveSessionCwd(): string {
+		const sessionManagerCwd = this.ctx.sessionManager?.getCwd?.();
+		if (typeof sessionManagerCwd === "string" && sessionManagerCwd.trim().length > 0) return sessionManagerCwd;
+
+		const sessionCwd = this.ctx.session?.sessionManager?.getCwd?.();
+		if (typeof sessionCwd === "string" && sessionCwd.trim().length > 0) return sessionCwd;
+
+		return process.cwd();
+	}
+
+	private async handleWorkflowMenuAction(action: FlattenedWorkflowMenuAction): Promise<boolean> {
+		switch (action.id) {
+			case "freeform-worktree":
+				await this.createAndSwitchWorktree("freeform");
+				return true;
+			case "planned-worktree":
+				await this.createAndSwitchWorktree("planned");
+				return true;
+			case "delete-worktree":
+				await this.deleteCurrentWorktree();
+				return true;
+			case "cleanup-worktrees":
+				await this.pruneWorktrees();
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	private async createAndSwitchWorktree(kind: "freeform" | "planned"): Promise<void> {
+		const currentCwd = this.resolveSessionCwd();
+		try {
+			const repoRoot = await getRepoRoot(currentCwd);
+			const worktreeId = `${kind}-${Date.now().toString(36)}`;
+			const worktreeDir = await ensureWorktree(repoRoot, worktreeId);
+			await this.ctx.sessionManager.moveTo(worktreeDir);
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorTopBorder();
+			this.ctx.showStatus(`Switched to ${kind} worktree: ${worktreeDir}`);
+			this.ctx.ui.requestRender();
+		} catch (error) {
+			this.ctx.showWarning(
+				`Failed to create ${kind} worktree: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	private async deleteCurrentWorktree(): Promise<void> {
+		const currentCwd = this.resolveSessionCwd();
+		const worktreeBaseDir = path.resolve(getWorktreeBaseDir());
+		const resolvedCwd = path.resolve(currentCwd);
+		if (!resolvedCwd.startsWith(`${worktreeBaseDir}${path.sep}`)) {
+			this.ctx.showWarning("Delete worktree only works inside a managed OMP worktree directory.");
+			return;
+		}
+
+		try {
+			const repoRoot = await getRepoRoot(currentCwd);
+			await this.ctx.sessionManager.moveTo(repoRoot);
+			await cleanupWorktree(currentCwd);
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorTopBorder();
+			this.ctx.showStatus(`Deleted worktree: ${currentCwd}`);
+			this.ctx.ui.requestRender();
+		} catch (error) {
+			this.ctx.showWarning(
+				`Failed to delete worktree: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	private async pruneWorktrees(): Promise<void> {
+		const currentCwd = this.resolveSessionCwd();
+		try {
+			const repoRoot = await getRepoRoot(currentCwd);
+			const pruneResult = await $`git worktree prune`.cwd(repoRoot).quiet().nothrow();
+			if (pruneResult.exitCode !== 0) {
+				const stderr = pruneResult.stderr.toString().trim();
+				this.ctx.showWarning(stderr ? `Failed to cleanup worktrees: ${stderr}` : "Failed to cleanup worktrees.");
+				return;
+			}
+			this.ctx.showStatus("Cleaned up stale worktrees.");
+			this.ctx.ui.requestRender();
+		} catch (error) {
+			this.ctx.showWarning(
+				`Failed to cleanup worktrees: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 
 	private getEditorTerminalPath(): string | null {
 		if (process.platform === "win32") {
@@ -1336,7 +1434,7 @@ export class InputController {
 			}
 		}
 
-		const cwd = getProjectDir();
+		const cwd = this.resolveSessionCwd();
 		let ttyHandle: fs.FileHandle | null = null;
 		try {
 			ttyHandle = await this.openEditorTerminalHandle();

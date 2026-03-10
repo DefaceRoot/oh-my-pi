@@ -9,7 +9,7 @@ import * as piUtils from "@oh-my-pi/pi-utils";
 import type { InteractiveModeContext } from "../../modes/types";
 
 const spawnMock = vi.fn();
-const getProjectDirMock = vi.fn(() => "/tmp/lazygit-test-cwd");
+const getSessionCwdMock = vi.fn(() => "/tmp/lazygit-test-cwd");
 
 mock.module("node:child_process", () => ({
 	...childProcess,
@@ -19,7 +19,6 @@ mock.module("node:child_process", () => ({
 mock.module("@oh-my-pi/pi-utils", () => ({
 	...piUtils,
 	$env: process.env,
-	getProjectDir: getProjectDirMock,
 }));
 
 mock.module("../action-buttons", () => ({
@@ -98,6 +97,7 @@ function createFixture(): LazygitFixture {
 			requestRender: uiRequestRenderSpy,
 		},
 		showWarning: showWarningSpy,
+		sessionManager: { getCwd: getSessionCwdMock },
 	} as unknown as InteractiveModeContext;
 
 	const controller = new InputController(ctx) as unknown as InputControllerWithLazygit;
@@ -156,7 +156,7 @@ function createKeyHandlerFixture(
 			toggleMenu: vi.fn(),
 			navigateMenu: vi.fn(),
 		},
-		ui: { requestRender: vi.fn(), onDebug: undefined },
+		ui: { requestRender: vi.fn(), onDebug: undefined, addInputListener: vi.fn(() => vi.fn()) },
 		session: { extensionRunner: undefined },
 		isSubagentViewActive: vi.fn(() => false),
 		exitSubagentView: vi.fn(),
@@ -235,10 +235,54 @@ function createSubmitInterceptFixture() {
 	};
 }
 
+function createWorkflowMenuSubmitFixture(action: { id: string; command: string; editorText?: string }) {
+	const sessionPromptSpy = vi.fn(async () => undefined);
+	const editorSetTextSpy = vi.fn();
+	const editor = {
+		setText: editorSetTextSpy,
+		addToHistory: vi.fn(),
+		setCustomKeyHandler: vi.fn(),
+	} as unknown as InteractiveModeContext["editor"];
+	const ctx = {
+		editor,
+		statusLine: {
+			getActiveMenu: vi.fn(() => "worktree"),
+			executeSelectedMenuAction: vi.fn(() => ({ ...action, baseLabel: action.id })),
+			invalidate: vi.fn(),
+		},
+		session: {
+			isStreaming: false,
+			queuedMessageCount: 0,
+			isCompacting: false,
+			prompt: sessionPromptSpy,
+			extensionRunner: undefined,
+		},
+		sessionManager: { moveTo: vi.fn(), getCwd: vi.fn(() => "/tmp/session-cwd") },
+		pendingImages: [],
+		updatePendingMessagesDisplay: vi.fn(),
+		ui: { requestRender: vi.fn() },
+		showStatus: vi.fn(),
+		showWarning: vi.fn(),
+		updateEditorTopBorder: vi.fn(),
+	} as unknown as InteractiveModeContext;
+	const controller = new InputController(ctx);
+	controller.setupEditorSubmitHandler();
+	return {
+		controller,
+		sessionPromptSpy,
+		editorSetTextSpy,
+		submit: async (text: string) => {
+			const submitHandler = ctx.editor.onSubmit as ((value: string) => Promise<void>) | undefined;
+			if (!submitHandler) throw new Error("Missing editor submit handler");
+			await submitHandler(text);
+		},
+	};
+}
+
 afterEach(() => {
 	spawnMock.mockReset();
-	getProjectDirMock.mockReset();
-	getProjectDirMock.mockReturnValue("/tmp/lazygit-test-cwd");
+	getSessionCwdMock.mockReset();
+	getSessionCwdMock.mockReturnValue("/tmp/lazygit-test-cwd");
 	vi.restoreAllMocks();
 	Object.defineProperty(process, "platform", originalProcessPlatformDescriptor);
 	delete process.env.GIT_DIR;
@@ -246,10 +290,10 @@ afterEach(() => {
 });
 
 describe("InputController openLazygit", () => {
-	it("launches lazygit in project cwd with a sanitized git environment", async () => {
+	it("launches lazygit in current session cwd with a sanitized git environment", async () => {
 		const fixture = createFixture();
 		vi.spyOn(Bun, "which").mockReturnValue("/usr/bin/lazygit");
-		getProjectDirMock.mockReturnValue("/tmp/repo-cwd");
+		getSessionCwdMock.mockReturnValue("/tmp/repo-cwd");
 		process.env.GIT_DIR = "/tmp/should-not-leak/git-dir";
 		process.env.GIT_WORK_TREE = "/tmp/should-not-leak/work-tree";
 		const child = createControllableChild();
@@ -467,6 +511,32 @@ describe("InputController shortcut and submit wiring", () => {
 		expect(fixture.showStatusSpy).toHaveBeenCalledWith("Usage: /stt [on|off|status]");
 		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 	});
+	it("handles freeform worktree menu action without prompting the model", async () => {
+		const fixture = createWorkflowMenuSubmitFixture({
+			id: "freeform-worktree",
+			command: "/freeform-worktree",
+		});
+		const createSpy = vi.spyOn(fixture.controller as any, "createAndSwitchWorktree").mockResolvedValue(undefined);
+
+		await fixture.submit("ignored");
+
+		expect(createSpy).toHaveBeenCalledWith("freeform");
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+		expect(fixture.editorSetTextSpy).not.toHaveBeenCalled();
+	});
+
+	it("falls back to prompting for unknown workflow actions", async () => {
+		const fixture = createWorkflowMenuSubmitFixture({
+			id: "unknown-workflow-action",
+			command: "/unknown-workflow-action",
+		});
+
+		await fixture.submit("ignored");
+
+		expect(fixture.sessionPromptSpy).toHaveBeenCalledWith("/unknown-workflow-action");
+	});
+
+
 });
 
 describe("InputController lazygit installation flow", () => {

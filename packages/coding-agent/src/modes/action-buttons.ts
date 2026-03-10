@@ -1,13 +1,9 @@
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
 export const LAZYGIT_STATUS_KEY = "000-lazygit";
+export const WORKTREE_MENU_STATUS_KEY = "050-worktree-menu";
 export const FORK_MERGE_STATUS_KEY = "yyy-omp-merge";
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
-
-const PLAN_REVIEW_EDITOR_TEXT =
-	"Review this plan for issues/ambiguities, make sure there are no edge cases being missed. Spawn multiple task subagents for each phase to review the phases in the plan. Do not edit the plan, give me an output with all the synthesized data in a beginner friendly, clear and concise list with numbered labelings for each issue identified and why it may be an issue, do not use technical jargain or undefined acronyms, I want each thing explained clearly and concisely, so that I can understand it and give you guideance. Use research agents in parallel for anything that need up-to-date information, to ensure it is accurate as of today. If there are no issues/ambiguities or edge cases identified, that is fine, do not make up things to try to please me, but also do not overlook potential problems from the plan that may be identified during implementation. Utilize your full suite of subagents, prioritize parallel work as this is a READ-ONLY task that is preferred to be quicker, so parallel subagents are required.\n\nPlan File:\n";
-const FIX_PLAN_EDITOR_TEXT =
-	"Another agent reviewed this plan and found issues listed below. Read the plan file, then apply each fix directly — do NOT spawn subagents or use isolated mode, just edit the plan file yourself one fix at a time. Do NOT implement the plan or change any other files. Keep changes strictly limited to resolving the identified problems: clarify ambiguous steps, add missing edge cases, tighten verification criteria, and correct factual errors. Do not expand scope or rewrite parts that are not broken. Use research tools if you need up-to-date information to verify a fix.\n\nPlan Review Output:\n";
 
 export interface ActionButtonUi {
 	label: string;
@@ -54,6 +50,14 @@ export const LAZYGIT_BUTTON: ActionButtonUi = {
 	hoverText: "\x1b[30;104m Git \x1b[0m",
 };
 
+export const WORKTREE_MENU_BUTTON: ActionButtonUi = {
+	label: "Worktree",
+	command: "/worktree-menu",
+	statusKey: WORKTREE_MENU_STATUS_KEY,
+	normalText: "\x1b[30;45m Worktree \x1b[0m",
+	hoverText: "\x1b[30;105m Worktree \x1b[0m",
+};
+
 export const FORK_MERGE_BUTTON: ActionButtonUi = {
 	label: "Merge OMP",
 	command: "/merge-omp",
@@ -62,7 +66,7 @@ export const FORK_MERGE_BUTTON: ActionButtonUi = {
 	hoverText: "\x1b[30;106m Merge OMP \x1b[0m",
 };
 
-export const ACTION_BUTTONS: ActionButtonUi[] = [LAZYGIT_BUTTON, FORK_MERGE_BUTTON];
+export const ACTION_BUTTONS: ActionButtonUi[] = [LAZYGIT_BUTTON, WORKTREE_MENU_BUTTON, FORK_MERGE_BUTTON];
 
 export const WORKFLOW_MENUS: WorkflowMenu[] = [
 	{
@@ -78,16 +82,14 @@ export const WORKFLOW_MENUS: WorkflowMenu[] = [
 					{ id: "planned-worktree", label: "Planned", command: "/planned-worktree" },
 				],
 			},
-			{ id: "plan-review", label: "Plan Review", command: "/plan-review", editorText: PLAN_REVIEW_EDITOR_TEXT },
-			{ id: "fix-plan", label: "Fix Plan", command: "/fix-plan", editorText: FIX_PLAN_EDITOR_TEXT },
-			{ id: "git-menu", label: "Git Menu", command: "/git-menu" },
-			{ id: "sync-needed", label: "! Sync", command: "/git-menu" },
-			{ id: "submit-pr", label: "Submit PR", command: "/submit-pr" },
-			{ id: "review-complete", label: "Review", command: "/review-complete" },
-			{ id: "fix-issues", label: "Fix Issues", command: "/fix-issues" },
-			{ id: "update-version-workflow", label: "Update Version", command: "/update-version-workflow" },
-			{ id: "delete-worktree", label: "✕ Worktree", command: "/delete-worktree" },
-			{ id: "cleanup-worktrees", label: "Cleanup", command: "/cleanup-worktrees" },
+			{
+				id: "manage-worktree",
+				label: "Manage",
+				actions: [
+					{ id: "delete-worktree", label: "Delete", command: "/delete-worktree" },
+					{ id: "cleanup-worktrees", label: "Cleanup", command: "/cleanup-worktrees" },
+				],
+			},
 		],
 	},
 ];

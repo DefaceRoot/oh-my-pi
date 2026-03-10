@@ -33,7 +33,7 @@ describe("worktree menu red behavior", () => {
 		initTheme();
 	});
 
-	test("keeps the top-level Worktree button visible even when submenu actions are hidden", () => {
+	test("keeps the worktree submenu hidden until opened", () => {
 		const worktreeMenu = WORKFLOW_MENUS.find(menu => menu.id === "worktree");
 		expect(worktreeMenu).toBeDefined();
 		if (!worktreeMenu) return;
@@ -44,16 +44,16 @@ describe("worktree menu red behavior", () => {
 		}
 
 		const rendered = stripAnsi(statusLine.render(240).join("\n"));
-		expect(rendered).toContain("Worktree");
+		expect(rendered).not.toContain("Worktree");
 	});
 
-	test("keeps non-worktree hook statuses visible under the Worktree menu row", () => {
+	test("keeps non-worktree hook statuses visible without a separate menu row", () => {
 		const statusLine = createStatusLine();
 		statusLine.setHookStatus("zzz-custom", "\x1b[30;45m Custom \x1b[0m");
 
 		const rendered = stripAnsi(statusLine.render(240).join("\n"));
-		expect(rendered).toContain("Worktree");
 		expect(rendered).toContain("Custom");
+		expect(rendered).not.toContain("Worktree");
 	});
 
 	test("hides legacy flat sync/delete hook statuses under the Worktree menu", () => {
@@ -64,8 +64,8 @@ describe("worktree menu red behavior", () => {
 		statusLine.setHookStatus("zzz-custom", "\x1b[30;45m Custom \x1b[0m");
 
 		const rendered = stripAnsi(statusLine.render(240).join("\n"));
-		expect(rendered).toContain("Worktree");
 		expect(rendered).toContain("Custom");
+		expect(rendered).not.toContain("Worktree");
 		expect(rendered).not.toContain("! Sync");
 		expect(rendered).not.toContain("✕ Worktree");
 	});
@@ -83,7 +83,7 @@ describe("worktree menu red behavior", () => {
 
 		statusLine.toggleMenu("worktree");
 		const rendered = stripAnsi(statusLine.render(240).join("\n"));
-		expect(rendered).toContain("✕ Worktree");
+		expect(rendered).toContain("└ [Manage] Delete");
 		expect(statusLine.executeSelectedMenuAction()?.id).toBe("delete-worktree");
 	});
 
@@ -102,8 +102,8 @@ describe("worktree menu red behavior", () => {
 		const plainText = stripAnsi(rendered);
 
 		expect(plainText).toContain("└ [Create] Freeform");
-		expect(plainText).toContain("Plan Review");
-		expect(plainText).not.toContain("↳ Plan Review");
+		expect(plainText).toContain("└ [Create] Planned");
+		expect(plainText).toContain("└ [Manage] Delete");
 		const freeformTag = extractTagSegment(rendered, "Freeform");
 		expect(stripAnsi(freeformTag).trim()).toBe("[Create]");
 		expect(countAnsi(freeformTag)).toBeGreaterThan(0);

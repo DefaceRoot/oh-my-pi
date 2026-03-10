@@ -86,7 +86,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	tree: [],
 	fork: [],
 	resume: [],
-	toggleWorktreeMenu: "ctrl+w",
+	toggleWorktreeMenu: "alt+w",
 	lazygit: "ctrl+g",
 };
 

@@ -411,20 +411,12 @@ export class StatusLineComponent implements Component {
 	}
 
 	private renderWorkflowMenus(width: number): string[] {
-		if (WORKFLOW_MENUS.length === 0) return [];
-
-		const topLevelMenus = WORKFLOW_MENUS.map(menu => {
-			const active = menu.id === this.activeMenuId;
-			const menuText = ` ${menu.label} `;
-			const style = active ? MENU_SELECTED_TAG_ANSI : MENU_ENABLED_TAG_ANSI;
-			return `${style}${menuText}${ANSI_RESET}`;
-		});
-
-		const lines = [truncateToWidth(topLevelMenus.join(" "), width)];
-		if (!this.activeMenuId) return lines;
+		if (WORKFLOW_MENUS.length === 0 || !this.activeMenuId) return [];
 
 		const activeMenu = this.getWorkflowMenu(this.activeMenuId);
-		if (!activeMenu) return lines;
+		if (!activeMenu) return [];
+
+		const lines: string[] = [];
 
 		const visibleActions = this.getVisibleMenuActions(activeMenu);
 		for (let index = 0; index < visibleActions.length; index++) {
@@ -487,7 +479,7 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.resolveSettings().segmentOptions ?? {},
 			planMode: this.planModeStatus,
-			usageStats: { ...usageStats, tokensPerSecond: usageStats.tokensPerSecond ?? null },
+			usageStats: { ...usageStats, tokensPerSecond: (usageStats as { tokensPerSecond?: number | null }).tokensPerSecond ?? null },
 			contextPercent,
 			contextWindow,
 			autoCompactEnabled: this.autoCompactEnabled,

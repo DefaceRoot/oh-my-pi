@@ -44,6 +44,7 @@ import {
 	hasSameVisibleText,
 	LAZYGIT_BUTTON,
 	stripAnsi,
+	WORKTREE_MENU_BUTTON,
 } from "./action-buttons";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -334,6 +335,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
 		this.statusLine.setHookStatus(FORK_MERGE_BUTTON.statusKey, FORK_MERGE_BUTTON.normalText);
 		this.statusLine.setHookStatus(LAZYGIT_BUTTON.statusKey, LAZYGIT_BUTTON.normalText);
+		this.statusLine.setHookStatus(WORKTREE_MENU_BUTTON.statusKey, WORKTREE_MENU_BUTTON.normalText);
 		this.mainLayoutContainer = new Container();
 		this.mainLayoutContainer.addChild(this.chatContainer);
 		this.mainLayoutContainer.addChild(this.pendingMessagesContainer);
@@ -1218,6 +1220,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (hoveredButton.command === "/lazygit") {
 			void this.inputController.openLazygit();
+			return true;
+		}
+
+		if (hoveredButton.command === "/worktree-menu") {
+			this.statusLine.toggleMenu("worktree");
+			this.ui.requestRender();
 			return true;
 		}
 
