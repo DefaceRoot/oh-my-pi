@@ -333,7 +333,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			const conversationMessages = convertMessages(model, context);
 			const params: RequestBody = {
 				model: model.id,
-				input: [...conversationMessages],
+				input: [...conversationMessages] as RequestBody["input"],
 				stream: true,
 				prompt_cache_key: options?.sessionId,
 			};
@@ -1586,6 +1586,18 @@ function getOpenAIResponsesHistoryItems(
 	return providerPayload.items as ResponseInput;
 }
 
+function isDifferentModelAssistantMessage(
+	assistantMessage: AssistantMessage,
+	model: Model<"openai-codex-responses">,
+): boolean {
+	return (
+		assistantMessage.model !== model.id &&
+		assistantMessage.provider === model.provider &&
+		assistantMessage.api === model.api
+	);
+}
+
+
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
 	const messages: ResponseInput = [];
 
@@ -1698,10 +1710,12 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				});
 			}
 		} else if (msg.role === "assistant") {
+			const assistantMsg = msg as AssistantMessage;
+			const isDifferentModel = isDifferentModelAssistantMessage(assistantMsg, model);
 			const providerPayload = (msg as { providerPayload?: { type?: string; dt?: boolean; items?: unknown } })
 				.providerPayload;
 			const historyItems = getOpenAIResponsesHistoryItems(providerPayload);
-			if (historyItems) {
+			if (historyItems && !isDifferentModel) {
 				if (providerPayload?.dt) {
 					messages.push(...historyItems);
 				} else {
@@ -1713,8 +1727,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 
 			const output: ResponseInput = [];
 
-			for (const block of msg.content) {
-				if (block.type === "thinking" && msg.stopReason !== "error") {
+			for (const block of assistantMsg.content) {
+				if (block.type === "thinking" && assistantMsg.stopReason !== "error") {
 					if (block.thinkingSignature) {
 						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
 						output.push(reasoningItem);
@@ -1734,7 +1748,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						status: "completed",
 						id: msgId,
 					} satisfies ResponseOutputMessage);
-				} else if (block.type === "toolCall" && msg.stopReason !== "error") {
+				} else if (block.type === "toolCall" && assistantMsg.stopReason !== "error") {
 					const toolCall = block as ToolCall;
 					const normalized = normalizeResponsesToolCallId(toolCall.id);
 					output.push({

@@ -200,6 +200,204 @@ describe("openai-codex streaming", () => {
 		expect(capturedBody?.service_tier).toBe("priority");
 	});
 
+	it("omits replay function_call item ids when assistant history is from a different codex model", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+		let capturedBody: Record<string, unknown> | undefined;
+
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] } })}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Done" })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done" }] } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+		].join("\n\n")}\n\n`;
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			return new Response(sse, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.4",
+			name: "GPT-5.4",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 256000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Run a command", timestamp: Date.now() },
+				{
+					role: "assistant",
+					api: "openai-codex-responses",
+					provider: "openai-codex",
+					model: "gpt-5.4-codex-max",
+					content: [
+						{
+							type: "toolCall",
+							id: "call_legacy|fc_legacy_item",
+							name: "bash",
+							arguments: { command: "pwd" },
+						},
+					],
+					usage: {
+						input: 10,
+						output: 5,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 15,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call_legacy|fc_legacy_item",
+					toolName: "bash",
+					content: [{ type: "text", text: "/tmp" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "What happened?", timestamp: Date.now() },
+			],
+		};
+
+		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(capturedBody).toBeDefined();
+		const inputItems = Array.isArray(capturedBody?.input)
+			? (capturedBody.input as Array<Record<string, unknown>>)
+			: [];
+		const replayedFunctionCall = inputItems.find(item => item.type === "function_call");
+		expect(replayedFunctionCall).toBeDefined();
+		expect(replayedFunctionCall?.call_id).toBe("call_legacy");
+		expect(Object.prototype.hasOwnProperty.call(replayedFunctionCall ?? {}, "id")).toBe(false);
+	});
+
+
+	it("ignores providerPayload replay history when model changed", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+		let capturedBody: Record<string, unknown> | undefined;
+
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] } })}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Done" })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_2", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done" }] } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+		].join("\n\n")}\n\n`;
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			return new Response(sse, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.4",
+			name: "GPT-5.4",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 256000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Run a command", timestamp: Date.now() },
+				{
+					role: "assistant",
+					api: "openai-codex-responses",
+					provider: "openai-codex",
+					model: "gpt-5.4-codex-max",
+					content: [
+						{
+							type: "toolCall",
+							id: "call_legacy|fc_legacy_item",
+							name: "bash",
+							arguments: { command: "pwd" },
+						},
+					],
+					usage: {
+						input: 10,
+						output: 5,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 15,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						dt: true,
+						items: [
+							{
+								type: "function_call",
+								id: "fc_payload_item",
+								call_id: "call_payload",
+								name: "bash",
+								arguments: JSON.stringify({ command: "pwd" }),
+							},
+						],
+					},
+					timestamp: Date.now(),
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call_legacy|fc_legacy_item",
+					toolName: "bash",
+					content: [{ type: "text", text: "/tmp" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "What happened?", timestamp: Date.now() },
+			],
+		};
+
+		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(capturedBody).toBeDefined();
+		const inputItems = Array.isArray(capturedBody?.input)
+			? (capturedBody.input as Array<Record<string, unknown>>)
+			: [];
+		const replayedFunctionCall = inputItems.find(item => item.type === "function_call");
+		expect(replayedFunctionCall).toBeDefined();
+		expect(replayedFunctionCall?.call_id).toBe("call_legacy");
+		expect(Object.prototype.hasOwnProperty.call(replayedFunctionCall ?? {}, "id")).toBe(false);
+	});
+
 	it("fails truncated SSE streams that never emit a terminal response event", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
