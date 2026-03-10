@@ -241,6 +241,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
+		if (this.#isBlockedByOrchestratorBoundary(params.agent)) {
+			return {
+				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(params.agent) }],
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+			};
+		}
+
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {

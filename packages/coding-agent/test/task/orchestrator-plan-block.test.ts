@@ -102,6 +102,20 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		});
 	}
 
+	test("blocks forbidden orchestrator spawns before async scheduling", async () => {
+		const asyncSettings = Settings.isolated({
+			"task.isolation.mode": "none",
+			"task.maxConcurrency": 4,
+			"task.disabledAgents": [],
+			"async.enabled": true,
+		});
+		const result = await executeWithAgent("lint", { settings: asyncSettings });
+		const text = collectText(result);
+		expect(text).toContain("Cannot spawn 'lint' from orchestrator parent sessions");
+		expect(text).not.toContain("Async execution is enabled but no async job manager is available.");
+		expect(runSubprocessAgents).toHaveLength(0);
+	});
+
 	test("allows orchestrator parent to delegate implementation-phase workers", async () => {
 		await executeWithAgent("explore");
 		await executeWithAgent("research");
