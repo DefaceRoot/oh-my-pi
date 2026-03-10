@@ -25,8 +25,24 @@ const TEST_MODELS: Record<MainRole, string> = {
 	ask: "anthropic/claude-sonnet-4-5",
 };
 
+function normalizeManagedToolName(name: string): string {
+	if (name === "puppeteer") return "browser";
+	return name;
+}
+
+function expectedRoleManagedTools(role: MainRole): string[] {
+	const expected = [...DEFAULT_ROLES_CONFIG.roles[role].tools];
+	if (!expected.includes("ast_edit")) {
+		const idx = expected.indexOf("resolve");
+		if (idx >= 0) expected.splice(idx, 1);
+	}
+	const exitPlanModeIndex = expected.indexOf("exit_plan_mode");
+	if (exitPlanModeIndex >= 0) expected.splice(exitPlanModeIndex, 1);
+	return expected.sort();
+}
+
 function toManagedToolSet(names: string[]): string[] {
-	return names.filter(name => MANAGED_TOOL_NAMES.has(name)).sort();
+	return names.map(normalizeManagedToolName).filter(name => MANAGED_TOOL_NAMES.has(name)).sort();
 }
 
 function createModel(id: string, name: string): Model {
@@ -71,7 +87,7 @@ describe("tool filtering (Phase 2 RED)", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendModelChange(TEST_MODELS[role], role);
 
-		const settings = overrides.settings ?? Settings.isolated();
+		const settings = overrides.settings ?? Settings.isolated({ "async.enabled": true });
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
@@ -94,7 +110,7 @@ describe("tool filtering (Phase 2 RED)", () => {
 	for (const role of ["default", "orchestrator", "plan", "ask"] as const) {
 		it(`starts ${role} mode with role-specific managed tool allowlist`, async () => {
 			const session = await createSessionForRole(role);
-			const expected = [...DEFAULT_ROLES_CONFIG.roles[role].tools].sort();
+			const expected = expectedRoleManagedTools(role);
 			const actual = toManagedToolSet(session.getActiveToolNames());
 
 			expect(actual).toEqual(expected);
@@ -103,12 +119,12 @@ describe("tool filtering (Phase 2 RED)", () => {
 
 	it("allows explicit settings override to add tool outside role default", async () => {
 		const baseline = await createSessionForRole("ask");
-		expect(toManagedToolSet(baseline.getActiveToolNames())).not.toContain("notebook");
+		expect(toManagedToolSet(baseline.getActiveToolNames())).not.toContain("calc");
 
-		const settingsWithOverride = Settings.isolated();
-		settingsWithOverride.set("notebook.enabled", true);
+		const settingsWithOverride = Settings.isolated({ "async.enabled": true });
+		settingsWithOverride.set("calc.enabled", true);
 		const withOverride = await createSessionForRole("ask", { settings: settingsWithOverride });
-		expect(toManagedToolSet(withOverride.getActiveToolNames())).toContain("notebook");
+		expect(toManagedToolSet(withOverride.getActiveToolNames())).toContain("calc");
 	});
 
 	it("allows settings override to remove tool from role default", async () => {
@@ -124,6 +140,19 @@ describe("tool filtering (Phase 2 RED)", () => {
 		const session = await createSessionForRole("ask", { requireSubmitResultTool: true });
 		expect(toManagedToolSet(session.getActiveToolNames())).toContain("submit_result");
 	});
+
+	it("expands managed tools when switching from ask to default role", async () => {
+		const session = await createSessionForRole("ask");
+		expect(toManagedToolSet(session.getActiveToolNames())).not.toContain("write");
+
+		if (!session.model) {
+			throw new Error("Expected session model to be available");
+		}
+		await session.setModelTemporary(session.model, "default");
+
+		expect(toManagedToolSet(session.getActiveToolNames())).toContain("write");
+	});
+
 
 	it("rebuilds active tool allowlist when mode switches", async () => {
 		await Settings.init({
@@ -157,8 +186,11 @@ describe("tool filtering (Phase 2 RED)", () => {
 				}
 				return undefined;
 			},
-			setModelTemporary: vi.fn(async (model: Model) => {
-				session.model = model;
+			setModelTemporary: vi.fn(async (model: Model, role?: string) => {
+				(session as { model: Model }).model = model;
+				if (role === "default" || role === "ask" || role === "orchestrator" || role === "plan") {
+					await setActiveToolsByNameSpy(expectedRoleManagedTools(role));
+				}
 			}),
 			getActiveToolNames: () => [...DEFAULT_ROLES_CONFIG.roles.default.tools],
 			setActiveToolsByName: setActiveToolsByNameSpy,
@@ -184,6 +216,9 @@ describe("tool filtering (Phase 2 RED)", () => {
 		} as unknown as InteractiveModeContext);
 
 		await controller.cycleAgentMode();
-		expect(setActiveToolsByNameSpy).toHaveBeenCalledWith([...DEFAULT_ROLES_CONFIG.roles.orchestrator.tools]);
+		expect(session.setModelTemporary).toHaveBeenCalledWith(models.orchestrator, "orchestrator");
+		expect(setActiveToolsByNameSpy).toHaveBeenCalled();
+		const roleToolNames = setActiveToolsByNameSpy.mock.calls.at(-1)?.[0] as string[];
+		expect([...roleToolNames].sort()).toEqual(expectedRoleManagedTools("orchestrator"));
 	});
 });

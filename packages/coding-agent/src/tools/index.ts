@@ -2,7 +2,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
-import type { Settings } from "../config/settings";
+import { getDefault, type SettingPath, type Settings } from "../config/settings";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
@@ -193,6 +193,80 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
+type ManagedToolName = keyof typeof BUILTIN_TOOLS | keyof typeof HIDDEN_TOOLS;
+
+const TOOL_SETTING_PATHS: Partial<Record<ManagedToolName, SettingPath>> = {
+	todo_write: "todo.enabled",
+	find: "find.enabled",
+	grep: "grep.enabled",
+	ast_grep: "astGrep.enabled",
+	ast_edit: "astEdit.enabled",
+	render_mermaid: "renderMermaid.enabled",
+	notebook: "notebook.enabled",
+	fetch: "fetch.enabled",
+	web_search: "web_search.enabled",
+	lsp: "lsp.enabled",
+	calc: "calc.enabled",
+	browser: "browser.enabled",
+	checkpoint: "checkpoint.enabled",
+	rewind: "checkpoint.enabled",
+};
+
+const MANAGED_TOOL_RUNTIME_ALIASES: Record<string, ManagedToolName> = {
+	puppeteer: "browser",
+};
+
+function toManagedToolName(name: string): ManagedToolName | undefined {
+	if (name in BUILTIN_TOOLS || name in HIDDEN_TOOLS) {
+		return name as ManagedToolName;
+	}
+	return MANAGED_TOOL_RUNTIME_ALIASES[name];
+}
+
+function getExplicitToolSettingOverride(settings: Settings, name: ManagedToolName): boolean | undefined {
+	const settingPath = TOOL_SETTING_PATHS[name];
+	if (!settingPath) return undefined;
+	const currentValue = settings.get(settingPath);
+	const defaultValue = getDefault(settingPath);
+	if (currentValue === defaultValue) return undefined;
+	return Boolean(currentValue);
+}
+
+export function filterToolNamesByRoleAllowlist(
+	toolNames: readonly string[],
+	settings: Settings,
+	roleToolAllowlist?: readonly string[],
+): string[] {
+	const uniqueToolNames = [...new Set(toolNames)];
+	if (roleToolAllowlist === undefined) {
+		return uniqueToolNames;
+	}
+
+	const roleSet = new Set(roleToolAllowlist);
+	const hiddenToolNames = new Set(Object.keys(HIDDEN_TOOLS) as ManagedToolName[]);
+	const managedToolNames = new Set([...Object.keys(BUILTIN_TOOLS), ...Object.keys(HIDDEN_TOOLS)] as ManagedToolName[]);
+	const augmentedToolNames = [...uniqueToolNames];
+	for (const managedName of managedToolNames) {
+		if (roleSet.has(managedName)) continue;
+		const override = getExplicitToolSettingOverride(settings, managedName);
+		if (override === true && !augmentedToolNames.includes(managedName)) {
+			augmentedToolNames.push(managedName);
+		}
+	}
+
+	return augmentedToolNames.filter(name => {
+		const managedName = toManagedToolName(name);
+		if (!managedName) return true;
+		if (hiddenToolNames.has(managedName)) return true;
+
+		const override = getExplicitToolSettingOverride(settings, managedName);
+		if (roleSet.has(managedName)) {
+			return override !== false;
+		}
+		return override === true;
+	});
+}
+
 export type PythonToolMode = "ipy-only" | "bash-only" | "both";
 
 /**
@@ -226,7 +300,11 @@ function getPythonModeFromEnv(): PythonToolMode | null {
 /**
  * Create tools from BUILTIN_TOOLS registry.
  */
-export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
+export async function createTools(
+	session: ToolSession,
+	toolNames?: string[],
+	roleToolAllowlist?: string[],
+): Promise<Tool[]> {
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools = toolNames && toolNames.length > 0 ? [...new Set(toolNames)] : undefined;
@@ -302,12 +380,28 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			requestedTools.push("ast_edit");
 		}
 	}
+	if (includeSubmitResult && requestedTools && !requestedTools.includes("submit_result")) {
+		requestedTools.push("submit_result");
+	}
+
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
+	const roleFilteredRequestedTools = requestedTools
+		? filterToolNamesByRoleAllowlist(requestedTools, session.settings, roleToolAllowlist)
+		: undefined;
+	const applySettingsGates = roleToolAllowlist === undefined;
 	const isToolAllowed = (name: string) => {
-		if (name === "lsp") return enableLsp;
+		if (name === "lsp") return enableLsp && (!applySettingsGates || session.settings.get("lsp.enabled"));
 		if (name === "bash") return allowBash;
 		if (name === "python") return allowPython;
-		if (name === "todo_write") return !includeSubmitResult && session.settings.get("todo.enabled");
+		if (name === "todo_write") {
+			return !includeSubmitResult && (!applySettingsGates || session.settings.get("todo.enabled"));
+		}
+		if (name === "task") {
+			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
+			const currentDepth = session.taskDepth ?? 0;
+			return maxDepth < 0 || currentDepth < maxDepth;
+		}
+		if (!applySettingsGates) return true;
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
@@ -316,30 +410,26 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "notebook") return session.settings.get("notebook.enabled");
 		if (name === "fetch") return session.settings.get("fetch.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
-		if (name === "lsp") return session.settings.get("lsp.enabled");
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
-		if (name === "task") {
-			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
-			const currentDepth = session.taskDepth ?? 0;
-			return maxDepth < 0 || currentDepth < maxDepth;
-		}
 		return true;
 	};
-	if (includeSubmitResult && requestedTools && !requestedTools.includes("submit_result")) {
-		requestedTools.push("submit_result");
-	}
 
-	const filteredRequestedTools = requestedTools?.filter(name => name in allTools && isToolAllowed(name));
+	const filteredRequestedTools = roleFilteredRequestedTools?.filter(name => name in allTools && isToolAllowed(name));
+	const roleFilteredBuiltinTools = filterToolNamesByRoleAllowlist(
+		Object.keys(BUILTIN_TOOLS),
+		session.settings,
+		roleToolAllowlist,
+	).filter(isToolAllowed);
 	const baseEntries =
 		filteredRequestedTools !== undefined
 			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
 			: [
-					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
+					...roleFilteredBuiltinTools.map(name => [name, BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS]] as const),
 					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
 					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
-				];
+			  ];
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {

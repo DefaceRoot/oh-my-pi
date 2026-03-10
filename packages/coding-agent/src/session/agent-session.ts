@@ -189,6 +189,8 @@ export interface AgentSessionConfig {
 	toolRegistry?: Map<string, AgentTool>;
 	/** System prompt builder that can consider tool availability */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>;
+	/** Resolve active tool names for a target role using current registry contents */
+	resolveToolNamesForRole?: (role: string, availableToolNames: string[]) => string[];
 	/** TTSR manager for time-traveling stream rules */
 	ttsrManager?: TtsrManager;
 	/** Force X-Initiator: agent for GitHub Copilot model selections in this session. */
@@ -229,6 +231,8 @@ export interface RoleModelCycleResult {
 	thinkingLevel: ThinkingLevel | undefined;
 	role: ModelRole;
 }
+
+type MainRole = "default" | "orchestrator" | "plan" | "ask";
 
 /** Session statistics for /session command */
 export interface SessionStats {
@@ -377,6 +381,7 @@ export class AgentSession {
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
 	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
+	#resolveToolNamesForRole: ((role: string, availableToolNames: string[]) => string[]) | undefined;
 	#baseSystemPrompt: string;
 	#forceCopilotAgentInitiator = false;
 
@@ -421,6 +426,7 @@ export class AgentSession {
 		this.#modelRegistry = config.modelRegistry;
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
+		this.#resolveToolNamesForRole = config.resolveToolNamesForRole;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#ttsrManager = config.ttsrManager;
 		this.#forceCopilotAgentInitiator = config.forceCopilotAgentInitiator ?? false;
@@ -1634,6 +1640,32 @@ export class AgentSession {
 		}
 	}
 
+	async applyRoleToolAllowlist(role: string): Promise<void> {
+		if (!this.#isMainRole(role)) return;
+		await this.#applyRoleToolAllowlist(role);
+	}
+
+	#isMainRole(role: string): role is MainRole {
+		return role === "default" || role === "orchestrator" || role === "plan" || role === "ask";
+	}
+
+	#resolveMainRoleForModel(model: Model): MainRole | undefined {
+		const candidates: MainRole[] = ["default", "orchestrator", "plan", "ask"];
+		for (const role of candidates) {
+			const roleModel = this.resolveRoleModel(role);
+			if (roleModel && modelsAreEqual(roleModel, model)) {
+				return role;
+			}
+		}
+		return undefined;
+	}
+
+	async #applyRoleToolAllowlist(role: MainRole): Promise<void> {
+		if (!this.#resolveToolNamesForRole) return;
+		const resolvedToolNames = this.#resolveToolNamesForRole(role, Array.from(this.#toolRegistry.keys()));
+		await this.setActiveToolsByName(resolvedToolNames);
+	}
+
 	/** Rebuild the base system prompt using the current active tool set. */
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
@@ -2648,6 +2680,9 @@ export class AgentSession {
 
 		// Re-apply the current thinking level for the newly selected model
 		this.setThinkingLevel(this.thinkingLevel);
+		if (this.#isMainRole(role)) {
+			await this.#applyRoleToolAllowlist(role);
+		}
 	}
 
 	/**
@@ -2655,7 +2690,7 @@ export class AgentSession {
 	 * Validates API key, saves to session log but NOT to settings.
 	 * @throws Error if no API key available for the model
 	 */
-	async setModelTemporary(model: Model): Promise<void> {
+	async setModelTemporary(model: Model, role?: ModelRole): Promise<void> {
 		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
 		if (!apiKey) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -2667,6 +2702,11 @@ export class AgentSession {
 
 		// Re-apply the current thinking level for the newly selected model
 		this.setThinkingLevel(this.thinkingLevel);
+		const requestedRole = role && this.#isMainRole(role) ? role : undefined;
+		const inferredRole = requestedRole ?? this.#resolveMainRoleForModel(model);
+		if (inferredRole) {
+			await this.#applyRoleToolAllowlist(inferredRole);
+		}
 	}
 
 	/**
@@ -2738,7 +2778,7 @@ export class AgentSession {
 		const next = roleModels[nextIndex];
 
 		if (options?.temporary) {
-			await this.setModelTemporary(next.model);
+			await this.setModelTemporary(next.model, next.role);
 		} else {
 			await this.setModel(next.model, next.role);
 		}

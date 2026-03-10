@@ -7,6 +7,7 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { Message, Model } from "@oh-my-pi/pi-ai";
+import * as path from "node:path";
 
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -15,7 +16,7 @@ import chalk from "chalk";
 import { AsyncJobManager } from "./async";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability } from "./capability/rule";
-import { ModelRegistry } from "./config/model-registry";
+import { ModelRegistry, RolesConfig } from "./config/model-registry";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
 import {
 	loadPromptTemplates as loadPromptTemplatesInternal,
@@ -84,6 +85,7 @@ import {
 	BashTool,
 	BUILTIN_TOOLS,
 	createTools,
+	filterToolNamesByRoleAllowlist,
 	EditTool,
 	FindTool,
 	GrepTool,
@@ -633,6 +635,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const sessionManager = options.sessionManager ?? logger.time("sessionManager", SessionManager.create, cwd);
 	const sessionId = sessionManager.getSessionId();
+	const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
+	const normalizeMainRole = (role: string | undefined): "default" | "orchestrator" | "plan" | "ask" => {
+		if (role === "orchestrator" || role === "plan" || role === "ask") return role;
+		return "default";
+	};
+	const getRoleToolAllowlist = (role: string | undefined): string[] => {
+		return rolesConfig.getToolsForRole(normalizeMainRole(role));
+	};
+	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
+	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
+
 	const modelApiKeyAvailability = new Map<string, boolean>();
 	const getModelAvailabilityKey = (candidate: Model): string =>
 		`${candidate.provider}\u0000${candidate.baseUrl ?? ""}`;
@@ -912,8 +925,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const builtinTools = await logger.timeAsync("createAllTools", () => createTools(toolSession, options.toolNames));
-
+	const requestedBuiltinToolNames =
+		options.toolNames && options.toolNames.length > 0 ? options.toolNames : undefined;
+	const builtinTools = await logger.timeAsync("createAllTools", () =>
+		createTools(
+			toolSession,
+			requestedBuiltinToolNames,
+			requestedBuiltinToolNames ? undefined : Object.keys(BUILTIN_TOOLS),
+		),
+	);
+	const startupBuiltinToolNames = filterToolNamesByRoleAllowlist(
+		builtinTools.map(tool => tool.name),
+		settings,
+		requestedBuiltinToolNames ? undefined : startupRoleToolAllowlist,
+	);
+	const hasWebSearchBuiltin = startupBuiltinToolNames.includes("web_search");
+	const hasBrowserBuiltin = startupBuiltinToolNames.includes("browser");
 	// Discover MCP tools from .mcp.json files
 	let mcpManager: MCPManager | undefined;
 	const enableMCP = options.enableMCP ?? true;
@@ -930,7 +957,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				// Always filter Exa - we have native integration
 				filterExa: true,
 				// Filter browser MCP servers when builtin browser tool is active
-				filterBrowser: (settings.get("browser.enabled") as boolean) ?? false,
+				filterBrowser: hasBrowserBuiltin,
 				cacheStorage: settings.getStorage(),
 				authStorage,
 			}),
@@ -965,7 +992,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Add specialized Exa web search tools if EXA_API_KEY is available
 	const exaSettings = settings.getGroup("exa");
-	if (exaSettings.enabled && exaSettings.enableSearch) {
+	if (hasWebSearchBuiltin && exaSettings.enabled && exaSettings.enableSearch) {
 		const exaSearchTools = await logger.timeAsync("getSearchTools", getSearchTools, {
 			enableLinkedin: exaSettings.enableLinkedin as boolean,
 			enableCompany: exaSettings.enableCompany as boolean,
@@ -1181,6 +1208,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
+	const resolveToolNamesForRole = (role: string, availableToolNames: string[]): string[] => {
+		const filtered = filterToolNamesByRoleAllowlist(availableToolNames, settings, getRoleToolAllowlist(role));
+		const selectedTools = filtered.map(name => toolRegistry.get(name)).filter((tool): tool is AgentTool => tool !== undefined);
+		if (selectedTools.some(tool => tool.deferrable === true)) {
+			return filtered;
+		}
+		return filtered.filter(name => name !== "resolve");
+	};
+
 	let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
 	const cursorExecHandlers = new CursorExecHandlers({
 		cwd,
@@ -1254,10 +1290,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const toolNamesFromRegistry = Array.from(toolRegistry.keys());
 	const requestedToolNames = options.toolNames ?? toolNamesFromRegistry;
 	const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
+	const roleAwareRequested =
+		options.toolNames !== undefined ? normalizedRequested : resolveToolNamesForRole(startupRole, normalizedRequested);
 	const includeExitPlanMode = options.toolNames?.includes("exit_plan_mode") ?? false;
 	const initialToolNames = includeExitPlanMode
-		? normalizedRequested
-		: normalizedRequested.filter(name => name !== "exit_plan_mode");
+		? roleAwareRequested
+		: roleAwareRequested.filter(name => name !== "exit_plan_mode");
 
 	// Custom tools and extension-registered tools are always included regardless of toolNames filter
 	const alwaysInclude: string[] = [
@@ -1440,6 +1478,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		toolRegistry,
 		rebuildSystemPrompt,
+		resolveToolNamesForRole,
 		ttsrManager,
 		forceCopilotAgentInitiator,
 		obfuscator,
