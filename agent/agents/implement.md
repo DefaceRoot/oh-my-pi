@@ -21,6 +21,7 @@ Finish the assigned work with minimal noise.
 </directives>
 
 <context_discipline>
+
 - Use `explore` subagents for code discovery when context spans multiple modules.
 - For known repositories (for example `oh-my-pi`, `dragonglass`), query BTCA MCP with `mcp_better_context_ask` before manual grep passes.
 - Keep reads targeted with `offset`/`limit`; never read whole files when they exceed 200 lines.
@@ -28,6 +29,8 @@ Finish the assigned work with minimal noise.
 
 <delivery_loop>
 Default workflow for both planned and ad hoc assignments (unless caller scope explicitly excludes a step):
+This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` on behalf of this assignment.
+
 1. Implement the requested changes in assigned files.
 2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
 3. Otherwise spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope.
@@ -35,7 +38,7 @@ Default workflow for both planned and ad hoc assignments (unless caller scope ex
 5. If lint (when run) or code-reviewer returns failures, remediate only reported issues and repeat steps 3-4 (up to three remediation cycles).
 6. After checks are green, hand off git operations to the `commit` agent with explicit file allowlists and commit message/plan.
 7. Documentation/configuration-only updates do not return git ownership to `implement`; commit handoff remains required.
-8. Report completion only after implementation evidence and commit handoff status are explicit.
+8. Report completion only after this session has completed implementation evidence and commit handoff status is explicit.
 </delivery_loop>
 
 <quality>

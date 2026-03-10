@@ -50,7 +50,7 @@ describe("resume agent mode styles", () => {
 		expect(RESUME_AGENT_MODE_STYLES.default).toEqual({ label: "Default", color: "success" });
 		expect(RESUME_AGENT_MODE_STYLES.ask).toEqual({ label: "Ask", color: "statusLineSubagents" });
 		expect(RESUME_AGENT_MODE_STYLES.orchestrator).toEqual({ label: "Orchestrator", color: "warning" });
-		expect(RESUME_AGENT_MODE_STYLES.plan).toEqual({ label: "Plan", color: "statusLineContext" });
+		expect(RESUME_AGENT_MODE_STYLES.plan).toEqual({ label: "Plan", color: "error" });
 		expect(RESUME_AGENT_MODE_STYLES.unknown).toEqual({ label: "unknown", color: "dim" });
 	});
 });

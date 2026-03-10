@@ -104,7 +104,7 @@ describe("status-line model segment agent modes", () => {
 			{ role: "default", label: "Default", style: theme.fg("success", "Default") },
 			{ role: "ask", label: "Ask", style: theme.fg("statusLineSubagents", "Ask") },
 			{ role: "orchestrator", label: "Orchestrator", style: theme.fg("warning", "Orchestrator") },
-			{ role: "plan", label: "Plan", style: theme.fg("statusLineContext", "Plan") },
+			{ role: "plan", label: "Plan", style: theme.fg("error", "Plan") },
 		] as const;
 
 		for (const testCase of cases) {

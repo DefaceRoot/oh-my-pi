@@ -11,6 +11,13 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - Default and Orchestrator roles MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent via Task.
 - Default and Orchestrator roles MUST NOT call Grafana MCP tools directly; direct Grafana MCP access is reserved for the `grafana` subagent.
 
+## Orchestrator Implementation Delegation Boundary
+
+- During active orchestrator implementation flow, parent delegation is limited to `explore`, `research`, and `implement`.
+- Parent may delegate verification workers (`verifier` plus `coderabbit`) only after implementation units complete for the current phase.
+- Parent orchestrators MUST NOT spawn `lint`, `code-reviewer`, or `commit` while implementation work is in progress.
+- The implementation worker owns the full quality and handoff loop: `lint` -> `code-reviewer` -> remediation cycles -> `commit` handoff before reporting completion.
+
 ## Session Artifact Placement (Canonical)
 
 - Temporary notes, scratchpads, test repro files, and subagent handoff artifacts **MUST NOT** be written at repository root.
@@ -109,7 +116,7 @@ import { $ } from "bun";
 // Capture output
 const result = await $`git status`.cwd(dir).quiet().nothrow();
 if (result.exitCode === 0) {
-	const text = result.text();
+ const text = result.text();
 }
 
 // Fire and forget
@@ -203,17 +210,17 @@ const entries = await fs.readdir(path);
 ```typescript
 // BAD: Two syscalls, race condition
 if (await Bun.file(path).exists()) {
-	return await Bun.file(path).json();
+ return await Bun.file(path).json();
 }
 
 // GOOD: One syscall, atomic, type-safe error handling
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
 try {
-	return await Bun.file(path).json();
+ return await Bun.file(path).json();
 } catch (err) {
-	if (isEnoent(err)) return null;
-	throw err;
+ if (isEnoent(err)) return null;
+ throw err;
 }
 ```
 
@@ -222,15 +229,15 @@ try {
 ```typescript
 // BAD: Creates two file handles
 if (await Bun.file(path).exists()) {
-	const content = await Bun.file(path).text();
+ const content = await Bun.file(path).text();
 }
 
 // BAD: Still wasteful even in separate functions
 async function checkConfig() {
-	return await Bun.file(configPath).exists();
+ return await Bun.file(configPath).exists();
 }
 async function loadConfig() {
-	return await Bun.file(configPath).json(); // second handle
+ return await Bun.file(configPath).json(); // second handle
 }
 ```
 
@@ -250,19 +257,19 @@ const buffer = await fs.readFile(path);
 ```typescript
 // BAD: Existence check is pointless when you have try-catch
 if (await file.exists()) {
-	try {
-		return await file.json();
-	} catch {
-		return null;
-	}
+ try {
+  return await file.json();
+ } catch {
+  return null;
+ }
 }
 
 // GOOD: Let try-catch handle missing files
 try {
-	return await Bun.file(path).json();
+ return await Bun.file(path).json();
 } catch (err) {
-	if (isEnoent(err)) return null;
-	throw err;
+ if (isEnoent(err)) return null;
+ throw err;
 }
 ```
 
@@ -278,7 +285,7 @@ const text = await readStream(child.stdout);
 
 // Line-by-line iteration
 for await (const line of readLines(stream)) {
-	// process line
+ // process line
 }
 ```
 
@@ -321,7 +328,7 @@ const entries = Bun.JSONL.parse(text);
 // BAD: External dependency or custom implementation
 import { getWidth } from "get-east-asian-width";
 function visibleWidth(str: string) {
-	/* custom logic */
+ /* custom logic */
 }
 
 // GOOD: Bun builtin (handles ANSI, emoji, CJK)
@@ -334,14 +341,14 @@ const widthNoAnsi = Bun.stringWidth(text, { countAnsiEscapeCodes: false });
 ```typescript
 // BAD: Custom ANSI-aware wrapping
 function wrapTextWithAnsi(text: string, width: number) {
-	/* complex SGR tracking */
+ /* complex SGR tracking */
 }
 
 // GOOD: Bun builtin
 const wrapped = Bun.wrapAnsi(text, width, {
-	wordWrap: true,
-	hard: false,
-	trim: true,
+ wordWrap: true,
+ hard: false,
+ trim: true,
 });
 ```
 
@@ -350,7 +357,7 @@ const wrapped = Bun.wrapAnsi(text, width, {
 | Operation       | Use                                   | Not                             |
 | --------------- | ------------------------------------- | ------------------------------- |
 | File read/write | `Bun.file()`, `Bun.write()`           | `readFileSync`, `writeFileSync` |
-| Spawn process   | `$\`cmd\``, `Bun.spawn()`             | `child_process`                 |
+| Spawn process   | `$\`cmd\``,`Bun.spawn()`             | `child_process`                 |
 | Sleep           | `Bun.sleep(ms)`                       | `setTimeout` promise            |
 | Binary lookup   | `Bun.which("git")`                    | `spawnSync(["which", "git"])`   |
 | HTTP server     | `Bun.serve()`                         | `http.createServer()`           |
@@ -446,7 +453,7 @@ A common mistake is sanitizing the happy path but forgetting error paths. If a m
 
 - NEVER run: `bun run dev`, `bun test` unless user instructs
 - Only run specific tests if user instructs: `bun test test/specific.test.ts`
-- NEVER commit unless user asks
+- NEVER run `git commit` or `git push` directly; when workflow requires git handoff, use the `commit` agent.
 - Do NOT use `tsc` or `npx tsc` - always use `bun check`
 
 ## GitHub Issues
@@ -507,6 +514,7 @@ Use these sections under `## [Unreleased]`:
 1. **Update CHANGELOGs**: Ensure all changes since last release are documented in the `[Unreleased]` section of each affected package's CHANGELOG.md
 
 2. **Run release script**:
+
    ```bash
    bun run release
    ```

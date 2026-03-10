@@ -146,7 +146,7 @@ export interface InteractiveModeContext {
 	handleDumpCommand(): void;
 	handleClearCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
-	refreshForkInstall(): Promise<void>;
+	mergeUpstreamFork(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;

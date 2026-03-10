@@ -125,7 +125,7 @@ const modelSegment: StatusLineSegment = {
 				default: { label: "Default", color: "success" },
 				ask: { label: "Ask", color: "statusLineSubagents" },
 				orchestrator: { label: "Orchestrator", color: "warning" },
-				plan: { label: "Plan", color: "statusLineContext" },
+			plan: { label: "Plan", color: "error" },
 			} as const;
 			const { label, color } = modeStyle[agentModeLabel];
 			content += `${theme.sep.dot}${theme.fg(color, label)}`;

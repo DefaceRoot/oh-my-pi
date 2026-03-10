@@ -1,34 +1,126 @@
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 
-/**
- * Test that orchestrator mode blocking for plan agent is properly configured.
- *
- * This tests the validation logic added to TaskTool that prevents the orchestrator
- * from spawning the plan agent, which is an architectural mismatch (orchestrator
- * executes plans, it doesn't create them).
- */
+const runSubprocessAgents: string[] = [];
 
-describe("orchestrator plan agent blocking", () => {
-	it("has the orchestrator guard configured to block plan agent", () => {
-		// The validation is in the Task tool's executeSync method
-		// It checks: if (isOrchestratorMode(this.session) && agentName === "plan")
-		// and returns an error message explaining the architectural constraint
-		const expectedErrorMessage =
-			"Cannot spawn 'plan' agent from orchestrator mode. The orchestrator is designed to execute existing plans, not create new ones. Planning must be completed before entering orchestrator mode.";
+const stubResult: SingleResult = {
+	index: 0,
+	id: "TestTask",
+	agent: "explore",
+	agentSource: "bundled",
+	task: "stub",
+	exitCode: 0,
+	output: "ok",
+	stderr: "",
+	truncated: false,
+	durationMs: 10,
+	tokens: 100,
+};
 
-		// Verify the error message content (the actual logic is tested via integration)
-		expect(expectedErrorMessage).toContain("orchestrator mode");
-		expect(expectedErrorMessage).toContain("plan");
-		expect(expectedErrorMessage).toContain("execute existing plans");
-		expect(expectedErrorMessage).toContain("not create new ones");
+const availableAgents = ["explore", "research", "implement", "verifier", "lint", "code-reviewer", "commit"].map(
+	name => ({
+		name,
+		description: `${name} test agent`,
+		source: "bundled" as const,
+		model: "default",
+		systemPrompt: `You are ${name}.`,
+	}),
+);
+
+mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
+	runSubprocess: async (opts: Record<string, unknown>) => {
+		const agent = opts.agent as { name: string };
+		runSubprocessAgents.push(agent.name);
+		return { ...stubResult, agent: agent.name };
+	},
+}));
+
+mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
+	discoverAgents: async () => ({
+		agents: availableAgents,
+		projectAgentsDir: null,
+	}),
+	getAgent: (agents: Array<{ name: string }>, name: string) => agents.find(a => a.name === name) ?? null,
+}));
+
+const { TaskTool } = await import("@oh-my-pi/pi-coding-agent/task");
+const { Settings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
+
+type SessionOverrides = Partial<Parameters<typeof TaskTool.create>[0]>;
+
+function createMinimalSession(overrides: SessionOverrides = {}) {
+	return {
+		cwd: "/tmp/test-cwd",
+		hasUI: true,
+		settings: Settings.isolated({
+			"task.isolation.mode": "none",
+			"task.maxConcurrency": 4,
+			"task.disabledAgents": [],
+			"async.enabled": false,
+		}),
+		getSessionFile: () => "/tmp/test-session.jsonl",
+		getSessionSpawns: () => "*",
+		getRuntimeRole: () => "orchestrator",
+		taskDepth: 0,
+		...overrides,
+	} as Parameters<typeof TaskTool.create>[0];
+}
+
+async function executeWithAgent(agent: string, overrides: SessionOverrides = {}) {
+	const tool = await TaskTool.create(createMinimalSession(overrides));
+	return tool.execute(`call-${agent}`, {
+		agent,
+		tasks: [
+			{
+				id: `task-${agent}`,
+				description: "test",
+				assignment: "no-op",
+			},
+		],
+	});
+}
+
+function collectText(result: Awaited<ReturnType<typeof executeWithAgent>>): string {
+	return result.content
+		.map(part => (part.type === "text" ? part.text : ""))
+		.filter(Boolean)
+		.join("\n");
+}
+
+describe("orchestrator implementation-boundary spawn policy", () => {
+	beforeEach(() => {
+		runSubprocessAgents.length = 0;
 	});
 
-	it("explains the workflow ordering constraint", () => {
-		// The error message should guide users to the correct workflow
-		const expectedGuidance =
-			"Planning must be completed before entering orchestrator mode";
+	for (const restrictedAgent of ["lint", "code-reviewer", "commit"] as const) {
+		test(`blocks orchestrator parent from spawning ${restrictedAgent}`, async () => {
+			const result = await executeWithAgent(restrictedAgent);
+			const text = collectText(result);
+			expect(text).toContain(`Cannot spawn '${restrictedAgent}' from orchestrator parent sessions`);
+			expect(text).toContain("Delegate an 'implement' worker first");
+			expect(runSubprocessAgents).toHaveLength(0);
+		});
+	}
 
-		expect(expectedGuidance).toContain("Planning must be completed");
-		expect(expectedGuidance).toContain("before entering orchestrator mode");
+	test("allows orchestrator parent to delegate implementation-phase workers", async () => {
+		await executeWithAgent("explore");
+		await executeWithAgent("research");
+		await executeWithAgent("implement");
+		await executeWithAgent("verifier");
+		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "verifier"]);
+	});
+
+	test("does not block UI sessions when runtime role is unset", async () => {
+		const result = await executeWithAgent("lint", { getRuntimeRole: undefined });
+		expect(runSubprocessAgents).toEqual(["lint"]);
+		expect(collectText(result)).not.toContain("Cannot spawn 'lint' from orchestrator parent sessions");
+	});
+
+	test("allows implement sessions to spawn lint, review, and commit", async () => {
+		const childSession = { hasUI: false, getRuntimeRole: () => "implement" };
+		await executeWithAgent("lint", childSession);
+		await executeWithAgent("code-reviewer", childSession);
+		await executeWithAgent("commit", childSession);
+		expect(runSubprocessAgents).toEqual(["lint", "code-reviewer", "commit"]);
 	});
 });

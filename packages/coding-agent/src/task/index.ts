@@ -20,7 +20,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
-import { type ModelRole } from "../config/model-registry";
+import type { ModelRole } from "../config/model-registry";
 import { isDefaultModelAlias } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Theme } from "../modes/theme/theme";
@@ -32,9 +32,9 @@ import { formatBytes, formatDuration } from "../tools/render-utils";
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { discoverAgents, getAgent } from "./discovery";
-import { resolveSubagentRole } from "./model-role";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
+import { resolveSubagentRole } from "./model-role";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
@@ -68,7 +68,6 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-
 function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
 	if (Array.isArray(value)) {
 		const normalized = value.map(pattern => pattern.trim()).filter(pattern => pattern.length > 0);
@@ -79,6 +78,18 @@ function normalizeModelOverride(value: string | string[] | undefined): string | 
 		return normalized.length > 0 ? normalized : undefined;
 	}
 	return undefined;
+}
+
+const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer", "commit"]);
+
+function normalizeRuntimeRole(role: string | undefined): string | undefined {
+	const normalized = role?.trim().toLowerCase();
+	return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function isOrchestratorParentSession(session: ToolSession): boolean {
+	if (!session.hasUI) return false;
+	return normalizeRuntimeRole(session.getRuntimeRole?.()) === "orchestrator";
 }
 
 function resolveRoleModelOverride(session: ToolSession, agentName: string): string | string[] | undefined {
@@ -196,6 +207,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		this.parameters = isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 		this.#blockedAgent = $env.PI_BLOCKED_AGENT;
 		this.#discoveredAgents = discoveredAgents;
+	}
+
+	#isBlockedByOrchestratorBoundary(agentName: string): boolean {
+		return ORCHESTRATOR_PARENT_BLOCKED_SPAWNS.has(agentName) && isOrchestratorParentSession(this.session);
+	}
+
+	#orchestratorBoundaryMessage(agentName: string): string {
+		return (
+			`Cannot spawn '${agentName}' from orchestrator parent sessions. ` +
+			"Delegate an 'implement' worker first; lint, code-reviewer, and commit must run inside that implement session's quality loop before handoff."
+		);
 	}
 
 	/**
@@ -690,6 +712,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
 						},
 					],
+					details: {
+						projectAgentsDir,
+						results: [],
+						totalDurationMs: Date.now() - startTime,
+					},
+				};
+			}
+
+			if (this.#isBlockedByOrchestratorBoundary(agentName)) {
+				return {
+					content: [{ type: "text", text: this.#orchestratorBoundaryMessage(agentName) }],
 					details: {
 						projectAgentsDir,
 						results: [],

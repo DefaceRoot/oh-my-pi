@@ -1,6 +1,6 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: zai/glm-5:high
+  default: kimi-code/kimi-k2.5:high
   ask: kimi-code/kimi-k2
   orchestrator: openai-codex/gpt-5.4:medium
   plan: anthropic/claude-opus-4-6:xhigh

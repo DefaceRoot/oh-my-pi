@@ -846,6 +846,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getSessionFile: () => sessionManager.getSessionFile() ?? null,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
 		getSessionSpawns: () => options.spawns ?? "*",
+		getRuntimeRole: () => sessionManager.getLastModelChangeRole(),
 		getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 		getActiveModelString: () => {
 			const activeModel = agent?.state.model;

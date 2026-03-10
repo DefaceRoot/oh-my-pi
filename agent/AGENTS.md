@@ -12,19 +12,27 @@ No subagent delegation required (though still beneficial for large tasks).
 - Default and Orchestrator parent turns MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent.
 - Default and Orchestrator parent turns MUST NOT use Grafana MCP tools directly; only the `grafana` subagent has direct Grafana MCP access.
 
+## Orchestrator Parent Delegation Boundary
+
+- During active implementation flow, parent/orchestrator turns may delegate only `explore`, `research`, and `implement`.
+- Parent/orchestrator turns may delegate verification workers (`verifier` plus `coderabbit`) only after implementation units complete for the current phase.
+- Parent/orchestrator turns MUST NOT spawn `lint`, `code-reviewer`, or `commit` for in-progress implementation work.
+- Quality gates and git handoff remain implementation-owned: `lint` -> `code-reviewer` -> remediation cycles -> `commit` before implementation completion is reported.
+
 ## Available Agents
 
 Spawn via Task tool with `agent: "<name>"`:
+
 - `explore`: Read-only codebase scout (structured findings handoff)
 - `research`: Web + BTCA research specialist
 - `implement`: General implementation worker (can fan out explore; hands off via lint -> code-reviewer -> commit)
 - `designer`: Frontend/UI specialist (uses chrome-devtools MCP for verification)
 - `grafana`: Grafana investigation specialist (exclusive Grafana MCP access for dashboard/debug workflows)
-- `lint`: Quality gate runner (lint/typecheck/tests)
-- `code-reviewer`: Evidence-first reviewer for assigned changed files
+- `lint`: Quality gate runner for implementation-owned checks (not parent-orchestrator implementation turns)
+- `code-reviewer`: Evidence-first reviewer for implementation-owned review loops
 - `verifier`: Phase-end verification specialist (anchored on verification-before-completion expectations)
 - `coderabbit`: CodeRabbit CLI verifier for asynchronous review gating
-- `commit`: Git-only commit specialist (stages atomic commits and pushes branch updates)
+- `commit`: Git-only commit specialist invoked by implementation workers after gates pass
 - `merge`: Git rebase and conflict resolution specialist
 - `curator`: Branch/session naming specialist
 - `plan`: Plan authoring architect (brainstorming -> phased plan; authoring context only)
@@ -47,6 +55,7 @@ Read `rule://btca-usage` for detailed patterns.
 
 - `superpowers:using-git-worktrees` - Git worktree creation and management
 - `superpowers:brainstorming` - Collaborative design through one-question-at-a-time dialogue (planning conversations only)
+
 ## Persistent Artifact Writing Policy
 
 When creating or editing persistent repository artifacts (source, tests, configs, prompts, rules, durable docs, filenames, headings, comments, inline notes), apply `rule://persistent-artifact-language`.
@@ -68,6 +77,7 @@ The user does agentic coding exclusively — they do not touch files, read code,
 Write every final summary for someone with 6 months of coding experience. Explain behavior, not implementation.
 
 **For each bug fixed or feature added, cover:**
+
 1. **What was wrong / what was requested** — describe the broken behavior or the ask in plain terms
 2. **What was causing it** — explain the root cause using plain logic, not code location. 'The check was running in the wrong order.' not 'resolveRole() compared orchestrator before default.'
 3. **What the fix does** — describe the corrected behavior. 'It now checks the right thing first.'
@@ -75,12 +85,14 @@ Write every final summary for someone with 6 months of coding experience. Explai
 5. **Tests** — state what was tested and whether it passed. 'All existing tests passed. The specific scenario that was broken was verified and now works correctly.'
 
 **NEVER include in summaries:**
+
 - File names, file paths, or line numbers
 - Function names, method names, class names, variable names
 - Code snippets or diffs
 - Jargon the user would not know: callsite, instantiation, propagation, mutator, shim, patch bundle, ref, AST, runtime, resolver, hydration, diff
 
 **Always include in summaries:**
+
 - Root cause in plain English (required — skip only if it was a simple addition with no prior bug)
 - The before/after behavior contrast
 - Test results — what ran, whether it passed

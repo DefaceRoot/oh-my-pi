@@ -171,9 +171,10 @@ describe("orchestrator-mode policy", () => {
 		expectAllowed(parentOrchestratorContext(), "bash", { command: "git status --short" });
 	});
 
-	it("prompt requires detailed live todo tracking", () => {
+	it("prompt requires immediate delegation without preamble", () => {
 		const prompt = _testExports.buildOrchestratorPrompt();
 		expect(prompt).toContain("This role NEVER implements directly, even for tiny requests.");
+		expect(prompt).toContain("Skip the preamble. Do not output a numbered execution list before acting.");
 		expect(prompt).toContain("create a detailed phased todo list with todo_write");
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");

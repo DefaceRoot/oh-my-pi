@@ -14,7 +14,7 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
-import { FORK_REINSTALL_COMMAND } from "../../cli/update-cli";
+import { FORK_REINSTALL_COMMAND, FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
 import type { BashResult } from "../../exec/bash-executor";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
@@ -714,28 +714,136 @@ export class CommandController {
 		child.unref();
 	}
 
-	async handleRefreshForkInstall(): Promise<void> {
-		this.ctx.showStatus("Running fork reinstall. OMP will relaunch automatically if it succeeds.");
-		const result = await this.runBashCommand(FORK_REINSTALL_COMMAND, true);
-		if (!result) return;
-		if (result.cancelled) {
-			this.ctx.showWarning("Fork reinstall cancelled. OMP was not restarted.");
-			return;
-		}
-		if (result.exitCode !== 0) {
-			this.ctx.showError(`Fork reinstall failed with exit code ${result.exitCode}. OMP was not restarted.`);
-			return;
-		}
-
-		try {
-			this.relaunchOmpSession();
-		} catch (error) {
+	async handleMergeUpstreamFork(): Promise<void> {
+		// Step 1: Check if upstream remote exists
+		this.ctx.showStatus("Checking for upstream remote...");
+		const remoteCheck = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git remote get-url ${FORK_UPSTREAM_REMOTE} 2>/dev/null`,
+			false,
+		);
+		if (!remoteCheck || remoteCheck.exitCode !== 0) {
 			this.ctx.showError(
-				`Fork reinstall succeeded, but automatic relaunch failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+				`No '${FORK_UPSTREAM_REMOTE}' remote found. Add it with: git remote add ${FORK_UPSTREAM_REMOTE} <upstream-url>`,
 			);
 			return;
 		}
 
+		// Step 2: Fetch upstream
+		this.ctx.showStatus("Fetching upstream changes...");
+		const fetchResult = await this.runBashCommand(`cd ${FORK_REPO_ROOT} && git fetch ${FORK_UPSTREAM_REMOTE}`, true);
+		if (!fetchResult || fetchResult.exitCode !== 0) {
+			this.ctx.showError("Failed to fetch upstream. Check your network connection.");
+			return;
+		}
+		if (fetchResult.cancelled) {
+			this.ctx.showWarning("Upstream fetch cancelled.");
+			return;
+		}
+
+		// Step 3: Check if there are any new changes
+		const currentBranch = await this.runBashCommand(`cd ${FORK_REPO_ROOT} && git rev-parse --abbrev-ref HEAD`, false);
+		const branchName = currentBranch?.output?.trim() || "main";
+
+		const diffCheck = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git rev-list --count HEAD..${FORK_UPSTREAM_REMOTE}/${branchName}`,
+			false,
+		);
+		const newCommitCount = parseInt(diffCheck?.output?.trim() || "0", 10);
+		if (newCommitCount === 0) {
+			this.ctx.showStatus("Already up to date with upstream. No changes to merge.");
+			return;
+		}
+
+		// Step 4: Analyze risk - check if upstream changes any files that the fork has also modified
+		// Get list of files changed in upstream commits
+		const upstreamFiles = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git diff --name-only HEAD...${FORK_UPSTREAM_REMOTE}/${branchName}`,
+			false,
+		);
+		// Get list of files the fork has modified compared to upstream
+		const forkFiles = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git diff --name-only ${FORK_UPSTREAM_REMOTE}/${branchName}...HEAD`,
+			false,
+		);
+
+		const upstreamFileList = (upstreamFiles?.output?.trim() || "").split("\n").filter(Boolean);
+		const forkFileList = new Set((forkFiles?.output?.trim() || "").split("\n").filter(Boolean));
+		const conflictingFiles = upstreamFileList.filter(f => forkFileList.has(f));
+
+		// Step 5: If there are potentially breaking changes, show summary and ask user
+		if (conflictingFiles.length > 0) {
+			const summary = [
+				`Upstream has ${newCommitCount} new commit(s).`,
+				`${upstreamFileList.length} file(s) changed upstream, ${conflictingFiles.length} overlap with fork modifications:`,
+				"",
+				...conflictingFiles.slice(0, 20).map(f => `  - ${f}`),
+				...(conflictingFiles.length > 20 ? [`  ... and ${conflictingFiles.length - 20} more`] : []),
+				"",
+				"These files have been modified in both upstream and your fork.",
+				"The merge may require conflict resolution.",
+				"",
+				"Options:",
+				"  1. Proceed with merge (conflicts will be shown if any)",
+				"  2. Cancel and review manually",
+			].join("\n");
+
+			this.ctx.showStatus(summary);
+
+			// Use runBashCommand with a simple prompt to get user input
+			const confirm = await this.runBashCommand(
+				`echo 'Press Enter to proceed with merge, or Ctrl+C to cancel'`,
+				true,
+			);
+			if (!confirm || confirm.cancelled) {
+				this.ctx.showWarning("Merge cancelled.");
+				return;
+			}
+		} else {
+			this.ctx.showStatus(
+				`Upstream has ${newCommitCount} new commit(s) with no overlapping changes. Merging automatically...`,
+			);
+		}
+
+		// Step 6: Attempt rebase
+		const rebaseResult = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git rebase ${FORK_UPSTREAM_REMOTE}/${branchName}`,
+			true,
+		);
+		if (!rebaseResult || rebaseResult.cancelled) {
+			// Abort the rebase if cancelled
+			await this.runBashCommand(`cd ${FORK_REPO_ROOT} && git rebase --abort`, false);
+			this.ctx.showWarning("Merge cancelled. Rebase aborted.");
+			return;
+		}
+		if (rebaseResult.exitCode !== 0) {
+			// Rebase failed - likely conflicts
+			this.ctx.showError(
+				"Rebase encountered conflicts. Resolve them in the fork repo, then run /merge-omp again.\n" +
+					"To abort: cd " +
+					FORK_REPO_ROOT +
+					" && git rebase --abort",
+			);
+			return;
+		}
+
+		// Step 7: Install dependencies
+		this.ctx.showStatus("Merge successful. Installing dependencies...");
+		const installResult = await this.runBashCommand(FORK_REINSTALL_COMMAND, true);
+		if (!installResult || installResult.exitCode !== 0) {
+			this.ctx.showError("Dependency install failed after merge. Check the output above.");
+			return;
+		}
+
+		// Step 8: Relaunch
+		this.ctx.showStatus("Merge complete. Relaunching OMP...");
+		try {
+			this.relaunchOmpSession();
+		} catch (error) {
+			this.ctx.showError(
+				`Merge succeeded, but automatic relaunch failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+			);
+			return;
+		}
 		await this.ctx.shutdown();
 	}
 

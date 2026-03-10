@@ -5,7 +5,7 @@ export const RESUME_AGENT_MODE_STYLES = {
 	default: { label: "Default", color: "success" },
 	ask: { label: "Ask", color: "statusLineSubagents" },
 	orchestrator: { label: "Orchestrator", color: "warning" },
-	plan: { label: "Plan", color: "statusLineContext" },
+	plan: { label: "Plan", color: "error" },
 	unknown: { label: "unknown", color: "dim" },
 } as const;
 

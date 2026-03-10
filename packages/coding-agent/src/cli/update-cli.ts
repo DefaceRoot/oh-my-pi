@@ -18,7 +18,7 @@ export const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
 export const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
 export const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} install`;
 export const FORK_DIRECT_ENTRY = `${FORK_REPO_ROOT}/packages/coding-agent/src/cli.ts`;
-
+export const FORK_UPSTREAM_REMOTE = "upstream";
 interface ReleaseInfo {
 	tag: string;
 	version: string;

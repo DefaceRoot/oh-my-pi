@@ -459,13 +459,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
-		name: "refresh-fork",
-		description: "Reinstall the local OMP fork globally and relaunch this session with refreshed package code",
+		name: "merge-omp",
+		description: "Fetch upstream OMP changes, merge safely, install dependencies, and relaunch",
 		handle: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.refreshForkInstall();
+			await runtime.ctx.mergeUpstreamFork();
 		},
 	},
+
 	{
 		name: "background",
 		aliases: ["bg"],

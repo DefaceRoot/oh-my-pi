@@ -39,7 +39,7 @@ import { setTerminalTitle } from "../utils/title-generator";
 import {
 	ACTION_BUTTONS,
 	type ActionButtonUi,
-	FORK_REFRESH_BUTTON,
+	FORK_MERGE_BUTTON,
 	findActionButtonBounds,
 	hasSameVisibleText,
 	LAZYGIT_BUTTON,
@@ -332,7 +332,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
-		this.statusLine.setHookStatus(FORK_REFRESH_BUTTON.statusKey, FORK_REFRESH_BUTTON.normalText);
+		this.statusLine.setHookStatus(FORK_MERGE_BUTTON.statusKey, FORK_MERGE_BUTTON.normalText);
 		this.statusLine.setHookStatus(LAZYGIT_BUTTON.statusKey, LAZYGIT_BUTTON.normalText);
 		this.mainLayoutContainer = new Container();
 		this.mainLayoutContainer.addChild(this.chatContainer);
@@ -1358,8 +1358,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.commandController.handleForkCommand();
 	}
 
-	refreshForkInstall(): Promise<void> {
-		return this.commandController.handleRefreshForkInstall();
+	mergeUpstreamFork(): Promise<void> {
+		return this.commandController.handleMergeUpstreamFork();
 	}
 
 	showDebugSelector(): void {
