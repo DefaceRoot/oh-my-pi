@@ -27,6 +27,7 @@ interface SidebarSubagentRowBase {
 	id: string;
 	agentName: string;
 	status: SidebarSubagentStatus;
+	tokens?: number;
 }
 
 export interface SidebarSubagentChildRow extends SidebarSubagentRowBase {

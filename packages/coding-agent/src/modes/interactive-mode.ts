@@ -32,7 +32,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
-import { getRecentSessions, type SessionContext, SessionManager } from "../session/session-manager";
+import { getRecentSessions, type SessionContext, type SessionEntry, SessionManager } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -658,32 +658,64 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private buildSidebarSubagents(): SidebarModel["subagents"] {
-		const refs = this.getSnapshotRefs().slice(0, SIDEBAR_SUBAGENT_LIMIT);
-		if (refs.length === 0) return undefined;
+		const groups = this.getSnapshotGroups().slice(0, SIDEBAR_SUBAGENT_LIMIT);
+		if (groups.length === 0) return undefined;
 		const now = Date.now();
-		return refs.map(ref => {
-			const isRecent =
-				typeof ref.lastUpdatedMs === "number" &&
-				Number.isFinite(ref.lastUpdatedMs) &&
-				now - ref.lastUpdatedMs <= 30_000;
-			const inferredStatus: SidebarSubagent["status"] =
-				ref.id === this.subagentViewActiveId || isRecent ? "running" : "completed";
-			const statusFromRef = ref.status;
-			const status: SidebarSubagent["status"] =
-				statusFromRef === "failed" || statusFromRef === "cancelled"
-					? "failed"
-					: inferredStatus === "running"
-						? "running"
-						: statusFromRef === "pending"
-							? "running"
-							: "completed";
-			return {
+		const rows: SidebarSubagent[] = [];
+
+		for (const group of groups) {
+			const rootRef = this.getSubagentRootRef(group);
+			if (!rootRef) continue;
+
+			const children = this.getSubagentNestedRefs(group).map(ref => ({
+				kind: "child" as const,
 				id: ref.id,
 				agentName: ref.agent ?? "task",
-				status,
-				description: ref.description ?? ref.contextPreview,
-			};
-		});
+				status: this.getSidebarSubagentStatus(ref, now),
+				tokens: ref.tokens,
+			}));
+
+			const parentStatus = this.getSidebarSubagentGroupStatus([
+				this.getSidebarSubagentStatus(rootRef, now),
+				...children.map(child => child.status),
+			]);
+
+			rows.push({
+				kind: "parent",
+				id: rootRef.id,
+				agentName: rootRef.agent ?? "task",
+				status: parentStatus,
+				title: rootRef.description ?? rootRef.contextPreview,
+				tokens: rootRef.tokens,
+				children: children.length > 0 ? children : undefined,
+			});
+		}
+
+		return rows.length > 0 ? rows : undefined;
+	}
+
+	private getSidebarSubagentStatus(ref: SubagentViewRef, now: number): SidebarSubagent["status"] {
+		const statusFromRef = ref.status;
+		if (statusFromRef === "failed" || statusFromRef === "cancelled") {
+			return "failed";
+		}
+		if (statusFromRef === "running" || statusFromRef === "pending") {
+			return "running";
+		}
+		if (statusFromRef === "completed") {
+			return "completed";
+		}
+		const isRecent =
+			typeof ref.lastUpdatedMs === "number" &&
+			Number.isFinite(ref.lastUpdatedMs) &&
+			now - ref.lastUpdatedMs <= 30_000;
+		return ref.id === this.subagentViewActiveId || isRecent ? "running" : "completed";
+	}
+
+	private getSidebarSubagentGroupStatus(statuses: SidebarSubagent["status"][]): SidebarSubagent["status"] {
+		if (statuses.includes("running")) return "running";
+		if (statuses.includes("failed")) return "failed";
+		return "completed";
 	}
 
 	private buildSidebarModifiedFiles(): SidebarModel["modifiedFiles"] {
@@ -1790,10 +1822,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return new SubagentIndex({ artifactsDir });
 	}
 
-	private getSnapshotRefs(): SubagentViewRef[] {
-		return this.subagentSnapshot?.refs ?? [];
-	}
-
 	private getSnapshotGroups(): SubagentViewGroup[] {
 		if (Array.isArray(this.subagentSnapshot?.groups) && this.subagentSnapshot.groups.length > 0) {
 			return this.subagentSnapshot.groups;
@@ -1808,8 +1836,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const results: unknown[] = [];
 		for (const entry of this.sessionManager.getEntries()) {
 			if (entry.type !== "message") continue;
-			const message = (entry as { message?: Record<string, unknown> }).message;
-			if (!message || message.role !== "toolResult" || message.toolName !== "task") continue;
+			const message = entry.message;
+			if (message.role !== "toolResult" || message.toolName !== "task") continue;
 			const details = message.details as Record<string, unknown> | undefined;
 			const entries = Array.isArray(details?.results) ? details.results : [];
 			results.push(...entries);
@@ -1946,7 +1974,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			.start()
 			.then(() => {
 				if (manager.state === "degraded") {
-					const hint = this.keybindings?.getDisplayString("Ctrl+X") ?? "Ctrl+X";
+					const hint = this.keybindings?.getDisplayString("cycleSubagentForward") ?? "Ctrl+X";
 					try {
 						this.showWarning(`Watch unavailable. Use ${hint} then Ctrl+R to manually refresh subagent data.`);
 					} catch {
@@ -2347,7 +2375,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
 	}
 
-	private extractUsedSkillNamesFromEntries(entries: Array<Record<string, unknown>>): string[] | undefined {
+	private extractUsedSkillNamesFromEntries(entries: SessionEntry[]): string[] | undefined {
 		const names = new Set<string>();
 		for (const entry of entries) {
 			if (entry.type === "session_init") {
@@ -2526,9 +2554,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			const rawTranscript = await Bun.file(ref.sessionPath).text();
 			try {
 				const subSession = await SessionManager.open(ref.sessionPath);
-				const entries = subSession.getEntries() as Array<Record<string, unknown>>;
+				const entries = subSession.getEntries();
 				const latestModelEntry = [...entries].reverse().find(entry => entry.type === "model_change");
 				const sessionInitEntry = entries.find(entry => entry.type === "session_init");
+				const latestModel = latestModelEntry?.type === "model_change" ? latestModelEntry.model : undefined;
+				const sessionTask = sessionInitEntry?.type === "session_init" ? sessionInitEntry.task : undefined;
 				const skillsUsed = this.extractUsedSkillNamesFromEntries(entries);
 				const usage = subSession.getUsageStatistics();
 				const tokens = usage.input + usage.output;
@@ -2539,12 +2569,9 @@ export class InteractiveMode implements InteractiveModeContext {
 						source: ref.sessionPath,
 						content: rawTranscript,
 						sessionContext: fallback.sessionContext,
-						model: typeof latestModelEntry?.model === "string" ? latestModelEntry.model : fallback.model,
+						model: latestModel ?? fallback.model,
 						tokens: fallback.tokens ?? tokens,
-						contextPreview:
-							typeof sessionInitEntry?.task === "string"
-								? this.extractTaskContextPreview(sessionInitEntry.task)
-								: fallback.contextPreview,
+						contextPreview: sessionTask ? this.extractTaskContextPreview(sessionTask) : fallback.contextPreview,
 						skillsUsed: skillsUsed ?? fallback.skillsUsed,
 					};
 				}
@@ -2553,12 +2580,9 @@ export class InteractiveMode implements InteractiveModeContext {
 					source: ref.sessionPath,
 					content: rawTranscript,
 					sessionContext,
-					model: typeof latestModelEntry?.model === "string" ? latestModelEntry.model : undefined,
+					model: latestModel,
 					tokens,
-					contextPreview:
-						typeof sessionInitEntry?.task === "string"
-							? this.extractTaskContextPreview(sessionInitEntry.task)
-							: undefined,
+					contextPreview: sessionTask ? this.extractTaskContextPreview(sessionTask) : undefined,
 					skillsUsed,
 				};
 			} catch {

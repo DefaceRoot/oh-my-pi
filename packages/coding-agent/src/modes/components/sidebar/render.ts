@@ -16,11 +16,12 @@ const MODIFIED_FILES_PREVIEW_LIMIT = 10;
 
 type SidebarSection = {
 	header: string;
-	lines: string[];
+	lines: unknown[];
 };
 
-function fit(line: string, width: number): string {
-	return truncateToWidth(line, width);
+function fit(line: unknown, width: number): string {
+	const safeLine = typeof line === "string" ? line : String(line ?? "");
+	return truncateToWidth(safeLine, width);
 }
 
 function clampPercent(value: number): number {
@@ -36,6 +37,11 @@ function formatCompactTokens(value: number): string {
 	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
 	if (n < 10_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
 	return `${Math.round(n / 1_000_000)}M`;
+}
+
+function formatSubagentTokenSuffix(tokens?: number): string {
+	if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens <= 0) return "";
+	return chalk.dim(` · ${formatCompactTokens(tokens)} tok`);
 }
 
 function renderTokenLine(tokens: SidebarTokenSection): string {
@@ -82,19 +88,20 @@ function renderTodoLine(todo: SidebarTodoItem, frame?: number): string {
 	}
 }
 
-function renderSubagentLine(status: SidebarSubagent["status"], label: string, prefix = ""): string {
+function renderSubagentLine(status: SidebarSubagent["status"], label: string, tokens?: number, prefix = ""): string {
+	const tokenSuffix = formatSubagentTokenSuffix(tokens);
 	if (status === "running") {
-		return `${prefix}${chalk.cyan("◐")} ${chalk.cyan(label)}`;
+		return `${prefix}${chalk.cyan("◐")} ${chalk.cyan(label)}${tokenSuffix}`;
 	}
 	if (status === "failed") {
-		return `${prefix}${chalk.red("✗")} ${label}`;
+		return `${prefix}${chalk.red("✗")} ${label}${tokenSuffix}`;
 	}
 
-	return chalk.gray(`${prefix}${chalk.green("✓")} ${label}`);
+	return `${chalk.gray(`${prefix}${chalk.green("✓")} ${label}`)}${tokenSuffix}`;
 }
 
 function renderSubagentLines(subagent: SidebarSubagent): string[] {
-	const lines = [renderSubagentLine(subagent.status, subagent.agentName)];
+	const lines = [renderSubagentLine(subagent.status, subagent.agentName, subagent.tokens)];
 	if (subagent.title) {
 		lines.push(`   ${chalk.dim(subagent.title)}`);
 	}
@@ -103,7 +110,7 @@ function renderSubagentLines(subagent: SidebarSubagent): string[] {
 	for (let index = 0; index < children.length; index += 1) {
 		const child = children[index]!;
 		const branch = index === children.length - 1 ? "└─ " : "├─ ";
-		lines.push(renderSubagentLine(child.status, child.agentName, `  ${branch}`));
+		lines.push(renderSubagentLine(child.status, child.agentName, child.tokens, `  ${branch}`));
 	}
 
 	return lines;

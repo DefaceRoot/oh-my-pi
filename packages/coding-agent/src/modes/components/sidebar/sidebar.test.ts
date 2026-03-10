@@ -136,7 +136,7 @@ describe("renderSidebar", () => {
 		expect(frameZero).toContain("× Abandoned item");
 	});
 
-	test("subagents section renders parent title and nested children", () => {
+	test("subagents section renders parent title, nested children, and compact token counts", () => {
 		const model: SidebarModel = {
 			width: 80,
 			subagents: [
@@ -146,8 +146,9 @@ describe("renderSidebar", () => {
 					agentName: "explore",
 					status: "running",
 					title: "Scan repository for sidebar touchpoints",
+					tokens: 9200,
 					children: [
-						{ kind: "child", id: "0-Explore.0-Lint", agentName: "lint", status: "completed" },
+						{ kind: "child", id: "0-Explore.0-Lint", agentName: "lint", status: "completed", tokens: 1200 },
 						{ kind: "child", id: "0-Explore.1-Reviewer", agentName: "reviewer", status: "failed" },
 					],
 				},
@@ -156,10 +157,32 @@ describe("renderSidebar", () => {
 
 		const output = renderSidebar(model).map(plain).join("\n");
 		expect(output).toContain("Subagents");
-		expect(output).toContain("◐ explore");
+		expect(output).toContain("◐ explore · 9.2k tok");
 		expect(output).toContain("Scan repository for sidebar touchpoints");
-		expect(output).toContain("├─ ✓ lint");
+		expect(output).toContain("├─ ✓ lint · 1.2k tok");
 		expect(output).toContain("└─ ✗ reviewer");
+	});
+
+	test("subagent token formatting stays compact and deterministic near thresholds", () => {
+		const model: SidebarModel = {
+			width: 100,
+			subagents: [
+				{ kind: "parent", id: "a", agentName: "a", status: "completed", tokens: 999 },
+				{ kind: "parent", id: "b", agentName: "b", status: "completed", tokens: 1000 },
+				{ kind: "parent", id: "c", agentName: "c", status: "completed", tokens: 1499 },
+				{ kind: "parent", id: "d", agentName: "d", status: "completed", tokens: 9949 },
+				{ kind: "parent", id: "e", agentName: "e", status: "completed", tokens: 10_499 },
+				{ kind: "parent", id: "f", agentName: "f", status: "completed", tokens: 1_250_000 },
+			],
+		};
+
+		const output = renderSidebar(model).map(plain).join("\n");
+		expect(output).toContain("✓ a · 999 tok");
+		expect(output).toContain("✓ b · 1.0k tok");
+		expect(output).toContain("✓ c · 1.5k tok");
+		expect(output).toContain("✓ d · 9.9k tok");
+		expect(output).toContain("✓ e · 10k tok");
+		expect(output).toContain("✓ f · 1.3M tok");
 	});
 
 	test("session section renders before subagents", () => {
@@ -248,6 +271,21 @@ describe("renderSidebar", () => {
 		for (const line of output) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(24);
 		}
+	});
+
+	test("coerces non-string subagent lines to prevent render crashes", () => {
+		const model = {
+			width: 40,
+			subagents: {
+				length: 1,
+				flatMap: () => [42, "ok"],
+			},
+		} as unknown as SidebarModel;
+
+		expect(() => renderSidebar(model)).not.toThrow();
+		const output = renderSidebar(model).map(plain).join("\n");
+		expect(output).toContain("42");
+		expect(output).toContain("ok");
 	});
 
 	test("all rendered lines respect model width", () => {

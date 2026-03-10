@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as nodeFs from "node:fs";
+import { renderSidebar } from "@oh-my-pi/pi-coding-agent/modes/components/sidebar/render";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type {
 	SubagentIndexSnapshot,
@@ -8,6 +9,12 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+function plain(line: string): string {
+	return line.replace(ANSI_PATTERN, "");
+}
+
 /**
  * Hot-path absence tests for sidebar build and navigator open.
  *
@@ -15,11 +22,6 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
  * (`Bun.Glob.prototype.scanSync`, `fs.statSync`) on the sidebar render path
  * and the navigator open path. When the SubagentIndex snapshot is populated,
  * both paths must operate exclusively from the in-memory snapshot.
- *
- * Production gap: when the snapshot has empty refs AND empty groups,
- * `getSnapshotGroups()` falls through to the legacy `collectSubagentViewRefs()`.
- * This is expected to be fixed in Unit 2.5 wiring. Tests here cover only the
- * populated-snapshot case (the normal production path after bootstrap).
  */
 
 beforeAll(async () => {
@@ -145,6 +147,49 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 			status: "completed",
 			tokens: 3400,
 		});
+		expect(statSyncSpy).not.toHaveBeenCalled();
+		expect(scanSyncSpy).not.toHaveBeenCalled();
+	});
+
+	test("buildSidebarSubagents output renders grouped parent-child hierarchy with deterministic token labels", () => {
+		const failedParent = makeRef("0-Explore", {
+			agent: "explore",
+			status: "completed",
+			tokens: 1999,
+			description: "Explore sidebar task",
+		});
+		const failedChild = makeRef("0-Explore.0-Reviewer", {
+			rootId: "0-Explore",
+			parentId: "0-Explore",
+			depth: 1,
+			agent: "code-reviewer",
+			status: "failed",
+			tokens: 1550,
+		});
+		const runningParent = makeRef("1-Research", {
+			agent: "research",
+			status: "running",
+			tokens: 1000,
+			description: "Parent only row",
+		});
+		const mode = createModeWithSnapshot(
+			[failedParent, failedChild, runningParent],
+			[makeGroup("0-Explore", [failedParent, failedChild]), makeGroup("1-Research", [runningParent])],
+		) as any;
+
+		const rows = mode.buildSidebarSubagents();
+		const rendered = renderSidebar({ width: 120, subagents: rows }).map(plain).join("\n");
+
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toMatchObject({ kind: "parent", id: "0-Explore", status: "failed", tokens: 1999 });
+		expect(rows[0]?.children).toEqual([
+			{ kind: "child", id: "0-Explore.0-Reviewer", agentName: "code-reviewer", status: "failed", tokens: 1550 },
+		]);
+		expect(rows[1]).toMatchObject({ kind: "parent", id: "1-Research", status: "running", tokens: 1000 });
+		expect(rendered).toContain("Subagents");
+		expect(rendered).toContain("✗ explore · 2.0k tok");
+		expect(rendered).toContain("└─ ✗ code-reviewer · 1.6k tok");
+		expect(rendered).toContain("◐ research · 1.0k tok");
 		expect(statSyncSpy).not.toHaveBeenCalled();
 		expect(scanSyncSpy).not.toHaveBeenCalled();
 	});
