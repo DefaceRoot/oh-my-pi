@@ -152,7 +152,7 @@ export class SubagentNavigatorModal extends Container {
 		}
 
 		// Footer
-		lines.push(this.#renderFooter(width));
+		lines.push(...this.#renderFooter(width));
 
 		return lines;
 	}

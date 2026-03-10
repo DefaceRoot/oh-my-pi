@@ -688,4 +688,19 @@ describe("SubagentNavigatorModal", () => {
 			expect(onSelectionChange).toHaveBeenCalledTimes(1);
 		});
 	});
+
+	// ═══ Regression Tests ═══
+
+	describe("render output", () => {
+		test("render() returns only strings (no nested arrays)", () => {
+			const { groups } = singleGroupSetup();
+			const modal = createModal(groups);
+			const lines = modal.render(80);
+
+			expect(Array.isArray(lines)).toBe(true);
+			for (const line of lines) {
+				expect(typeof line).toBe("string");
+			}
+		});
+	});
 });
