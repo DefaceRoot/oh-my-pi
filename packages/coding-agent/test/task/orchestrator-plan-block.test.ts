@@ -17,7 +17,7 @@ const stubResult: SingleResult = {
 	tokens: 100,
 };
 
-const availableAgents = ["explore", "research", "implement", "verifier", "lint", "code-reviewer", "commit"].map(
+const availableAgents = ["explore", "research", "implement", "verifier", "coderabbit", "lint", "code-reviewer", "commit"].map(
 	name => ({
 		name,
 		description: `${name} test agent`,
@@ -117,24 +117,41 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 	});
 
 	test("allows orchestrator parent to delegate implementation-phase workers", async () => {
-		await executeWithAgent("explore");
-		await executeWithAgent("research");
-		await executeWithAgent("implement");
-		await executeWithAgent("verifier");
-		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "verifier"]);
+		const results = [
+			await executeWithAgent("explore"),
+			await executeWithAgent("research"),
+			await executeWithAgent("implement"),
+			await executeWithAgent("verifier"),
+			await executeWithAgent("coderabbit"),
+		];
+		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "verifier", "coderabbit"]);
+		for (const result of results) {
+			const text = collectText(result);
+			expect(text).not.toContain("orchestrator parent sessions");
+			expect(text).not.toContain("Delegate an 'implement' worker first");
+		}
 	});
 
 	test("does not block UI sessions when runtime role is unset", async () => {
 		const result = await executeWithAgent("lint", { getRuntimeRole: undefined });
 		expect(runSubprocessAgents).toEqual(["lint"]);
-		expect(collectText(result)).not.toContain("Cannot spawn 'lint' from orchestrator parent sessions");
+		const text = collectText(result);
+		expect(text).not.toContain("Cannot spawn 'lint' from orchestrator parent sessions");
+		expect(text).not.toContain("Delegate an 'implement' worker first");
 	});
 
 	test("allows implement sessions to spawn lint, review, and commit", async () => {
 		const childSession = { hasUI: false, getRuntimeRole: () => "implement" };
-		await executeWithAgent("lint", childSession);
-		await executeWithAgent("code-reviewer", childSession);
-		await executeWithAgent("commit", childSession);
+		const results = [
+			await executeWithAgent("lint", childSession),
+			await executeWithAgent("code-reviewer", childSession),
+			await executeWithAgent("commit", childSession),
+		];
 		expect(runSubprocessAgents).toEqual(["lint", "code-reviewer", "commit"]);
+		for (const result of results) {
+			const text = collectText(result);
+			expect(text).not.toContain("orchestrator parent sessions");
+			expect(text).not.toContain("Delegate an 'implement' worker first");
+		}
 	});
 });
