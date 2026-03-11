@@ -315,6 +315,8 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 	return parts.join("\n\n");
 }
 
+type MainPromptMode = "default" | "orchestrator" | "plan" | "ask";
+
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
@@ -340,6 +342,8 @@ export interface BuildSystemPromptOptions {
 	intentField?: string;
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
+	/** Main runtime mode for prompt segmentation. Default: "default" */
+	mode?: MainPromptMode;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -361,6 +365,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rules,
 		intentField,
 		eagerTasks = false,
+		mode = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -508,6 +513,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
 		eagerTasks,
+		mode,
 	};
 	return renderPromptTemplate(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 }

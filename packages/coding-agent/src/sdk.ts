@@ -346,6 +346,7 @@ export interface BuildSystemPromptOptions {
 	cwd?: string;
 	appendPrompt?: string;
 	repeatToolDescriptions?: boolean;
+	mode?: "default" | "orchestrator" | "plan" | "ask";
 }
 
 /**
@@ -358,6 +359,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
 		repeatToolDescriptions: options.repeatToolDescriptions,
+		mode: options.mode,
 	});
 }
 
@@ -1266,6 +1268,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			appendPrompt = parts.join("\n\n");
 		}
+		const currentMode = normalizeMainRole(sessionManager.getLastModelChangeRole());
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
 			skills,
@@ -1278,6 +1281,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			repeatToolDescriptions,
 			eagerTasks,
 			intentField,
+			mode: currentMode,
 		});
 
 		if (options.systemPrompt === undefined) {
@@ -1297,6 +1301,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				repeatToolDescriptions,
 				eagerTasks,
 				intentField,
+				mode: currentMode,
 			});
 		}
 		return options.systemPrompt(defaultPrompt);
