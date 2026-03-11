@@ -100,6 +100,84 @@ describe("EventController task result ingestion", () => {
 		expect(ingestSpy).toHaveBeenCalledWith(mockResults);
 	});
 
+	test("tool_execution_update for task tool calls ctx.ingestTaskToolResult with progress details", async () => {
+		const { ctx, ingestSpy } = createMockContext();
+		const controller = new EventController(ctx);
+
+		const progress = [
+			{ id: "0-Scout", agent: "explore", status: "running", task: "Scout repository", durationMs: 400 },
+			{ id: "1-Verifier", agent: "verifier", status: "pending", task: "Prepare checks", durationMs: 0 },
+		];
+
+		const event: AgentSessionEvent = {
+			type: "tool_execution_update",
+			toolCallId: "call_progress",
+			toolName: "task",
+			args: {},
+			partialResult: {
+				details: {
+					progress,
+				},
+			},
+		};
+
+		await controller.handleEvent(event);
+
+		expect(ingestSpy).toHaveBeenCalledTimes(1);
+		expect(ingestSpy).toHaveBeenCalledWith(progress);
+	});
+
+	test("tool_execution_update for task tool without progress does not call ingestTaskToolResult", async () => {
+		const { ctx, ingestSpy } = createMockContext();
+		const controller = new EventController(ctx);
+
+		const event: AgentSessionEvent = {
+			type: "tool_execution_update",
+			toolCallId: "call_no_progress",
+			toolName: "task",
+			args: {},
+			partialResult: { details: {} },
+		};
+
+		await controller.handleEvent(event);
+
+		expect(ingestSpy).not.toHaveBeenCalled();
+	});
+
+	test("tool_execution_update for task tool with empty progress array does not call ingestTaskToolResult", async () => {
+		const { ctx, ingestSpy } = createMockContext();
+		const controller = new EventController(ctx);
+
+		const event: AgentSessionEvent = {
+			type: "tool_execution_update",
+			toolCallId: "call_empty_progress",
+			toolName: "task",
+			args: {},
+			partialResult: { details: { progress: [] } },
+		};
+
+		await controller.handleEvent(event);
+
+		expect(ingestSpy).not.toHaveBeenCalled();
+	});
+
+	test("tool_execution_update for task tool with primitive partial result does not call ingestTaskToolResult", async () => {
+		const { ctx, ingestSpy } = createMockContext();
+		const controller = new EventController(ctx);
+
+		const event: AgentSessionEvent = {
+			type: "tool_execution_update",
+			toolCallId: "call_primitive_partial",
+			toolName: "task",
+			args: {},
+			partialResult: "running...",
+		};
+
+		await controller.handleEvent(event);
+
+		expect(ingestSpy).not.toHaveBeenCalled();
+	});
+
 	test("tool_execution_end for task tool with error does not call ingestTaskToolResult", async () => {
 		const { ctx, ingestSpy } = createMockContext();
 		const controller = new EventController(ctx);

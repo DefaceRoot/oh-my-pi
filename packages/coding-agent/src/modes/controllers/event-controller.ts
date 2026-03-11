@@ -233,6 +233,16 @@ export class EventController {
 					component.updateResult({ ...event.partialResult, isError: false }, true, event.toolCallId);
 					this.ctx.ui.requestRender();
 				}
+				if (event.toolName === "task") {
+					const partialResult = event.partialResult;
+					const taskDetails =
+						partialResult && typeof partialResult === "object"
+							? (partialResult as { details?: { progress?: unknown[] } }).details
+							: undefined;
+					if (Array.isArray(taskDetails?.progress) && taskDetails.progress.length > 0) {
+						this.ctx.ingestTaskToolResult(taskDetails.progress);
+					}
+				}
 				break;
 			}
 
