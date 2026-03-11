@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { YAML } from "bun";
 import { type Static, Type } from "@sinclair/typebox";
 import { ConfigFile } from "../config";
 
@@ -63,6 +66,14 @@ export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
 };
 
 export const SKILL_CATEGORIES = Object.keys(SKILL_CATEGORY_TO_SKILLS);
+
+const ALWAYS_ON_MCP_SERVER = "augment";
+
+function normalizeMcpServers(servers: readonly string[]): string[] {
+	const unique = Array.from(new Set(servers.map(server => server.trim()).filter(server => server.length > 0)));
+	const withoutAugment = unique.filter(server => server !== ALWAYS_ON_MCP_SERVER);
+	return [ALWAYS_ON_MCP_SERVER, ...withoutAugment];
+}
 
 export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 	roles: {
@@ -235,12 +246,43 @@ export class RolesConfig {
 		return [...skills.categories];
 	}
 
+	#persistConfig(config: RolesConfigData): void {
+		const configPath = this.#configFile.path();
+		const serialized =
+			configPath.endsWith(".json") || configPath.endsWith(".jsonc")
+				? JSON.stringify(config, null, 2)
+				: YAML.stringify(config, null, 2);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, serialized, "utf-8");
+		this.#configFile.invalidate?.();
+		this.#resolved = cloneRolesConfig(config);
+	}
+
+	getKnownMcpServers(): string[] {
+		const config = this.#getConfig();
+		const servers = [
+			...Object.values(config.roles).flatMap(roleConfig => roleConfig.mcp),
+			...Object.values(config.subagents).flatMap(subagentConfig => subagentConfig.mcp),
+		];
+		return normalizeMcpServers(servers);
+	}
+
 	getToolsForRole(role: string): string[] {
 		return [...this.#getRole(role).tools];
 	}
 
 	getMcpForRole(role: string): string[] {
-		return [...this.#getRole(role).mcp];
+		return normalizeMcpServers(this.#getRole(role).mcp);
+	}
+
+	setMcpForRole(role: string, servers: string[]): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		config.roles[role] = {
+			...cloneRoleConfig(roleConfig),
+			mcp: normalizeMcpServers(servers),
+		};
+		this.#persistConfig(config);
 	}
 
 	getSkillCategoriesForRole(role: string): string[] {
@@ -251,6 +293,6 @@ export class RolesConfig {
 		const config = this.#getConfig();
 		const subagent =
 			config.subagents[agentName] ?? config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default;
-		return [...subagent.mcp];
+		return normalizeMcpServers(subagent.mcp);
 	}
 }

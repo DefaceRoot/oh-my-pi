@@ -1,8 +1,10 @@
+import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts, type Model, modelsAreEqual } from "@oh-my-pi/pi-ai";
 import { Container, Input, matchesKey, Spacer, type Tab, TabBar, Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { MODEL_ROLE_IDS, MODEL_ROLES, type ModelRegistry, type ModelRole } from "../../config/model-registry";
 import { resolveModelRoleValue } from "../../config/model-resolver";
+import { RolesConfig } from "../../config/roles-config";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { getThinkingLevelMetadata } from "../../thinking";
@@ -36,6 +38,12 @@ interface RoleAssignment {
 	thinkingLevel: ThinkingLevel;
 }
 
+interface PendingRoleSelection {
+	model: Model;
+	role: ModelRole;
+	thinkingLevel: ThinkingLevel;
+}
+
 type RoleSelectCallback = (model: Model, role: ModelRole | null, thinkingLevel?: ThinkingLevel) => void;
 type CancelCallback = () => void;
 
@@ -55,6 +63,7 @@ export class ModelSelectorComponent extends Container {
 	#selectedRoleIndex: number = 0;
 	#roles = {} as Record<ModelRole, RoleAssignment | undefined>;
 	#settings = null as unknown as Settings;
+	#rolesConfig: RolesConfig;
 	#modelRegistry = null as unknown as ModelRegistry;
 	#onSelectCallback = (() => {}) as RoleSelectCallback;
 	#onCancelCallback = (() => {}) as CancelCallback;
@@ -64,8 +73,11 @@ export class ModelSelectorComponent extends Container {
 	#temporaryOnly: boolean;
 	#editingRole: ModelRole | null = null;
 	#isThinkingMenuOpen: boolean = false;
+	#isMcpMenuOpen: boolean = false;
 	#menuSelectedIndex: number = 0;
-
+	#mcpServers: string[] = [];
+	#mcpSelectedServers = new Set<string>();
+	#pendingRoleSelection: PendingRoleSelection | null = null;
 	// Tab state
 	#providers: string[] = [ALL_TAB];
 	#activeTabIndex: number = 0;
@@ -85,6 +97,7 @@ export class ModelSelectorComponent extends Container {
 		this.#tui = tui;
 		this.#settings = settings;
 		this.#modelRegistry = modelRegistry;
+		this.#rolesConfig = new RolesConfig(path.join(this.#settings.getAgentDir(), "roles.yml"));
 		this.#scopedModels = scopedModels;
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
@@ -500,6 +513,8 @@ export class ModelSelectorComponent extends Container {
 		this.#updateModelBrowser();
 		if (this.#isThinkingMenuOpen) {
 			this.#updateThinkingMenu();
+		} else if (this.#isMcpMenuOpen) {
+			this.#updateMcpMenu();
 		}
 	}
 
@@ -521,6 +536,8 @@ export class ModelSelectorComponent extends Container {
 	#enterRoleModelBrowser(): void {
 		this.#editingRole = this.#selectedRole();
 		this.#isThinkingMenuOpen = false;
+		this.#isMcpMenuOpen = false;
+		this.#pendingRoleSelection = null;
 		this.#searchInput.setValue("");
 		this.#activeTabIndex = 0;
 		this.#selectedIndex = 0;
@@ -581,7 +598,104 @@ export class ModelSelectorComponent extends Container {
 		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
 	}
 
+	#openMcpMenu(model: Model, role: ModelRole, thinkingLevel: ThinkingLevel): void {
+		this.#pendingRoleSelection = { model, role, thinkingLevel };
+		this.#mcpServers = this.#rolesConfig.getKnownMcpServers();
+		this.#mcpSelectedServers = new Set(this.#rolesConfig.getMcpForRole(role));
+		this.#menuSelectedIndex = 0;
+		this.#isThinkingMenuOpen = false;
+		this.#isMcpMenuOpen = true;
+		this.#updateView();
+	}
+
+	#closeMcpMenu(): void {
+		this.#isMcpMenuOpen = false;
+		this.#menuContainer.clear();
+	}
+
+	#updateMcpMenu(): void {
+		this.#menuContainer.clear();
+		const pending = this.#pendingRoleSelection;
+		if (!pending) return;
+		const roleName = MODEL_ROLES[pending.role].name;
+		const optionLines = this.#mcpServers.map((serverName, index) => {
+			const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
+			const checked = this.#mcpSelectedServers.has(serverName) ? "[x]" : "[ ]";
+			const lockLabel = serverName === "augment" ? theme.fg("dim", " (required)") : "";
+			return `${prefix}${checked} ${serverName}${lockLabel}`;
+		});
+		const headerText = `  MCP for: ${roleName} (${pending.model.id})`;
+		const hintText = "  Space: toggle  Enter: confirm  Esc: back";
+		const restartWarning = "  MCP server changes require session restart to take effect";
+		const menuWidth = Math.max(
+			visibleWidth(headerText),
+			visibleWidth(hintText),
+			visibleWidth(restartWarning),
+			...optionLines.map(line => visibleWidth(line)),
+		);
+		this.#menuContainer.addChild(new Spacer(1));
+		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
+		this.#menuContainer.addChild(new Text(theme.fg("text", `  MCP for: ${theme.bold(roleName)} (${theme.bold(pending.model.id)})`), 0, 0));
+		this.#menuContainer.addChild(new Spacer(1));
+		for (let i = 0; i < optionLines.length; i++) {
+			const lineText = optionLines[i];
+			if (!lineText) continue;
+			const isSelected = i === this.#menuSelectedIndex;
+			const line = isSelected ? theme.fg("accent", lineText) : theme.fg("muted", lineText);
+			this.#menuContainer.addChild(new Text(line, 0, 0));
+		}
+		this.#menuContainer.addChild(new Spacer(1));
+		this.#menuContainer.addChild(new Text(theme.fg("warning", restartWarning), 0, 0));
+		this.#menuContainer.addChild(new Text(theme.fg("dim", hintText), 0, 0));
+		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
+	}
+
+	#handleMcpMenuInput(keyData: string): void {
+		const optionCount = this.#mcpServers.length;
+		if (optionCount === 0) return;
+		if (matchesKey(keyData, "up")) {
+			this.#menuSelectedIndex = (this.#menuSelectedIndex - 1 + optionCount) % optionCount;
+			this.#updateView();
+			return;
+		}
+		if (matchesKey(keyData, "down")) {
+			this.#menuSelectedIndex = (this.#menuSelectedIndex + 1) % optionCount;
+			this.#updateView();
+			return;
+		}
+		if (keyData === " " || matchesKey(keyData, "space")) {
+			const serverName = this.#mcpServers[this.#menuSelectedIndex];
+			if (!serverName || serverName === "augment") return;
+			if (this.#mcpSelectedServers.has(serverName)) {
+				this.#mcpSelectedServers.delete(serverName);
+			} else {
+				this.#mcpSelectedServers.add(serverName);
+			}
+			this.#updateView();
+			return;
+		}
+		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+			const pending = this.#pendingRoleSelection;
+			if (!pending) return;
+			this.#rolesConfig.setMcpForRole(pending.role, Array.from(this.#mcpSelectedServers));
+			this.#closeMcpMenu();
+			this.#pendingRoleSelection = null;
+			this.#handleSelect(pending.model, pending.role, pending.thinkingLevel);
+			return;
+		}
+		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
+			this.#closeMcpMenu();
+			this.#pendingRoleSelection = null;
+			this.#isThinkingMenuOpen = true;
+			this.#updateView();
+		}
+	}
+
 	handleInput(keyData: string): void {
+		if (this.#isMcpMenuOpen) {
+			this.#handleMcpMenuInput(keyData);
+			return;
+		}
 		if (this.#isThinkingMenuOpen) {
 			this.#handleThinkingMenuInput(keyData);
 			return;
@@ -627,7 +741,9 @@ export class ModelSelectorComponent extends Container {
 				return;
 			}
 			this.#editingRole = null;
+			this.#closeMcpMenu();
 			this.#closeThinkingMenu();
+			this.#pendingRoleSelection = null;
 			this.#updateView();
 			return;
 		}
@@ -685,7 +801,7 @@ export class ModelSelectorComponent extends Container {
 			const thinkingOptions = this.#getThinkingLevelsForModel(selectedModel.model);
 			const thinkingLevel = thinkingOptions[this.#menuSelectedIndex];
 			if (!thinkingLevel) return;
-			this.#handleSelect(selectedModel.model, selectedRole, thinkingLevel);
+			this.#openMcpMenu(selectedModel.model, selectedRole, thinkingLevel);
 			return;
 		}
 
@@ -712,6 +828,8 @@ export class ModelSelectorComponent extends Container {
 		this.#roles[role] = { model, thinkingLevel: selectedThinkingLevel };
 		this.#onSelectCallback(model, role, selectedThinkingLevel);
 		this.#editingRole = null;
+		this.#pendingRoleSelection = null;
+		this.#closeMcpMenu();
 		this.#closeThinkingMenu();
 		this.#updateView();
 	}

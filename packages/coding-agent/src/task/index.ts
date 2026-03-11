@@ -21,6 +21,7 @@ import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
 import type { ModelRole } from "../config/model-registry";
+import { RolesConfig } from "../config/roles-config";
 import { isDefaultModelAlias } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Theme } from "../modes/theme/theme";
@@ -100,6 +101,43 @@ function resolveRoleModelOverride(session: ToolSession, agentName: string): stri
 		.map(role => normalizeModelOverride(session.settings.getModelRole(role)))
 		.find((value): value is string | string[] => value !== undefined);
 }
+function getMcpServerName(tool: unknown): string | undefined {
+	if (!tool || typeof tool !== "object") return undefined;
+	const candidate = tool as { mcpServerName?: string };
+	return typeof candidate.mcpServerName === "string" && candidate.mcpServerName.length > 0
+		? candidate.mcpServerName
+		: undefined;
+}
+
+function createScopedMcpManager(
+	mcpManager: ToolSession["mcpManager"],
+	allowedServers: readonly string[],
+): ToolSession["mcpManager"] {
+	if (!mcpManager) return undefined;
+	const allowed = new Set(allowedServers);
+	const managerLike = mcpManager as ToolSession["mcpManager"] & {
+		getToolsForServers?: (serverNames: readonly string[]) => unknown[];
+		getTools: () => unknown[];
+		waitForConnection: (name: string) => Promise<unknown>;
+	};
+	const scopedTools =
+		typeof managerLike.getToolsForServers === "function"
+			? managerLike.getToolsForServers(allowedServers)
+			: managerLike.getTools().filter(tool => {
+				const serverName = getMcpServerName(tool);
+				return serverName ? allowed.has(serverName) : false;
+			});
+	return {
+		getTools: () => scopedTools as any,
+		waitForConnection: async (name: string) => {
+			if (!allowed.has(name)) {
+				throw new Error(`MCP server not allowed for subagent: ${name}`);
+			}
+			return managerLike.waitForConnection(name);
+		},
+	} as ToolSession["mcpManager"];
+}
+
 function createUsageTotals(): Usage {
 	return {
 		input: 0,
@@ -557,6 +595,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			: agent;
 
+		const rolesConfig = new RolesConfig(path.join(this.session.settings.getAgentDir(), "roles.yml"));
+		const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
+		const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
+
 		// Apply per-agent model override from settings (highest priority), then role-based fallback
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides") as Record<string, string>;
 		const settingsModelOverride = normalizeModelOverride(agentModelOverrides[agentName]);
@@ -838,7 +880,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: subagentMcpManager,
 						contextFiles,
 						skills: availableSkills,
 						promptTemplates,
@@ -890,7 +932,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: this.session.mcpManager,
+						mcpManager: subagentMcpManager,
 						contextFiles,
 						skills: availableSkills,
 						promptTemplates,

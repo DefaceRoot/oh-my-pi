@@ -15,7 +15,7 @@ export interface MCPToolsLoadResult {
 	/** MCP manager (for lifecycle management) */
 	manager: MCPManager;
 	/** Loaded tools as LoadedCustomTool format */
-	tools: LoadedCustomTool[];
+	tools: Array<LoadedCustomTool & { serverName?: string }>;
 	/** Errors keyed by server name */
 	errors: Array<{ path: string; error: string }>;
 	/** Connected server names */
@@ -86,7 +86,7 @@ export async function discoverAndLoadMCPTools(cwd: string, options?: MCPToolsLoa
 	}
 
 	// Convert MCP tools to LoadedCustomTool format
-	const loadedTools: LoadedCustomTool[] = result.tools.map(tool => {
+	const loadedTools: Array<LoadedCustomTool & { serverName?: string }> = result.tools.map(tool => {
 		// MCPTool and DeferredMCPTool have these properties
 		const mcpTool = tool as { mcpServerName?: string };
 		const serverName = mcpTool.mcpServerName;
@@ -105,6 +105,7 @@ export async function discoverAndLoadMCPTools(cwd: string, options?: MCPToolsLoa
 			path,
 			resolvedPath: `mcp:${tool.name}`,
 			tool: tool as any, // MCPToolDetails is compatible with CustomTool<TSchema, any>
+			serverName,
 		};
 	});
 

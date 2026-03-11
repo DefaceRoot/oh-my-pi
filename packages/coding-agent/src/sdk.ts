@@ -643,8 +643,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const getRoleToolAllowlist = (role: string | undefined): string[] => {
 		return rolesConfig.getToolsForRole(normalizeMainRole(role));
 	};
+	const getLoadedToolServerName = (loaded: { serverName?: string; tool: CustomTool }): string | undefined => {
+		if (loaded.serverName && loaded.serverName.length > 0) return loaded.serverName;
+		const mcpTool = loaded.tool as CustomTool & { mcpServerName?: string };
+		return typeof mcpTool.mcpServerName === "string" && mcpTool.mcpServerName.length > 0
+			? mcpTool.mcpServerName
+			: undefined;
+	};
+
 	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
+	const startupRoleMcpAllowlist = rolesConfig.getMcpForRole(startupRole);
+	const startupRoleMcpServerSet = new Set(startupRoleMcpAllowlist);
 
 	const modelApiKeyAvailability = new Map<string, boolean>();
 	const getModelAvailabilityKey = (candidate: Model): string =>
@@ -979,8 +989,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		if (mcpResult.tools.length > 0) {
-			// MCP tools are LoadedCustomTool, extract the tool property
-			customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
+			const filteredMcpTools = mcpResult.tools.filter(loaded => {
+				const serverName = getLoadedToolServerName(loaded as { serverName?: string; tool: CustomTool });
+				return serverName ? startupRoleMcpServerSet.has(serverName) : false;
+			});
+			if (filteredMcpTools.length > 0) {
+				customTools.push(...filteredMcpTools.map(loaded => loaded.tool));
+			}
 		}
 	}
 
@@ -1233,7 +1248,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 
 		// Build combined append prompt: memory instructions + MCP server instructions
-		const serverInstructions = mcpManager?.getServerInstructions();
+		const serverInstructions = mcpManager?.getServerInstructions(startupRoleMcpAllowlist);
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		if (serverInstructions && serverInstructions.size > 0) {
 			const MAX_INSTRUCTIONS_LENGTH = 4000;

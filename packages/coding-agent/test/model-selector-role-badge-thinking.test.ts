@@ -109,12 +109,16 @@ describe("ModelSelector role-first persistent flow", () => {
 		expect(thinkingRendered).toContain("Thinking for: Default (claude-sonnet-4-6)");
 
 		selector.handleInput("\n");
+		const mcpRendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(mcpRendered).toContain("MCP for: Default (claude-sonnet-4-6)");
+		expect(setModelRoleSpy).not.toHaveBeenCalled();
+
+		selector.handleInput("\n");
 		const postSelectionRendered = normalizeRenderedText(selector.render(220).join("\n"));
 
 		expect(postSelectionRendered).toContain("Model Roles");
 		expect(postSelectionRendered).toMatch(/DEFAULT\s+Default.*anthropic\/claude-sonnet-4-6.*\(inherit\)/);
 		expect(setModelRoleSpy).toHaveBeenCalledWith("default", "anthropic/claude-sonnet-4-6");
-
 		expect(onSelect).toHaveBeenCalledTimes(1);
 		const [selectedModel, selectedRole] = onSelect.mock.calls[0] ?? [];
 		expect(selectedModel).toBe(planModel);

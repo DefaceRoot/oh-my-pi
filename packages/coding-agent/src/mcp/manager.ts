@@ -74,6 +74,12 @@ function delay(ms: number): Promise<void> {
 	return Bun.sleep(ms);
 }
 
+function getToolServerName(tool: CustomTool<TSchema, MCPToolDetails>): string | undefined {
+	const candidate = tool as CustomTool<TSchema, MCPToolDetails> & { mcpServerName?: string };
+	const serverName = candidate.mcpServerName;
+	return typeof serverName === "string" && serverName.length > 0 ? serverName : undefined;
+}
+
 export function resolveSubscriptionPostAction(
 	notificationsEnabled: boolean,
 	currentEpoch: number,
@@ -527,6 +533,18 @@ export class MCPManager {
 	}
 
 	/**
+	 * Get loaded tools restricted to a server allowlist.
+	 */
+	getToolsForServers(allowedServerNames: readonly string[]): CustomTool<TSchema, MCPToolDetails>[] {
+		if (allowedServerNames.length === 0) return [];
+		const allowed = new Set(allowedServerNames);
+		return this.#tools.filter(tool => {
+			const serverName = getToolServerName(tool);
+			return serverName ? allowed.has(serverName) : false;
+		});
+	}
+
+	/**
 	 * Get a specific connection.
 	 */
 	getConnection(name: string): MCPServerConnection | undefined {
@@ -791,9 +809,11 @@ export class MCPManager {
 	/**
 	 * Get all server instructions (for system prompt injection).
 	 */
-	getServerInstructions(): Map<string, string> {
+	getServerInstructions(allowedServerNames?: readonly string[]): Map<string, string> {
 		const instructions = new Map<string, string>();
+		const allowed = allowedServerNames ? new Set(allowedServerNames) : undefined;
 		for (const [name, connection] of this.#connections) {
+			if (allowed && !allowed.has(name)) continue;
 			if (connection.instructions) {
 				instructions.set(name, connection.instructions);
 			}
