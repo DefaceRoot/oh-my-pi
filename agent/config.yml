@@ -1,16 +1,16 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
   default: openai-codex/gpt-5.4:high
-  ask: kimi-code/kimi-k2
+  ask: kimi-code/kimi-k2-turbo-preview:high
   orchestrator: openai-codex/gpt-5.4:medium
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
   implement: openai-codex/gpt-5.3-codex:high
-  explore: kimi-code/kimi-k2-turbo-preview:medium
+  explore: openai-codex/gpt-5.1-codex-mini:high
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
-  research: kimi-code/kimi-k2.5:high
+  research: google-antigravity/gemini-3.1-pro-high:high
   verifier: anthropic/claude-opus-4-6:high
   worktree-setup: kimi-code/kimi-k2.5:medium
   code-reviewer: anthropic/claude-opus-4-6:high
@@ -91,4 +91,9 @@ commands:
 skills: 
   enableSkillCommands: false
 bashInterceptor: 
+  enabled: true
+contextPromotion: 
+  enabled: false
+serviceTier: none
+checkpoint: 
   enabled: true

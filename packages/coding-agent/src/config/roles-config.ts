@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { YAML } from "bun";
 import { type Static, Type } from "@sinclair/typebox";
+import { YAML } from "bun";
 import { ConfigFile } from "../config";
 
 const RoleSkillsSchema = Type.Union([
@@ -106,24 +106,7 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			skills: "all",
 		},
 		orchestrator: {
-			tools: [
-				"read",
-				"find",
-				"grep",
-				"bash",
-				"python",
-				"ssh",
-				"ast_grep",
-				"task",
-				"cancel_job",
-				"await",
-				"todo_write",
-				"ask",
-				"checkpoint",
-				"rewind",
-				"notebook",
-				"resolve",
-			],
+			tools: ["read", "bash", "task", "await", "todo_write", "ask"],
 			mcp: ["augment"],
 			skills: {
 				categories: ["workflow", "infra"],
@@ -158,9 +141,37 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			},
 		},
 		ask: {
-			tools: ["read", "find", "grep", "bash", "ssh", "web_search", "fetch", "ask", "notebook", "render_mermaid", "resolve"],
+			tools: ["read", "find", "grep", "fetch", "web_search", "lsp", "submit_result"],
 			mcp: ["augment"],
 			skills: "none",
+		},
+		implement: {
+			tools: [
+				"read",
+				"write",
+				"edit",
+				"find",
+				"grep",
+				"bash",
+				"python",
+				"ssh",
+				"web_search",
+				"fetch",
+				"lsp",
+				"ast_grep",
+				"ast_edit",
+				"task",
+				"cancel_job",
+				"await",
+				"todo_write",
+				"ask",
+				"checkpoint",
+				"rewind",
+				"browser",
+				"resolve",
+			],
+			mcp: ["augment", "better-context"],
+			skills: "all",
 		},
 	},
 	subagents: {
@@ -175,6 +186,12 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 		},
 		explore: {
 			mcp: ["augment", "better-context"],
+		},
+		"ask-explore": {
+			mcp: [],
+		},
+		"ask-research": {
+			mcp: ["augment"],
 		},
 		_default: {
 			mcp: ["augment"],
@@ -192,8 +209,8 @@ function cloneRoleConfig(config: RoleConfig): RoleConfig {
 			typeof config.skills === "string"
 				? config.skills
 				: {
-					categories: [...config.skills.categories],
-				},
+						categories: [...config.skills.categories],
+					},
 	};
 }
 
@@ -204,7 +221,9 @@ function cloneSubagentConfig(config: SubagentConfig): SubagentConfig {
 }
 
 function cloneRolesConfig(config: RolesConfigData): RolesConfigData {
-	const roles = Object.fromEntries(Object.entries(config.roles).map(([name, roleConfig]) => [name, cloneRoleConfig(roleConfig)]));
+	const roles = Object.fromEntries(
+		Object.entries(config.roles).map(([name, roleConfig]) => [name, cloneRoleConfig(roleConfig)]),
+	);
 	const subagents = Object.fromEntries(
 		Object.entries(config.subagents).map(([name, subagentConfig]) => [name, cloneSubagentConfig(subagentConfig)]),
 	);
@@ -291,8 +310,11 @@ export class RolesConfig {
 
 	getMcpForSubagent(agentName: string): string[] {
 		const config = this.#getConfig();
-		const subagent =
-			config.subagents[agentName] ?? config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default;
-		return normalizeMcpServers(subagent.mcp);
+		const namedSubagent = config.subagents[agentName];
+		if (namedSubagent) {
+			return namedSubagent.mcp.length === 0 ? [] : normalizeMcpServers(namedSubagent.mcp);
+		}
+		const fallbackSubagent = config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default;
+		return normalizeMcpServers(fallbackSubagent.mcp);
 	}
 }

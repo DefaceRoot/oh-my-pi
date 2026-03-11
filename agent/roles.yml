@@ -25,7 +25,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - chrome-devtools
     skills: all
   orchestrator: 
     tools: 
@@ -219,6 +218,35 @@ roles:
     mcp: 
       - augment
     skills: all
+  grafana: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+      - chrome-devtools
+      - grafana
+    skills: all
 subagents: 
   designer: 
     mcp: 
@@ -237,9 +265,10 @@ subagents:
       - augment
       - better-context
   ask-explore: 
-    mcp: []
+    mcp: 
+      []
   ask-research: 
-    mcp:
+    mcp: 
       - augment
   _default: 
     mcp: 
