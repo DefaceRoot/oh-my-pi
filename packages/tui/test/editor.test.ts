@@ -228,6 +228,52 @@ describe("Editor component", () => {
 		});
 	});
 
+	describe("autocomplete redraw behavior", () => {
+		it("notifies the host when Enter accepts a slash-command completion", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			let submittedText = "";
+			let redraws = 0;
+
+			editor.setAutocompleteProvider({
+				async getSuggestions(lines, cursorLine, cursorCol) {
+					const currentLine = lines[cursorLine] ?? "";
+					const prefix = currentLine.slice(0, cursorCol);
+					if (!prefix.startsWith("/")) return null;
+
+					return {
+						prefix,
+						items: [{ value: "ss", label: "ss" }],
+					};
+				},
+				applyCompletion() {
+					return {
+						lines: ["/ss"],
+						cursorLine: 0,
+						cursorCol: 3,
+					};
+				},
+			});
+			editor.onAutocompleteUpdate = () => {
+				redraws += 1;
+			};
+			editor.onSubmit = (text) => {
+				submittedText = text;
+			};
+
+			editor.handleInput("/");
+			await Bun.sleep(0);
+			expect(editor.isShowingAutocomplete()).toBe(true);
+
+			redraws = 0;
+			editor.handleInput("\r");
+
+			expect(submittedText).toBe("/ss");
+			expect(editor.isShowingAutocomplete()).toBe(false);
+			expect(redraws).toBe(1);
+		});
+	});
+
+
 	describe("public state accessors", () => {
 		it("returns cursor position", () => {
 			const editor = new Editor(defaultEditorTheme);

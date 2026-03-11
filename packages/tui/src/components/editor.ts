@@ -840,7 +840,9 @@ export class Editor implements Component, Focusable {
 						this.#state.cursorLine = result.cursorLine;
 						this.#setCursorCol(result.cursorCol);
 
-						this.#cancelAutocomplete();
+						if (this.#cancelAutocomplete()) {
+							this.onAutocompleteUpdate?.();
+						}
 
 						if (this.onChange) {
 							this.onChange(this.getText());
@@ -859,7 +861,9 @@ export class Editor implements Component, Focusable {
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 					if (currentTextBeforeCursor !== this.#autocompletePrefix) {
 						// Autocomplete is stale - cancel and fall through to normal submission
-						this.#cancelAutocomplete();
+						if (this.#cancelAutocomplete()) {
+							this.onAutocompleteUpdate?.();
+						}
 					} else {
 						const selected = this.#autocompleteList.getSelectedItem();
 						if (selected && this.#autocompleteProvider) {
@@ -875,7 +879,9 @@ export class Editor implements Component, Focusable {
 							this.#state.cursorLine = result.cursorLine;
 							this.#setCursorCol(result.cursorCol);
 						}
-						this.#cancelAutocomplete();
+						if (this.#cancelAutocomplete()) {
+							this.onAutocompleteUpdate?.();
+						}
 					}
 					// Don't return - fall through to submission logic
 				}
@@ -895,7 +901,9 @@ export class Editor implements Component, Focusable {
 						this.#state.cursorLine = result.cursorLine;
 						this.#setCursorCol(result.cursorCol);
 
-						this.#cancelAutocomplete();
+						if (this.#cancelAutocomplete()) {
+							this.onAutocompleteUpdate?.();
+						}
 
 						if (this.onChange) {
 							this.onChange(this.getText());
@@ -1196,6 +1204,9 @@ export class Editor implements Component, Focusable {
 	setText(text: string): void {
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
+		if (this.#cancelAutocomplete()) {
+			this.onAutocompleteUpdate?.();
+		}
 		this.#setTextInternal(text);
 	}
 
@@ -2184,7 +2195,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		}
 	}
 
-	#cancelAutocomplete(notifyCancel: boolean = false): void {
+	#cancelAutocomplete(notifyCancel: boolean = false): boolean {
 		const wasAutocompleting = this.#autocompleteState !== null;
 		this.#clearAutocompleteTimeout();
 		this.#autocompleteRequestId += 1;
@@ -2194,6 +2205,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		if (notifyCancel && wasAutocompleting) {
 			this.onAutocompleteCancel?.();
 		}
+		return wasAutocompleting;
 	}
 
 	isShowingAutocomplete(): boolean {
