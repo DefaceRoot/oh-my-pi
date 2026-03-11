@@ -11,8 +11,9 @@ import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { renderPromptTemplate } from "./config/prompt-templates";
 import type { SkillsSettings } from "./config/settings";
+import { DEFAULT_ROLES_CONFIG } from "./config/roles-config";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
-import { loadSkills, type Skill } from "./extensibility/skills";
+import { filterSkillsByCategories, loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 
@@ -38,6 +39,15 @@ const AGENTS_MD_MAX_DEPTH = 4;
 const AGENTS_MD_LIMIT = 200;
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 const AGENTS_MD_EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
+
+type MainPromptMode = "default" | "orchestrator" | "plan" | "ask";
+
+function getSkillCategoriesForMode(mode: MainPromptMode): string[] | null {
+	const roleSkills = DEFAULT_ROLES_CONFIG.roles[mode].skills;
+	if (roleSkills === "all") return null;
+	if (roleSkills === "none") return [];
+	return [...roleSkills.categories];
+}
 
 interface AgentsMdSearch {
 	scopePath: string;
@@ -257,6 +267,34 @@ export async function resolvePromptInput(input: string | undefined, description:
 export interface LoadContextFilesOptions {
 	/** Working directory to start walking up from. Default: getProjectDir() */
 	cwd?: string;
+	/** Active runtime mode for mode-specific AGENTS guidance merging. */
+	mode?: MainPromptMode;
+}
+
+async function loadModeSpecificAgentsFile(baseAgentsPath: string, mode: MainPromptMode): Promise<string | null> {
+	const modeSpecificPath = path.join(path.dirname(baseAgentsPath), `AGENTS-${mode}.md`);
+	try {
+		const modeContent = await Bun.file(modeSpecificPath).text();
+		return modeContent.trim().length > 0 ? modeContent : null;
+	} catch {
+		return null;
+	}
+}
+
+async function mergeModeSpecificAgentsGuidance(
+	files: Array<{ path: string; content: string; depth?: number }>,
+	mode: MainPromptMode,
+): Promise<Array<{ path: string; content: string; depth?: number }>> {
+	return await Promise.all(
+		files.map(async file => {
+			if (path.basename(file.path) !== "AGENTS.md") return file;
+			const modeContent = await loadModeSpecificAgentsFile(file.path, mode);
+			if (!modeContent) return file;
+			const sharedContent = file.content.trimEnd();
+			const mergedContent = sharedContent.length > 0 ? `${sharedContent}\n\n${modeContent.trimStart()}` : modeContent;
+			return { ...file, content: mergedContent };
+		}),
+	);
 }
 
 /**
@@ -289,7 +327,11 @@ export async function loadProjectContextFiles(
 		return depthB - depthA;
 	});
 
-	return files;
+	if (!options.mode) {
+		return files;
+	}
+
+	return await mergeModeSpecificAgentsGuidance(files, options.mode);
 }
 
 /**
@@ -314,8 +356,6 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 
 	return parts.join("\n\n");
 }
-
-type MainPromptMode = "default" | "orchestrator" | "plan" | "ask";
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -368,6 +408,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mode = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
+	const modeSkillCategories = getSkillCategoriesForMode(mode);
 
 	const prepPromise = (() => {
 		const systemPromptCustomizationPromise = logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, {
@@ -375,13 +416,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		});
 		const contextFilesPromise = providedContextFiles
 			? Promise.resolve(providedContextFiles)
-			: logger.timeAsync("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
+			: logger.timeAsync("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd, mode });
 		const agentsMdSearchPromise = logger.timeAsync("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
 		const skillsPromise: Promise<Skill[]> =
 			providedSkills !== undefined
 				? Promise.resolve(providedSkills)
 				: skillsSettings?.enabled !== false
-					? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(result => result.skills)
+					? loadSkills({ ...skillsSettings, cwd: resolvedCwd, categories: modeSkillCategories ?? undefined }).then(
+							result => result.skills,
+						)
 					: Promise.resolve([]);
 
 		return Promise.all([
@@ -490,9 +533,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		description: tools?.get(name)?.description ?? "",
 	}));
 
-	// Filter skills to only include those with read tool
+	// Filter skills by mode first, then by read-tool availability
+	const skillsForMode = modeSkillCategories === null ? skills : filterSkillsByCategories(skills, modeSkillCategories);
 	const hasRead = tools?.has("read");
-	const filteredSkills = hasRead ? skills : [];
+	const filteredSkills = hasRead ? skillsForMode : [];
 
 	const environment = await logger.timeAsync("getEnvironmentInfo", getEnvironmentInfo);
 	const data = {

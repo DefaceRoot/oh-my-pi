@@ -4,6 +4,7 @@ import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
+import { SKILL_CATEGORY_TO_SKILLS } from "../config/roles-config";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
 import { expandTilde } from "../tools/path-utils";
@@ -65,6 +66,25 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 export interface LoadSkillsOptions extends SkillsSettings {
 	/** Working directory for project-local skills. Default: getProjectDir() */
 	cwd?: string;
+	/** Optional category allowlist; when provided, only mapped categories are loaded. */
+	categories?: string[];
+}
+
+const SKILL_NAME_TO_CATEGORY = new Map<string, string>(
+	Object.entries(SKILL_CATEGORY_TO_SKILLS).flatMap(([category, skillNames]) => skillNames.map(skillName => [skillName, category])),
+);
+
+export function getSkillCategoryForSkillName(skillName: string): string | null {
+	return SKILL_NAME_TO_CATEGORY.get(skillName) ?? null;
+}
+
+export function filterSkillsByCategories(skills: Skill[], categories: readonly string[]): Skill[] {
+	if (categories.length === 0) return [];
+	const categorySet = new Set(categories);
+	return skills.filter(skill => {
+		const category = getSkillCategoryForSkillName(skill.name);
+		return category !== null && categorySet.has(category);
+	});
 }
 
 /**
@@ -83,6 +103,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		customDirectories = [],
 		ignoredSkills = [],
 		includeSkills = [],
+		categories,
 	} = options;
 
 	// Early return if skills are disabled
@@ -123,11 +144,20 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		return ignoredSkills.some(pattern => new Bun.Glob(pattern).match(name));
 	}
 
+	// Check if skill name is allowed by category filter
+	function matchesCategoryFilter(name: string): boolean {
+		if (categories === undefined) return true;
+		if (categories.length === 0) return false;
+		const category = getSkillCategoryForSkillName(name);
+		return category !== null && categories.includes(category);
+	}
+
 	// Filter skills by source and patterns first
 	const filteredSkills = result.items.filter(capSkill => {
 		if (!isSourceEnabled(capSkill._source)) return false;
 		if (matchesIgnorePatterns(capSkill.name)) return false;
 		if (!matchesIncludePatterns(capSkill.name)) return false;
+		if (!matchesCategoryFilter(capSkill.name)) return false;
 		return true;
 	});
 
@@ -192,6 +222,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		for (const capSkill of scanResult.items) {
 			if (matchesIgnorePatterns(capSkill.name)) continue;
 			if (!matchesIncludePatterns(capSkill.name)) continue;
+			if (!matchesCategoryFilter(capSkill.name)) continue;
 			allCustomSkills.push({
 				skill: {
 					name: capSkill.name,
