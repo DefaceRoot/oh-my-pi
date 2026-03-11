@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { SingleResult } from "../../task/types";
 import { getDirectUsageTokens } from "../../utils/usage-tokens";
+import { extractAssignmentPreview, extractTaskContextPreview } from "./task-preview";
 import type { SubagentIndexSnapshot, SubagentStatus, SubagentViewGroup, SubagentViewRef } from "./types";
 
 interface SubagentIndexOptions {
@@ -229,9 +230,9 @@ export class SubagentIndex {
 		}
 
 		const task = this.#readString(record.task) ?? "";
-		const contextPreview = this.#extractTaskContextPreview(task);
+		const contextPreview = extractTaskContextPreview(task);
 		if (contextPreview) existing.contextPreview = contextPreview;
-		const assignmentPreview = this.#extractAssignmentPreview(task);
+		const assignmentPreview = extractAssignmentPreview(task);
 		if (assignmentPreview) existing.assignmentPreview = assignmentPreview;
 
 		const status = this.#parseSubagentStatus(record.status) ?? this.#inferStatusFromTaskResult(record);
@@ -544,44 +545,6 @@ export class SubagentIndex {
 		return values.length > 0 ? values.join(", ") : undefined;
 	}
 
-	#extractTaskContextPreview(task: string): string | undefined {
-		if (!task) {
-			return undefined;
-		}
-		const stripped = task.replace(/<swarm_context>[\s\S]*?<\/swarm_context>/g, " ");
-		const firstLine = stripped
-			.split("\n")
-			.map(line => line.trim())
-			.find(line => line.length > 0);
-		if (!firstLine) {
-			return undefined;
-		}
-		return this.#clipPreview(firstLine, 160);
-	}
-
-	#extractAssignmentPreview(task: string): string | undefined {
-		if (!task) {
-			return undefined;
-		}
-		const stripped = task.replace(/<swarm_context>[\s\S]*?<\/swarm_context>/g, " ");
-		const lines = stripped
-			.split("\n")
-			.map(line => line.trimEnd())
-			.filter(line => line.trim().length > 0)
-			.slice(0, 8);
-		if (lines.length === 0) {
-			return undefined;
-		}
-		return lines.join("\n");
-	}
-
-	#clipPreview(value: string, maxChars: number): string {
-		const normalized = value.replace(/\s+/g, " ").trim();
-		if (normalized.length <= maxChars) {
-			return normalized;
-		}
-		return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
-	}
 
 	#parseTimestamp(value: unknown): number | undefined {
 		if (typeof value === "number" && Number.isFinite(value)) {

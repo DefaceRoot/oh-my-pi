@@ -122,6 +122,32 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]?.assignmentPreview?.split("\n")).toHaveLength(8);
 	});
 
+	test("ingestTaskResults skips template boilerplate when deriving context preview", () => {
+		const index = new SubagentIndex({ artifactsDir });
+		const task = [
+			"═══════════Background═══════════",
+			"<context>",
+			"## Goal",
+			"Shared orchestrator context",
+			"</context>",
+			"",
+			"═══════════Task═══════════",
+			"Your assignment is below. Your work begins now.",
+			"<goal>",
+			"## Target",
+			"- Fix subagent title derivation fallback",
+			"</goal>",
+		].join("\n");
+
+		index.ingestTaskResults([buildTaskResult({ id: "3-TitleFallback", task, description: undefined })]);
+		const snapshot = index.getSnapshot();
+
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.refs[0]?.contextPreview).toBe("Fix subagent title derivation fallback");
+		expect(snapshot.refs[0]?.contextPreview).not.toContain("Background");
+	});
+
+
 	test("ingestTaskResults derives tokens from usage excluding cache fields", () => {
 		const index = new SubagentIndex({ artifactsDir });
 

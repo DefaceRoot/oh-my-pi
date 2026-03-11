@@ -111,6 +111,7 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 			status: "running",
 			tokens: 5600,
 			description: "Scan repository for sidebar touchpoints",
+			contextPreview: "═══════════Background═══════════",
 		});
 		const childRef = makeRef("0-Explore.0-Lint", {
 			rootId: "0-Explore",
@@ -137,6 +138,7 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 			title: "Scan repository for sidebar touchpoints",
 			tokens: 5600,
 		});
+		expect(rows[0]?.title).not.toContain("Background");
 		expect(rows[0]?.children).toEqual([
 			{ kind: "child", id: "0-Explore.0-Lint", agentName: "lint", status: "completed", tokens: 1300 },
 		]);
