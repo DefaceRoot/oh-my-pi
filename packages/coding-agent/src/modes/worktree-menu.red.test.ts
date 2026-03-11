@@ -1,4 +1,8 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
+import * as childProcess from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Settings } from "../config/settings";
 import { flattenWorkflowMenuActions, WORKFLOW_MENUS } from "./action-buttons";
 import { StatusLineComponent } from "./components/status-line";
@@ -29,10 +33,27 @@ function extractTagSegment(rendered: string, actionName: string): string {
 	return prefix.slice(markerIndex + 1).trim();
 }
 
+function runGit(cwd: string, args: string[]): string {
+	return childProcess.execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+async function createCommittedRepo(): Promise<string> {
+	const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-cleanup-"));
+	runGit(repoDir, ["init"]);
+	runGit(repoDir, ["config", "user.email", "cleanup-tests@oh-my-pi.dev"]);
+	runGit(repoDir, ["config", "user.name", "Cleanup Tests"]);
+	await Bun.write(path.join(repoDir, "README.md"), "seed\n");
+	runGit(repoDir, ["add", "README.md"]);
+	runGit(repoDir, ["commit", "-m", "seed"]);
+	return repoDir;
+}
+
+
 function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 	const sessionPromptSpy = vi.fn(async () => undefined);
 	const showHookCustomSpy = vi.fn(async () => undefined);
 	const showHookConfirmSpy = vi.fn(async () => true);
+	const showWarningSpy = vi.fn();
 	const editor = {
 		setText: vi.fn(),
 		addToHistory: vi.fn(),
@@ -62,7 +83,7 @@ function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 		updatePendingMessagesDisplay: vi.fn(),
 		ui: { requestRender: vi.fn() },
 		showStatus: vi.fn(),
-		showWarning: vi.fn(),
+		showWarning: showWarningSpy,
 		showHookCustom: showHookCustomSpy,
 		showHookConfirm: showHookConfirmSpy,
 		updateEditorTopBorder: vi.fn(),
@@ -74,6 +95,7 @@ function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 		sessionPromptSpy,
 		showHookCustomSpy,
 		showHookConfirmSpy,
+		showWarningSpy,
 		submit: async (text: string) => {
 			const submitHandler = ctx.editor.onSubmit as ((value: string) => Promise<void>) | undefined;
 			if (!submitHandler) throw new Error("Missing editor submit handler");
@@ -192,6 +214,37 @@ describe("worktree menu red behavior", () => {
 		expect(pruneSpy).not.toHaveBeenCalled();
 		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 	});
+
+	test("enumerates repository worktrees without parser warnings when opening cleanup modal", async () => {
+		const repoDir = await createCommittedRepo();
+		try {
+			const fixture = createCleanupWorkflowSubmitFixture({ currentCwd: repoDir });
+			fixture.showHookCustomSpy.mockResolvedValue({
+				selectionKeys: { toggle: "space", confirm: "enter" },
+				selectedWorktrees: [],
+				cancelled: true,
+			});
+
+			await fixture.submit("ignored");
+
+			const firstWarning = fixture.showWarningSpy.mock.calls[0]?.[0] as string | undefined;
+			expect(firstWarning).toBeUndefined();
+
+			const selectorFactory = fixture.showHookCustomSpy.mock.calls[0]?.[0] as
+				| ((...args: unknown[]) => { render: (width: number) => string[] })
+				| undefined;
+			expect(selectorFactory).toBeDefined();
+			if (!selectorFactory) return;
+
+			const selector = selectorFactory(undefined, undefined, undefined, () => undefined);
+			const renderedSelector = stripAnsi(selector.render(180).join("\n"));
+			expect(renderedSelector).toContain(repoDir);
+			expect(renderedSelector).not.toContain("No worktrees found.");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+		}
+	});
+
 
 	test("uses multi-select cleanup contract for space toggle and enter confirm", async () => {
 		const fixture = createCleanupWorkflowSubmitFixture();
