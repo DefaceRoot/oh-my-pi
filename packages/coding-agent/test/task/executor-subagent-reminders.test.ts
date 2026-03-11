@@ -450,6 +450,60 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.abortReason).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
 	});
 
+	it("continues in place after compaction-aborted assistant turn instead of terminal abort", async () => {
+		const agentNames: Array<AgentDefinition["name"]> = ["explore", "implement"];
+		for (const [index, agentName] of agentNames.entries()) {
+			vi.clearAllMocks();
+			const prompts: string[] = [];
+			let emitSubmitResult: (() => void) | undefined;
+			const waitForIdle = vi.fn(async () => {
+				emitSubmitResult?.();
+			});
+			const session = createMockSession(({ text, promptIndex, emit, state }) => {
+				prompts.push(text);
+				if (promptIndex !== 1) return;
+				const assistant = {
+					...createAssistantStopMessage("auto-compaction interrupted this turn"),
+					stopReason: "aborted" as const,
+				};
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				emitSubmitResult = () => {
+					emit({
+						type: "tool_execution_end",
+						toolCallId: `tool-compaction-resume-${index}`,
+						toolName: "submit_result",
+						result: {
+							content: [{ type: "text", text: "Result submitted." }],
+							details: { status: "success", data: { continued: true, agentName } },
+						},
+						isError: false,
+					});
+				};
+			});
+			session.waitForIdle = waitForIdle;
+
+			(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+				session,
+				extensionsResult: {} as unknown as LoadExtensionsResult,
+				setToolUIContext: () => {},
+			});
+
+			const result = await runSubprocess({
+				...baseOptions,
+				id: `subagent-compaction-abort-${agentName}-${index}`,
+				agent: { ...baseAgent, name: agentName },
+			});
+
+			expect(result.exitCode).toBe(0);
+			expect(result.aborted).toBe(false);
+			expect(prompts).toHaveLength(1);
+			expect(waitForIdle).toHaveBeenCalledTimes(1);
+			expect(result.output).toContain('"continued": true');
+		}
+	});
+
+
 	it("surfaces abort reason when submit_result reports aborted status", async () => {
 		const session = createMockSession(({ promptIndex, emit, state }) => {
 			if (promptIndex === 1) {
