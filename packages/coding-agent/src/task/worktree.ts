@@ -370,6 +370,197 @@ export async function applyNestedPatches(
 	}
 }
 
+const HEADS_REF_PREFIX = "refs/heads/";
+
+interface ParsedWorktreeRecord {
+	path: string;
+	branch?: string;
+}
+
+function parseWorktreeListPorcelain(raw: string): ParsedWorktreeRecord[] {
+	const records: ParsedWorktreeRecord[] = [];
+	for (const block of raw.split(/\n\s*\n/)) {
+		const lines = block.split("\n").map(line => line.trim()).filter(Boolean);
+		if (lines.length === 0) continue;
+
+		let worktreePath: string | undefined;
+		let branch: string | undefined;
+		for (const line of lines) {
+			if (line.startsWith("worktree ")) {
+				worktreePath = line.slice("worktree ".length).trim();
+				continue;
+			}
+			if (!line.startsWith("branch ")) continue;
+			const branchRef = line.slice("branch ".length).trim();
+			if (!branchRef) continue;
+			branch = branchRef.startsWith(HEADS_REF_PREFIX) ? branchRef.slice(HEADS_REF_PREFIX.length) : branchRef;
+		}
+
+		if (!worktreePath) continue;
+		records.push({ path: worktreePath, branch });
+	}
+	return records;
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+	try {
+		await fs.access(targetPath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveUpstreamBranch(repoRoot: string, branch: string): Promise<string | undefined> {
+	const upstreamRaw = await $`git for-each-ref --format=%(upstream:short) refs/heads/${branch}`.cwd(repoRoot).quiet().text();
+	const upstream = upstreamRaw.trim();
+	return upstream || undefined;
+}
+
+async function resolveWorktreeArtifacts(repoRoot: string, worktreePath: string): Promise<string[]> {
+	const artifacts = new Set<string>();
+	artifacts.add(path.join(repoRoot, ".omp", "worktrees", path.basename(worktreePath)));
+
+	const gitDirRaw = await $`git rev-parse --git-dir`.cwd(worktreePath).quiet().nothrow().text();
+	const gitDir = gitDirRaw.trim();
+	if (!gitDir) return Array.from(artifacts);
+
+	const resolvedGitDir = path.resolve(worktreePath, gitDir);
+	const rootGitDir = path.join(repoRoot, ".git");
+	if (resolvedGitDir !== rootGitDir) {
+		artifacts.add(resolvedGitDir);
+	}
+
+	return Array.from(artifacts);
+}
+
+export async function listProjectWorktrees(cwd: string): Promise<WorktreeCleanupInventory> {
+	const repoRoot = await getRepoRoot(cwd);
+	const currentWorktreePath = path.resolve(cwd);
+	const listResult = await $`git worktree list --porcelain`.cwd(repoRoot).quiet().nothrow();
+	if (listResult.exitCode !== 0) {
+		const stderr = listResult.stderr.toString().trim();
+		throw new Error(stderr || "Failed to enumerate project worktrees.");
+	}
+
+	const records = parseWorktreeListPorcelain(listResult.text());
+	const worktrees = await Promise.all(
+		records.map(async record => {
+			const worktreePath = path.resolve(record.path);
+			const [exists, remoteBranch, artifacts] = await Promise.all([
+				pathExists(worktreePath),
+				record.branch ? resolveUpstreamBranch(repoRoot, record.branch) : Promise.resolve(undefined),
+				resolveWorktreeArtifacts(repoRoot, worktreePath),
+			]);
+
+			return {
+				path: worktreePath,
+				branch: record.branch,
+				remoteBranch,
+				artifacts,
+				isMain: worktreePath === repoRoot,
+				isCurrent: worktreePath === currentWorktreePath,
+				exists,
+			} satisfies WorktreeCleanupTarget;
+		}),
+	);
+
+	return { repoRoot, currentWorktreePath, worktrees };
+}
+
+function isMissingBranchError(stderr: string): boolean {
+	const normalized = stderr.toLowerCase();
+	return normalized.includes("not found") || normalized.includes("does not exist") || normalized.includes("unable to delete");
+}
+
+async function removeLocalBranch(repoRoot: string, branch: string): Promise<void> {
+	const result = await $`git branch -D ${branch}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return;
+	const stderr = result.stderr.toString().trim();
+	if (isMissingBranchError(stderr)) return;
+	throw new Error(stderr || `Failed to delete local branch ${branch}.`);
+}
+
+function parseRemoteBranch(remoteBranch: string): { remote: string; branch: string } {
+	const slashIndex = remoteBranch.indexOf("/");
+	if (slashIndex <= 0 || slashIndex >= remoteBranch.length - 1) {
+		throw new Error(`Invalid remote branch metadata: ${remoteBranch}`);
+	}
+	return {
+		remote: remoteBranch.slice(0, slashIndex),
+		branch: remoteBranch.slice(slashIndex + 1),
+	};
+}
+
+async function removeRemoteBranch(repoRoot: string, remoteBranch: string): Promise<void> {
+	const { remote, branch } = parseRemoteBranch(remoteBranch);
+	const result = await $`git push ${remote} --delete ${branch}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return;
+	const stderr = result.stderr.toString().trim();
+	if (isMissingBranchError(stderr)) return;
+	throw new Error(stderr || `Failed to delete remote branch ${remoteBranch}.`);
+}
+
+export async function cleanupSelectedWorktrees(
+	repoRoot: string,
+	targets: WorktreeCleanupTarget[],
+	options: WorktreeCleanupOptions,
+): Promise<WorktreeCleanupResult> {
+	const warnings: string[] = [];
+	const cleaned: WorktreeCleanupTarget[] = [];
+	const resolvedRepoRoot = path.resolve(repoRoot);
+	const rootGitDir = path.join(resolvedRepoRoot, ".git");
+	const uniqueTargets = targets.filter((target, index) => targets.findIndex(other => other.path === target.path) === index);
+
+	for (const target of uniqueTargets) {
+		const resolvedPath = path.resolve(target.path);
+		if (resolvedPath === resolvedRepoRoot || target.isMain) {
+			throw new Error(`Refusing to cleanup repository root worktree: ${target.path}`);
+		}
+		if (options.removeRemoteBranch && !target.remoteBranch) {
+			throw new Error(
+				`Missing remote branch metadata for ${target.path}. Cannot complete full cleanup with remote branch removal.`,
+			);
+		}
+	}
+
+	for (const target of uniqueTargets) {
+		const resolvedPath = path.resolve(target.path);
+		if (options.removeLocalWorktree) {
+			await cleanupWorktree(target.path);
+		}
+
+		if (options.removeLocalBranch) {
+			if (target.branch) {
+				await removeLocalBranch(resolvedRepoRoot, target.branch);
+			} else {
+				warnings.push(`Skipped local branch deletion for detached worktree: ${target.path}`);
+			}
+		}
+
+		if (options.removeRemoteBranch) {
+			if (!target.remoteBranch) {
+				throw new Error(
+					`Missing remote branch metadata for ${target.path}. Cannot complete full cleanup with remote branch removal.`,
+				);
+			}
+			await removeRemoteBranch(resolvedRepoRoot, target.remoteBranch);
+		}
+
+		if (options.removeArtifacts) {
+			const artifacts = new Set(target.artifacts.map(entry => path.resolve(entry)));
+			for (const artifact of artifacts) {
+				if (artifact === resolvedPath || artifact === rootGitDir || artifact === resolvedRepoRoot) continue;
+				await fs.rm(artifact, { recursive: true, force: true });
+			}
+		}
+
+		cleaned.push(target);
+	}
+
+	return { cleaned, warnings };
+}
+
 export async function cleanupWorktree(dir: string): Promise<void> {
 	try {
 		const commonDirRaw = await $`git rev-parse --git-common-dir`.cwd(dir).quiet().nothrow().text();
