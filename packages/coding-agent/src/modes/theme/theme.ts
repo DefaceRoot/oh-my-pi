@@ -1188,6 +1188,14 @@ export class Theme {
 		return `${ansi}${text}\x1b[49m`; // Reset only background color
 	}
 
+	overlaySurface(text: string): string {
+		const bgAnsi = this.mode === "truecolor" ? "\x1b[48;2;10;12;18m" : "\x1b[48;5;233m";
+		const stabilized = text
+			.replace(/\x1b\[(?:0)?m/g, match => `${match}${bgAnsi}`)
+			.replace(/\x1b\[49m/g, match => `${match}${bgAnsi}`);
+		return `${bgAnsi}${stabilized}\x1b[49m`;
+	}
+
 	bold(text: string): string {
 		return chalk.bold(text);
 	}

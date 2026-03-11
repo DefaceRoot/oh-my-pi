@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
-import { Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import { Container, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { BUILTIN_SLASH_COMMANDS } from "../../extensibility/slash-commands";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -12,7 +12,7 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
-import { ToolExecutionComponent } from "../../modes/components/tool-execution";
+import { ToolExecutionComponent, type ToolExecutionHandle } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
@@ -25,6 +25,12 @@ type TextBlock = { type: "text"; text: string };
 type QueuedMessages = {
 	steering: string[];
 	followUp: string[];
+};
+
+type SessionRenderTarget = {
+	chatContainer: Container;
+	pendingTools: Map<string, ToolExecutionHandle>;
+	requestRender: boolean;
 };
 
 const BUILTIN_SLASH_COMMAND_NAMES = new Set(BUILTIN_SLASH_COMMANDS.map(command => command.name));
@@ -73,7 +79,11 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean },
+		targetContainer: Container = this.ctx.chatContainer,
+	): void {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);
@@ -83,7 +93,7 @@ export class UiHelpers {
 				component.setComplete(message.exitCode, message.cancelled, {
 					truncation: message.meta?.truncation,
 				});
-				this.ctx.chatContainer.addChild(component);
+				targetContainer.addChild(component);
 				break;
 			}
 			case "pythonExecution": {
@@ -94,7 +104,7 @@ export class UiHelpers {
 				component.setComplete(message.exitCode, message.cancelled, {
 					truncation: message.meta?.truncation,
 				});
-				this.ctx.chatContainer.addChild(component);
+				targetContainer.addChild(component);
 				break;
 			}
 			case "hookMessage":
@@ -121,39 +131,38 @@ export class UiHelpers {
 						]
 							.filter(Boolean)
 							.join(" ");
-						this.ctx.chatContainer.addChild(new Text(line, 1, 0));
+						targetContainer.addChild(new Text(line, 1, 0));
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
 						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
 						component.setExpanded(this.ctx.toolOutputExpanded);
-						this.ctx.chatContainer.addChild(component);
+						targetContainer.addChild(component);
 						break;
 					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
 					const component = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
 					component.setExpanded(this.ctx.toolOutputExpanded);
-					this.ctx.chatContainer.addChild(component);
+					targetContainer.addChild(component);
 				}
 				break;
 			}
 			case "compactionSummary": {
-				this.ctx.chatContainer.addChild(new Spacer(1));
+				targetContainer.addChild(new Spacer(1));
 				const component = new CompactionSummaryMessageComponent(message);
 				component.setExpanded(this.ctx.toolOutputExpanded);
-				this.ctx.chatContainer.addChild(component);
+				targetContainer.addChild(component);
 				break;
 			}
 			case "branchSummary": {
-				this.ctx.chatContainer.addChild(new Spacer(1));
+				targetContainer.addChild(new Spacer(1));
 				const component = new BranchSummaryMessageComponent(message);
 				component.setExpanded(this.ctx.toolOutputExpanded);
-				this.ctx.chatContainer.addChild(component);
+				targetContainer.addChild(component);
 				break;
 			}
 			case "fileMention": {
-				// Render compact file mention display
 				for (const file of message.files) {
 					let suffix: string;
 					if (file.skippedReason === "tooLarge") {
@@ -170,7 +179,7 @@ export class UiHelpers {
 						"accent",
 						file.path,
 					)} ${theme.fg("dim", suffix)}`;
-					this.ctx.chatContainer.addChild(new Text(text, 0, 0));
+					targetContainer.addChild(new Text(text, 0, 0));
 				}
 				break;
 			}
@@ -180,7 +189,7 @@ export class UiHelpers {
 				if (textContent) {
 					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
 					const userComponent = new UserMessageComponent(textContent, isSynthetic);
-					this.ctx.chatContainer.addChild(userComponent);
+					targetContainer.addChild(userComponent);
 					if (options?.populateHistory && message.role === "user" && !isSynthetic) {
 						this.ctx.editor.addToHistory(textContent);
 					}
@@ -189,11 +198,10 @@ export class UiHelpers {
 			}
 			case "assistant": {
 				const assistantComponent = new AssistantMessageComponent(message, this.ctx.hideThinkingBlock);
-				this.ctx.chatContainer.addChild(assistantComponent);
+				targetContainer.addChild(assistantComponent);
 				break;
 			}
 			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
 				break;
 			}
 			default: {
@@ -212,21 +220,42 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.ctx.pendingTools.clear();
-
 		if (options.updateFooter) {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 		}
+		this.#renderSessionContextToTarget(sessionContext, options, {
+			chatContainer: this.ctx.chatContainer,
+			pendingTools: this.ctx.pendingTools,
+			requestRender: true,
+		});
+	}
+
+	renderSessionContextToLines(sessionContext: SessionContext, width: number): string[] {
+		const target: SessionRenderTarget = {
+			chatContainer: new Container(),
+			pendingTools: new Map(),
+			requestRender: false,
+		};
+		this.#renderSessionContextToTarget(sessionContext, { populateHistory: false }, target);
+		const lines = target.chatContainer.render(Math.max(1, width));
+		return lines.length > 0 ? lines : [theme.fg("dim", "(no transcript content)")];
+	}
+
+	#renderSessionContextToTarget(
+		sessionContext: SessionContext,
+		options: { populateHistory?: boolean },
+		target: SessionRenderTarget,
+	): void {
+		target.pendingTools.clear();
 
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 		for (const message of sessionContext.messages) {
-			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
-				this.ctx.addMessageToChat(message);
-				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
+				this.addMessageToChat(message, options, target.chatContainer);
+				const lastChild = target.chatContainer.children[target.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
 				readGroup = null;
 				const hasErrorStop = message.stopReason === "aborted" || message.stopReason === "error";
@@ -241,7 +270,6 @@ export class UiHelpers {
 						: message.errorMessage || "Error"
 					: null;
 
-				// Render tool call components
 				for (const content of message.content) {
 					if (content.type !== "toolCall") {
 						continue;
@@ -252,7 +280,7 @@ export class UiHelpers {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent();
 								readGroup.setExpanded(this.ctx.toolOutputExpanded);
-								this.ctx.chatContainer.addChild(readGroup);
+								target.chatContainer.addChild(readGroup);
 							}
 							readGroup.updateArgs(content.arguments, content.id);
 							readGroup.updateResult(
@@ -288,7 +316,7 @@ export class UiHelpers {
 						this.ctx.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
-					this.ctx.chatContainer.addChild(component);
+					target.chatContainer.addChild(component);
 
 					if (hasErrorStop && errorMessage) {
 						component.updateResult(
@@ -297,7 +325,7 @@ export class UiHelpers {
 							content.id,
 						);
 					} else {
-						this.ctx.pendingTools.set(content.id, component);
+						target.pendingTools.set(content.id, component);
 					}
 				}
 			} else if (message.role === "toolResult") {
@@ -315,41 +343,41 @@ export class UiHelpers {
 							continue;
 						}
 					}
-					let component = this.ctx.pendingTools.get(message.toolCallId);
+					let component = target.pendingTools.get(message.toolCallId);
 					if (!component) {
 						if (!readGroup) {
 							readGroup = new ReadToolGroupComponent();
 							readGroup.setExpanded(this.ctx.toolOutputExpanded);
-							this.ctx.chatContainer.addChild(readGroup);
+							target.chatContainer.addChild(readGroup);
 						}
 						const args = readToolCallArgs.get(message.toolCallId);
 						if (args) {
 							readGroup.updateArgs(args, message.toolCallId);
 						}
 						component = readGroup;
-						this.ctx.pendingTools.set(message.toolCallId, readGroup);
+						target.pendingTools.set(message.toolCallId, readGroup);
 					}
 					component.updateResult(message, false, message.toolCallId);
-					this.ctx.pendingTools.delete(message.toolCallId);
+					target.pendingTools.delete(message.toolCallId);
 					readToolCallArgs.delete(message.toolCallId);
 					readToolCallAssistantComponents.delete(message.toolCallId);
 					continue;
 				}
 
-				// Match tool results to pending tool components
-				const component = this.ctx.pendingTools.get(message.toolCallId);
+				const component = target.pendingTools.get(message.toolCallId);
 				if (component) {
 					component.updateResult(message, false, message.toolCallId);
-					this.ctx.pendingTools.delete(message.toolCallId);
+					target.pendingTools.delete(message.toolCallId);
 				}
 			} else {
-				// All other messages use standard rendering
-				this.ctx.addMessageToChat(message, options);
+				this.addMessageToChat(message, options, target.chatContainer);
 			}
 		}
 
-		this.ctx.pendingTools.clear();
-		this.ctx.ui.requestRender();
+		target.pendingTools.clear();
+		if (target.requestRender) {
+			this.ctx.ui.requestRender();
+		}
 	}
 
 	renderInitialMessages(): void {

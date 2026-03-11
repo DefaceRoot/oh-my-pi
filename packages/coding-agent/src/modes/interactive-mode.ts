@@ -2088,129 +2088,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentSessionViewer = undefined;
 	}
 
-	private formatSubagentViewerBodyLines(transcript: LoadedSubagentTranscript): string[] {
+	private renderSubagentTranscriptLines(transcript: LoadedSubagentTranscript, width: number): string[] {
 		const fallbackLines = transcript.content.split("\n");
 		if (!transcript.sessionContext || transcript.sessionContext.messages.length === 0) {
 			return fallbackLines.length > 0 ? fallbackLines : [theme.fg("dim", "(no transcript content)")];
 		}
-		const lines: string[] = [];
-		for (const message of transcript.sessionContext.messages) {
-			const rendered = this.formatSubagentViewerMessage(message);
-			if (rendered.length === 0) continue;
-			if (lines.length > 0) lines.push("");
-			lines.push(...rendered);
-		}
-		return lines.length > 0 ? lines : fallbackLines;
-	}
-
-	private formatSubagentViewerMessage(message: AgentMessage): string[] {
-		const role = (message as { role?: string }).role;
-		switch (role) {
-			case "user":
-			case "developer": {
-				const text = this.getUserMessageText(message as Message);
-				const label = role === "developer" ? "developer" : "user";
-				return [
-					theme.bold(theme.fg(role === "user" ? "accent" : "warning", `[${label}]`)),
-					...(text ? text.split("\n") : [theme.fg("dim", "(no text)")]),
-				];
-			}
-			case "assistant": {
-				const assistant = message as AssistantMessage;
-				const lines = [theme.bold(theme.fg("success", "[assistant]"))];
-				const text = this.extractAssistantText(assistant);
-				if (text) lines.push(...text.split("\n"));
-				for (const block of assistant.content) {
-					if (block.type === "toolCall") {
-						lines.push(theme.fg("dim", `[tool] ${block.name}`));
-					}
-				}
-				if (lines.length === 1) lines.push(theme.fg("dim", "(no visible text)"));
-				return lines;
-			}
-			case "toolResult": {
-				const toolMessage = message as { toolName?: string; content?: Array<{ type?: string; text?: string }> };
-				const lines = [theme.bold(theme.fg("muted", `[tool result] ${toolMessage.toolName ?? "tool"}`))];
-				const textBlocks = Array.isArray(toolMessage.content)
-					? toolMessage.content
-							.filter(
-								(content): content is { type: "text"; text: string } =>
-									content?.type === "text" && typeof content.text === "string",
-							)
-							.map(content => content.text)
-					: [];
-				if (textBlocks.length > 0) {
-					lines.push(...textBlocks.join("\n").split("\n"));
-				} else {
-					lines.push(theme.fg("dim", "(no text output)"));
-				}
-				return lines;
-			}
-			case "bashExecution": {
-				const bashMessage = message as {
-					command?: string;
-					output?: string;
-					exitCode?: number;
-					cancelled?: boolean;
-				};
-				const lines = [theme.bold(theme.fg("bashMode", `$ ${bashMessage.command ?? ""}`))];
-				if (bashMessage.output) lines.push(...bashMessage.output.split("\n"));
-				if (bashMessage.cancelled) {
-					lines.push(theme.fg("warning", "(cancelled)"));
-				} else if (typeof bashMessage.exitCode === "number") {
-					lines.push(theme.fg(bashMessage.exitCode === 0 ? "dim" : "error", `(exit ${bashMessage.exitCode})`));
-				}
-				return lines;
-			}
-			case "pythonExecution": {
-				const pythonMessage = message as { code?: string; output?: string; exitCode?: number; cancelled?: boolean };
-				const lines = [theme.bold(theme.fg("pythonMode", "[python]"))];
-				if (pythonMessage.code) lines.push(...pythonMessage.code.split("\n"));
-				if (pythonMessage.output) lines.push(...pythonMessage.output.split("\n"));
-				if (pythonMessage.cancelled) {
-					lines.push(theme.fg("warning", "(cancelled)"));
-				} else if (typeof pythonMessage.exitCode === "number") {
-					lines.push(theme.fg(pythonMessage.exitCode === 0 ? "dim" : "error", `(exit ${pythonMessage.exitCode})`));
-				}
-				return lines;
-			}
-			case "branchSummary": {
-				const summary = (message as { summary?: string }).summary ?? "";
-				return [
-					theme.bold(theme.fg("warning", "[branch summary]")),
-					...(summary ? summary.split("\n") : [theme.fg("dim", "(empty summary)")]),
-				];
-			}
-			case "compactionSummary": {
-				const summary = (message as { summary?: string }).summary ?? "";
-				return [
-					theme.bold(theme.fg("warning", "[compaction summary]")),
-					...(summary ? summary.split("\n") : [theme.fg("dim", "(empty summary)")]),
-				];
-			}
-			case "fileMention": {
-				const files = (message as { files?: Array<{ path?: string }> }).files ?? [];
-				const lines = [theme.bold(theme.fg("dim", "[files]"))];
-				for (const file of files) {
-					if (file.path) lines.push(file.path);
-				}
-				if (lines.length === 1) lines.push(theme.fg("dim", "(no files)"));
-				return lines;
-			}
-			case "hookMessage":
-			case "custom": {
-				const customMessage = message as { customType?: string; details?: { name?: string }; display?: boolean };
-				const label =
-					customMessage.customType === SKILL_PROMPT_MESSAGE_TYPE && typeof customMessage.details?.name === "string"
-						? `[skill] ${customMessage.details.name}`
-						: `[${customMessage.customType ?? role}]`;
-				const lines = [theme.bold(theme.fg("warning", label))];
-				if (customMessage.display === false) lines.push(theme.fg("dim", "(hidden)"));
-				return lines;
-			}
-			default:
-				return [theme.bold(theme.fg("dim", `[${role ?? "message"}]`))];
-		}
+		const rendered = this.uiHelpers.renderSessionContextToLines(transcript.sessionContext, width);
+		return rendered.length > 0 ? rendered : fallbackLines;
 	}
 
 	private async renderSubagentSession(
@@ -2248,10 +2132,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const requestedModelLabel = selected.model;
 		const actualModelLabel = transcript.model;
 		const modelLabel = actualModelLabel ?? requestedModelLabel ?? "default";
-		const modelSuffix =
-			requestedModelLabel && actualModelLabel && requestedModelLabel !== actualModelLabel
-				? ` (requested: ${requestedModelLabel})`
-				: "";
 		const contextLabel = this.clipPreview(
 			selected.contextPreview ?? transcript.contextPreview ?? selected.description ?? "(no context)",
 			120,
@@ -2259,7 +2139,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const skillsUsed = transcript.skillsUsed ?? [];
 		const skillsLabel = skillsUsed.length > 0 ? this.clipPreview(skillsUsed.join(", "), 120) : "none";
 		const tokensValue = selected.tokens ?? transcript.tokens;
-		const tokensLabel = typeof tokensValue === "number" ? `${tokensValue.toLocaleString()} tokens` : "tokens: n/a";
 		const modelStatusLabel =
 			requestedModelLabel && actualModelLabel && requestedModelLabel !== actualModelLabel
 				? this.clipPreview(`${actualModelLabel} <- ${requestedModelLabel}`, 44)
@@ -2281,20 +2160,15 @@ export class InteractiveMode implements InteractiveModeContext {
 					? `nested 0/${nestedCount} root-implied`
 					: `${nestedPosition}/${nestedCount} ${agentLabel}`;
 		const headerLines = [
-			theme.bold(
-				theme.fg("warning", `[SUBAGENT] task ${taskPosition}/${taskCount}, ${nestedStatusLabel}: ${selected.id}`),
-			),
-			theme.fg("dim", `Agent: ${agentLabel}`),
-			theme.fg("dim", `Model: ${modelLabel}${modelSuffix}`),
-			theme.fg("dim", `Context: ${contextLabel}`),
-			theme.fg("dim", `Skills: ${skillsLabel}`),
-			theme.fg("dim", tokensLabel),
-			theme.fg("dim", `Source: ${transcript.source}`),
-			theme.fg("dim", "Hierarchy (most recent task first):"),
+			theme.bold(theme.fg("accent", `Subagent session ${selected.id}`)),
+			`${theme.fg("dim", "Task")} ${theme.fg("text", `${taskPosition}/${taskCount}`)} ${theme.fg("statusLineSep", theme.sep.dot)} ${theme.fg("dim", "Nested")} ${theme.fg("text", nestedStatusLabel)}`,
+			`${theme.fg("dim", "Context")} ${theme.fg("text", contextLabel)}`,
+			`${theme.fg("dim", "Skills")} ${theme.fg("text", skillsLabel)}`,
+			`${theme.fg("dim", "Source")} ${theme.fg("muted", transcript.source)}`,
+			theme.bold(theme.fg("warning", "Hierarchy")),
 			...visibleHierarchyLines,
 			...(hiddenHierarchyCount > 0 ? [theme.fg("dim", `  … +${hiddenHierarchyCount} more nested subagents`)] : []),
 		];
-		const bodyLines = this.formatSubagentViewerBodyLines(transcript);
 		if (!this.subagentSessionViewer) {
 			const viewer = new SubagentSessionViewerComponent({
 				getTerminalRows: () => this.ui.terminal.rows,
@@ -2320,7 +2194,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.subagentSessionViewer.setContent({
 			headerLines,
-			bodyLines,
+			renderTranscriptLines: width => this.renderSubagentTranscriptLines(transcript, width),
 			nestedArrowMode: this.subagentNestedArrowMode,
 			metadata: {
 				agentName: selected.agent ?? selected.id,

@@ -3,7 +3,7 @@ import { type Component, matchesKey, padding, truncateToWidth, visibleWidth, wra
 import type { SubagentStatus } from "../subagent-view/types";
 import { theme } from "../theme/theme";
 
-const MIN_WIDTH = 40;
+const MIN_WIDTH = 24;
 const MIN_BODY_HEIGHT = 4;
 
 export interface SubagentSessionViewerMetadata {
@@ -18,7 +18,7 @@ export interface SubagentSessionViewerMetadata {
 
 export interface SubagentSessionViewerContent {
 	headerLines: string[];
-	bodyLines: string[];
+	renderTranscriptLines: (width: number) => string[];
 	nestedArrowMode: boolean;
 	metadata?: SubagentSessionViewerMetadata;
 }
@@ -41,7 +41,7 @@ function renderStatusGlyph(status?: SubagentStatus): string {
 		case "failed":
 			return `${theme.fg("error", "✗")} ${theme.fg("error", "FAILED")}`;
 		case "cancelled":
-			return `${theme.fg("muted", "⊘")} ${theme.fg("muted", "CANCEL")}`;
+			return `${theme.fg("muted", "⊘")} ${theme.fg("muted", "CANCELLED")}`;
 		default:
 			return `${theme.fg("dim", "◌")} ${theme.fg("dim", "PENDING")}`;
 	}
@@ -55,9 +55,19 @@ function formatTokenCount(tokens?: number): string {
 }
 
 export class SubagentSessionViewerComponent implements Component {
-	#content: SubagentSessionViewerContent = { headerLines: [], bodyLines: [], nestedArrowMode: false };
+	#content: SubagentSessionViewerContent = {
+		headerLines: [],
+		renderTranscriptLines: () => [],
+		nestedArrowMode: false,
+	};
 	#lastRenderWidth = 80;
+	#lastBodyViewportHeight = MIN_BODY_HEIGHT;
 	#scrollOffset = 0;
+	#followTail = true;
+	#contentVersion = 0;
+	#cachedBodyVersion = -1;
+	#cachedBodyWidth = -1;
+	#cachedBodyRows: string[] = [];
 	readonly #getTerminalRows: () => number;
 	readonly #leaderKey: string;
 	readonly #onClose: () => void;
@@ -75,10 +85,10 @@ export class SubagentSessionViewerComponent implements Component {
 	}
 
 	setContent(content: SubagentSessionViewerContent): void {
-		const wasAtBottom = this.#isAtBottom();
+		const wasAtBottom = this.#followTail || this.#isAtBottom();
 		this.#content = {
 			headerLines: content.headerLines.map(line => sanitizeText(line)),
-			bodyLines: content.bodyLines.map(line => sanitizeText(line)),
+			renderTranscriptLines: content.renderTranscriptLines,
 			nestedArrowMode: content.nestedArrowMode,
 			metadata: content.metadata
 				? {
@@ -91,8 +101,11 @@ export class SubagentSessionViewerComponent implements Component {
 					}
 				: undefined,
 		};
+		this.#contentVersion += 1;
+		this.#invalidateBodyCache();
 		const maxOffset = this.#maxScrollOffset(this.#lastRenderWidth);
 		this.#scrollOffset = wasAtBottom ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
+		this.#followTail = wasAtBottom;
 	}
 
 	handleInput(keyData: string): void {
@@ -102,19 +115,21 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 
 		if (matchesKey(keyData, "pageUp")) {
-			this.#scrollBy(-this.#bodyHeight(this.#lastRenderWidth));
+			this.#scrollBy(-this.#lastBodyViewportHeight);
 			return;
 		}
 		if (matchesKey(keyData, "pageDown")) {
-			this.#scrollBy(this.#bodyHeight(this.#lastRenderWidth));
+			this.#scrollBy(this.#lastBodyViewportHeight);
 			return;
 		}
 		if (matchesKey(keyData, "home")) {
 			this.#scrollOffset = 0;
+			this.#followTail = false;
 			return;
 		}
 		if (matchesKey(keyData, "end")) {
 			this.#scrollOffset = this.#maxScrollOffset(this.#lastRenderWidth);
+			this.#followTail = true;
 			return;
 		}
 		if (keyData === "k") {
@@ -163,7 +178,7 @@ export class SubagentSessionViewerComponent implements Component {
 	}
 
 	invalidate(): void {
-		// Stateless render; nothing cached outside render width and scroll offset.
+		// Stateless render; only scroll and cached transcript rows are retained.
 	}
 
 	render(width: number): string[] {
@@ -171,16 +186,18 @@ export class SubagentSessionViewerComponent implements Component {
 		const innerWidth = Math.max(1, this.#lastRenderWidth - 2);
 		const metadataRows = this.#buildMetadataLines();
 		const headerRows = this.#wrapLines(this.#content.headerLines, innerWidth);
-		const bodyRows = this.#wrapLines(this.#content.bodyLines, innerWidth);
-		const footerRows = this.#wrapLines(this.#footerLines(bodyRows.length), innerWidth);
+		const bodyRows = this.#bodyRows(innerWidth);
+		const footerRowCount = this.#footerRowCount(innerWidth);
 		const bodyHeight = this.#bodyHeight(
 			this.#lastRenderWidth,
 			headerRows.length,
-			footerRows.length,
+			footerRowCount,
 			metadataRows.length,
 		);
+		this.#lastBodyViewportHeight = bodyHeight;
 		const maxOffset = Math.max(0, bodyRows.length - bodyHeight);
-		this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset, maxOffset));
+		this.#scrollOffset = this.#followTail ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
+		const footerRows = this.#footerLines(bodyRows.length, bodyHeight, innerWidth);
 		const visibleBodyRows = bodyRows.slice(this.#scrollOffset, this.#scrollOffset + bodyHeight);
 		while (visibleBodyRows.length < bodyHeight) {
 			visibleBodyRows.push("");
@@ -205,7 +222,7 @@ export class SubagentSessionViewerComponent implements Component {
 			lines.push(this.#frameLine(row, innerWidth));
 		}
 		lines.push(this.#frameBottom(innerWidth));
-		return lines;
+		return lines.map(line => theme.overlaySurface(line));
 	}
 
 	#buildMetadataLines(): string[] {
@@ -223,47 +240,53 @@ export class SubagentSessionViewerComponent implements Component {
 		if (!hasContent) return [];
 
 		const lines: string[] = [];
+		const sessionLabel = meta.agentName ? `Subagent: ${meta.agentName}` : "Subagent Session";
+		lines.push(` ${theme.bold(theme.fg("accent", sessionLabel))}`);
+		lines.push(` ${theme.fg("dim", "Status")} ${renderStatusGlyph(meta.status)}`);
 
-		// Line 1: Agent name + status glyph
-		const nameLabel = meta.agentName ? theme.bold(theme.fg("accent", meta.agentName)) : "";
-		const statusLabel = renderStatusGlyph(meta.status);
-		lines.push(` ${nameLabel}  ${statusLabel}`);
-
-		// Line 2: Role + Model
 		const infoParts: string[] = [];
-		if (meta.role) infoParts.push(`Role: ${theme.fg("dim", meta.role)}`);
-		if (meta.model) infoParts.push(`Model: ${theme.fg("dim", meta.model)}`);
+		if (meta.role) infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", meta.role)}`);
+		if (meta.model) infoParts.push(`${theme.fg("dim", "Model")} ${theme.fg("text", meta.model)}`);
 		if (infoParts.length > 0) {
-			lines.push(` ${infoParts.join("  ")}`);
+			lines.push(` ${infoParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}
 
-		// Line 3: Tokens + Thinking level
-		const statParts: string[] = [];
+		const stats: string[] = [];
 		const tokenStr = formatTokenCount(meta.tokens);
 		if (meta.tokenCapacity != null) {
-			statParts.push(`Tokens: ${theme.fg("dim", `${tokenStr}/${formatTokenCount(meta.tokenCapacity)}`)}`);
+			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", `${tokenStr}/${formatTokenCount(meta.tokenCapacity)}`)}`);
 		} else if (meta.tokens != null) {
-			statParts.push(`Tokens: ${theme.fg("dim", tokenStr)}`);
+			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", tokenStr)}`);
 		}
 		if (meta.thinkingLevel) {
-			statParts.push(`Thinking: ${theme.fg("dim", meta.thinkingLevel)}`);
+			stats.push(`${theme.fg("dim", "Thinking")} ${theme.fg("text", meta.thinkingLevel)}`);
 		}
-		if (statParts.length > 0) {
-			lines.push(` ${statParts.join("  ")}`);
+		if (stats.length > 0) {
+			lines.push(` ${stats.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}
 
 		return lines;
 	}
 
-	#footerLines(totalBodyRows: number): string[] {
-		const bodyHeight = this.#bodyHeight(this.#lastRenderWidth);
+	#footerControlsLine(): string {
+		return theme.fg(
+			"dim",
+			`↑↓/j/k scroll  PgUp/PgDn page  Home/End  ←/→ task  Tab/Shift+Tab nested  ${this.#leaderKey} close`,
+		);
+	}
+
+	#footerRowCount(innerWidth: number): number {
+		return 1 + this.#wrapLines([this.#footerControlsLine()], innerWidth).length;
+	}
+
+	#footerLines(totalBodyRows: number, bodyHeight: number, innerWidth: number): string[] {
 		const maxOffset = Math.max(0, totalBodyRows - bodyHeight);
 		const start = totalBodyRows === 0 ? 0 : Math.min(totalBodyRows, this.#scrollOffset + 1);
 		const end = Math.min(totalBodyRows, this.#scrollOffset + bodyHeight);
-		const pinned = maxOffset === 0 || this.#scrollOffset >= maxOffset ? theme.fg("success", " newest") : "";
-		const status = theme.fg("dim", ` lines ${start}-${end}/${totalBodyRows} `) + pinned;
-		const controls = theme.fg("dim", " ↑↓/j/k scroll  PgUp/PgDn page  Home/End  Esc back to navigator");
-		return [status, controls];
+		const isFollowingTail = maxOffset === 0 || this.#scrollOffset >= maxOffset;
+		const tailMode = isFollowingTail ? "FOLLOWING TAIL" : "TAIL PAUSED";
+		const status = `${theme.fg("dim", `lines ${start}-${end}/${totalBodyRows}`)} ${theme.fg(isFollowingTail ? "success" : "warning", tailMode)}`;
+		return [status, ...this.#wrapLines([this.#footerControlsLine()], innerWidth)];
 	}
 
 	#wrapLines(lines: string[], width: number): string[] {
@@ -275,6 +298,27 @@ export class SubagentSessionViewerComponent implements Component {
 			wrapped.push(...rows);
 		}
 		return wrapped;
+	}
+
+	#bodyRows(innerWidth: number): string[] {
+		if (this.#cachedBodyVersion === this.#contentVersion && this.#cachedBodyWidth === innerWidth) {
+			return this.#cachedBodyRows;
+		}
+		const rawRows = this.#content.renderTranscriptLines(innerWidth);
+		const safeRows = rawRows
+			.filter((line): line is string => typeof line === "string")
+			.map(line => sanitizeText(line));
+		const wrappedRows = this.#wrapLines(safeRows.length > 0 ? safeRows : [theme.fg("dim", "(no transcript content)")], innerWidth);
+		this.#cachedBodyRows = wrappedRows;
+		this.#cachedBodyWidth = innerWidth;
+		this.#cachedBodyVersion = this.#contentVersion;
+		return wrappedRows;
+	}
+
+	#invalidateBodyCache(): void {
+		this.#cachedBodyRows = [];
+		this.#cachedBodyWidth = -1;
+		this.#cachedBodyVersion = -1;
 	}
 
 	#bodyHeight(width: number, headerRows?: number, footerRows?: number, metadataRows?: number): number {
@@ -292,13 +336,14 @@ export class SubagentSessionViewerComponent implements Component {
 
 	#maxScrollOffset(width: number): number {
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
-		const bodyRows = this.#wrapLines(this.#content.bodyLines, innerWidth);
+		const bodyRows = this.#bodyRows(innerWidth);
 		return Math.max(0, bodyRows.length - this.#bodyHeight(width));
 	}
 
 	#scrollBy(delta: number): void {
 		const maxOffset = this.#maxScrollOffset(this.#lastRenderWidth);
 		this.#scrollOffset = Math.max(0, Math.min(maxOffset, this.#scrollOffset + delta));
+		this.#followTail = this.#scrollOffset >= maxOffset;
 	}
 
 	#isAtBottom(): boolean {
@@ -307,20 +352,7 @@ export class SubagentSessionViewerComponent implements Component {
 
 	#frameTop(innerWidth: number): string {
 		const b = (s: string) => theme.fg("borderAccent", s);
-		const agentName = this.#content.metadata?.agentName;
-		const titleText = agentName ? `Subagent Viewer: ${agentName}` : "Subagent Viewer";
-		const maxTitleWidth = innerWidth - 6;
-		if (maxTitleWidth < 3) {
-			return `${b(theme.boxSharp.topLeft)}${b(theme.boxSharp.horizontal.repeat(innerWidth))}${b(theme.boxSharp.topRight)}`;
-		}
-		const clippedText =
-			visibleWidth(titleText) > maxTitleWidth ? truncateToWidth(titleText, maxTitleWidth) : titleText;
-		const titleRaw = `━━ ${clippedText} ━━`;
-		const titleWidth = visibleWidth(titleRaw);
-		const fillWidth = Math.max(0, innerWidth - titleWidth);
-		const titleColored = theme.bold(theme.fg("accent", titleRaw));
-		const fill = b(theme.boxSharp.horizontal.repeat(fillWidth));
-		return `${b(theme.boxSharp.topLeft)}${titleColored}${fill}${b(theme.boxSharp.topRight)}`;
+		return `${b(theme.boxSharp.topLeft)}${b(theme.boxSharp.horizontal.repeat(innerWidth))}${b(theme.boxSharp.topRight)}`;
 	}
 
 	#frameSeparator(innerWidth: number): string {
