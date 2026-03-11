@@ -213,6 +213,21 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).not.toContain("42");
 	});
 
+	test("preserves ANSI styling from rendered transcript rows", () => {
+		const viewer = createViewer();
+		const transcriptLine = "\x1b[38;5;201mtool call output\x1b[0m";
+		viewer.setContent({
+			headerLines: ["header"],
+			renderTranscriptLines: () => [transcriptLine],
+			nestedArrowMode: false,
+		});
+
+		const raw = renderRaw(viewer, 80);
+		expect(raw).toContain(transcriptLine);
+		expect(Bun.stripANSI(raw)).toContain("tool call output");
+	});
+
+
 	test("remains legible at narrow widths", () => {
 		const viewer = createViewer();
 		setViewerContent(viewer, {

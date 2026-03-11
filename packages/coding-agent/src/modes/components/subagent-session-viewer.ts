@@ -305,9 +305,7 @@ export class SubagentSessionViewerComponent implements Component {
 			return this.#cachedBodyRows;
 		}
 		const rawRows = this.#content.renderTranscriptLines(innerWidth);
-		const safeRows = rawRows
-			.filter((line): line is string => typeof line === "string")
-			.map(line => sanitizeText(line));
+		const safeRows = rawRows.filter((line): line is string => typeof line === "string");
 		const wrappedRows = this.#wrapLines(safeRows.length > 0 ? safeRows : [theme.fg("dim", "(no transcript content)")], innerWidth);
 		this.#cachedBodyRows = wrappedRows;
 		this.#cachedBodyWidth = innerWidth;
