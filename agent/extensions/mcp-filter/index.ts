@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { RolesConfigFile, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 // ─── Agent detection ────────────────────────────────────────────────────────
 
@@ -93,28 +93,105 @@ async function resolveAgent(systemPrompt: string, ctx: ExtensionContext): Promis
 // ─── MCP tool filtering ────────────────────────────────────────────────────
 
 /**
- * MCP server allocation per agent.
- * Each key maps to an array of allowed MCP prefixes.
- * `null` = all MCP tools allowed (no filtering).
- * `[]`   = no MCP tools allowed (remove all).
+ * Legacy MCP server allocation per agent.
+ * Used only as a fallback when roles.yml cannot be loaded.
  */
-const AGENT_MCP_ALLOW: Record<string, string[] | null> = {
-	default:        ["mcp_augment_", "mcp_better_context_"],  // exclude chrome-devtools and grafana
-	orchestrator:   [],
-	implement:      ["mcp_augment_", "mcp_better_context_"],  // chrome-devtools and grafana are specialized
-	designer:       ["mcp_augment_", "mcp_better_context_", "mcp_chrome_devtools_"],
-	grafana:        ["mcp_grafana_"],
-	explore:        ["mcp_augment_"],
-	research:       ["mcp_augment_", "mcp_better_context_"],
-	"ask-explore":  [],
+const FALLBACK_AGENT_MCP_ALLOW: Record<string, string[] | null> = {
+	default: ["mcp_augment_", "mcp_better_context_"],
+	orchestrator: [],
+	implement: ["mcp_augment_", "mcp_better_context_"],
+	designer: ["mcp_augment_", "mcp_better_context_", "mcp_chrome_devtools_"],
+	grafana: ["mcp_grafana_"],
+	explore: ["mcp_augment_"],
+	research: ["mcp_augment_", "mcp_better_context_"],
+	"ask-explore": [],
 	"ask-research": ["mcp_augment_"],
-	plan:           [],
-	lint:           [],
-	verifier:       [],
-	merge:          [],
-	curator:        [],
+	plan: [],
+	lint: [],
+	verifier: [],
+	merge: [],
+	curator: [],
 	"worktree-setup": [],
 };
+
+const MAIN_ROLE_NAMES = new Set(["default", "orchestrator", "plan", "ask"]);
+
+type RolesConfigEntry = {
+	mcp?: unknown;
+};
+
+type RolesConfigShape = {
+	roles?: Record<string, RolesConfigEntry>;
+	subagents?: Record<string, RolesConfigEntry>;
+};
+
+function readMcpServers(entry: RolesConfigEntry | undefined): string[] | undefined {
+	if (!entry) return undefined;
+	if (!Array.isArray(entry.mcp)) return undefined;
+	if (!entry.mcp.every(server => typeof server === "string")) return undefined;
+	return [...entry.mcp];
+}
+
+function toMcpToolPrefix(server: string): string | undefined {
+	const normalized = server
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	if (normalized.length === 0) return undefined;
+	return `mcp_${normalized}_`;
+}
+
+function toMcpToolPrefixes(servers: readonly string[]): string[] {
+	return servers.map(toMcpToolPrefix).filter((prefix): prefix is string => prefix !== undefined);
+}
+
+function resolveAgentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR?.trim() || DEFAULT_AGENT_DIR;
+}
+
+function resolveConfiguredMcpServers(agent: string): string[] | undefined {
+	const rolesPath = path.join(resolveAgentDir(), "roles.yml");
+	const loaded = RolesConfigFile.relocate(rolesPath).load();
+	if (!loaded || typeof loaded !== "object") return undefined;
+	const config = loaded as RolesConfigShape;
+
+	if (MAIN_ROLE_NAMES.has(agent)) {
+		return readMcpServers(config.roles?.[agent] ?? config.roles?.default);
+	}
+
+	const subagentServers = readMcpServers(config.subagents?.[agent]);
+	if (subagentServers !== undefined) return subagentServers;
+
+	const roleServers = readMcpServers(config.roles?.[agent]);
+	if (roleServers !== undefined) return roleServers;
+
+	if (agent in FALLBACK_AGENT_MCP_ALLOW) {
+		return undefined;
+	}
+
+	const defaultSubagentServers = readMcpServers(config.subagents?._default);
+	if (defaultSubagentServers !== undefined) return defaultSubagentServers;
+
+	return readMcpServers(config.roles?.default);
+}
+
+const ALWAYS_ON_SERVER = "augment";
+
+function normalizeConfiguredMcpServers(servers: readonly string[]): string[] {
+	const unique = Array.from(new Set(servers.map(server => server.trim()).filter(server => server.length > 0)));
+	if (unique.length === 0) return [];
+	if (unique.includes(ALWAYS_ON_SERVER)) return unique;
+	return [ALWAYS_ON_SERVER, ...unique];
+}
+
+function resolveMcpAllowlist(agent: string): string[] | null {
+	const configuredServers = resolveConfiguredMcpServers(agent);
+	if (configuredServers !== undefined) {
+		return toMcpToolPrefixes(normalizeConfiguredMcpServers(configuredServers));
+	}
+	return FALLBACK_AGENT_MCP_ALLOW[agent] ?? FALLBACK_AGENT_MCP_ALLOW.default;
+}
 
 /**
  * Remove `<function>` blocks from the system prompt for MCP tools that
@@ -126,16 +203,14 @@ const AGENT_MCP_ALLOW: Record<string, string[] | null> = {
  * We match each block, extract the tool name, and keep only those whose
  * prefix appears in the agent's allowlist.
  */
-function stripMcpTools(systemPrompt: string, agent: string): string {
-	const allowed = AGENT_MCP_ALLOW[agent] ?? AGENT_MCP_ALLOW.default;
-
+function stripMcpTools(systemPrompt: string, allowed: string[] | null): string {
 	// null = keep everything
 	if (allowed === null) return systemPrompt;
 
 	// Match each <function>...</function> block and check if it's an MCP tool
 	return systemPrompt.replace(
 		/<function>[\s\S]*?<\/function>\n?/g,
-		(match) => {
+		match => {
 			const nameMatch = match.match(/"name"\s*:\s*"([^"]+)"/);
 			if (!nameMatch) return match; // keep non-parseable blocks
 			const toolName = nameMatch[1];
@@ -147,7 +222,7 @@ function stripMcpTools(systemPrompt: string, agent: string): string {
 			if (allowed.length === 0) return "";
 
 			// Keep tool if its name starts with any allowed prefix
-			const keep = allowed.some((prefix) => toolName.startsWith(prefix));
+			const keep = allowed.some(prefix => toolName.startsWith(prefix));
 			return keep ? match : "";
 		},
 	);
@@ -257,14 +332,21 @@ function stripSkills(systemPrompt: string, agent: string): string {
 
 export default function mcpFilterExtension(pi: ExtensionAPI) {
 	pi.logger.debug("mcp-filter: extension loaded");
-	let currentAgent = "default";
+	const DEFAULT_SESSION_KEY = "__default__";
+	const sessionMcpAllowByKey = new Map<string, string[] | null>([[DEFAULT_SESSION_KEY, resolveMcpAllowlist("default")]]);
+	const getSessionKey = (ctx: ExtensionContext | undefined): string => {
+		const sessionManager = (ctx as { sessionManager?: { getSessionId?: () => string } } | undefined)?.sessionManager;
+		if (!sessionManager || typeof sessionManager.getSessionId !== "function") return DEFAULT_SESSION_KEY;
+		const sessionId = sessionManager.getSessionId();
+		return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : DEFAULT_SESSION_KEY;
+	};
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		const agent = await resolveAgent(event.systemPrompt, ctx);
-		currentAgent = agent;
+		const mcpAllow = resolveMcpAllowlist(agent);
+		sessionMcpAllowByKey.set(getSessionKey(ctx), mcpAllow);
 
 		// Skip filtering for agents with full access (no changes needed)
-		const mcpAllow = AGENT_MCP_ALLOW[agent] ?? AGENT_MCP_ALLOW.default;
 		const skillAllow = AGENT_SKILL_ALLOW[agent] ?? AGENT_SKILL_ALLOW.default;
 		if (mcpAllow === null && skillAllow === null) {
 			pi.logger.debug(`mcp-filter: agent=${agent} — full access, skipping`);
@@ -274,27 +356,26 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 		pi.logger.debug(`mcp-filter: agent=${agent} — applying filters`);
 
 		let prompt = event.systemPrompt;
-		prompt = stripMcpTools(prompt, agent);
+		prompt = stripMcpTools(prompt, mcpAllow);
 		prompt = stripSkills(prompt, agent);
 
 		return { systemPrompt: prompt };
 	});
 
 	// Safety net: block execution of any MCP tool that was filtered out
-
-	pi.on("tool_call", async (event) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (!event.toolName.startsWith("mcp_")) return;
+		const mcpAllow = sessionMcpAllowByKey.get(getSessionKey(ctx)) ?? resolveMcpAllowlist("default");
 
-		const allowed = AGENT_MCP_ALLOW[currentAgent] ?? AGENT_MCP_ALLOW.default;
-		if (allowed === null) return; // full access
+		if (mcpAllow === null) return; // full access
 
 		// No MCP tools allowed
-		if (allowed.length === 0) {
+		if (mcpAllow.length === 0) {
 			return { block: true, reason: "MCP tools are not available for this agent role." };
 		}
 
 		// Check if tool prefix is in the allowlist
-		const keep = allowed.some((prefix) => event.toolName.startsWith(prefix));
+		const keep = mcpAllow.some(prefix => event.toolName.startsWith(prefix));
 		if (!keep) {
 			return { block: true, reason: "This MCP tool is not available for this agent role." };
 		}
