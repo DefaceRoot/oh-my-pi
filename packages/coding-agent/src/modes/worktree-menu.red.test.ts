@@ -1,8 +1,10 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { Settings } from "../config/settings";
 import { flattenWorkflowMenuActions, WORKFLOW_MENUS } from "./action-buttons";
 import { StatusLineComponent } from "./components/status-line";
+import { InputController } from "./controllers/input-controller";
 import { initTheme } from "./theme/theme";
+import type { InteractiveModeContext } from "./types";
 
 function createStatusLine(): StatusLineComponent {
 	return new StatusLineComponent({
@@ -25,6 +27,59 @@ function extractTagSegment(rendered: string, actionName: string): string {
 	const markerIndex = Math.max(prefix.lastIndexOf("└"), prefix.lastIndexOf("↳"));
 	if (markerIndex === -1) return "";
 	return prefix.slice(markerIndex + 1).trim();
+}
+
+function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
+	const sessionPromptSpy = vi.fn(async () => undefined);
+	const showHookCustomSpy = vi.fn(async () => undefined);
+	const showHookConfirmSpy = vi.fn(async () => true);
+	const editor = {
+		setText: vi.fn(),
+		addToHistory: vi.fn(),
+		setCustomKeyHandler: vi.fn(),
+	} as unknown as InteractiveModeContext["editor"];
+	const ctx = {
+		editor,
+		statusLine: {
+			getActiveMenu: vi.fn(() => "worktree"),
+			executeSelectedMenuAction: vi.fn(() => ({
+				id: "cleanup-worktrees",
+				label: "Cleanup",
+				command: "/cleanup-worktrees",
+				baseLabel: "Cleanup",
+			})),
+			invalidate: vi.fn(),
+		},
+		session: {
+			isStreaming: false,
+			queuedMessageCount: 0,
+			isCompacting: false,
+			prompt: sessionPromptSpy,
+			extensionRunner: undefined,
+		},
+		sessionManager: { moveTo: vi.fn(), getCwd: vi.fn(() => options?.currentCwd ?? "/tmp/repo") },
+		pendingImages: [],
+		updatePendingMessagesDisplay: vi.fn(),
+		ui: { requestRender: vi.fn() },
+		showStatus: vi.fn(),
+		showWarning: vi.fn(),
+		showHookCustom: showHookCustomSpy,
+		showHookConfirm: showHookConfirmSpy,
+		updateEditorTopBorder: vi.fn(),
+	} as unknown as InteractiveModeContext;
+	const controller = new InputController(ctx);
+	controller.setupEditorSubmitHandler();
+	return {
+		controller,
+		sessionPromptSpy,
+		showHookCustomSpy,
+		showHookConfirmSpy,
+		submit: async (text: string) => {
+			const submitHandler = ctx.editor.onSubmit as ((value: string) => Promise<void>) | undefined;
+			if (!submitHandler) throw new Error("Missing editor submit handler");
+			await submitHandler(text);
+		},
+	};
 }
 
 describe("worktree menu red behavior", () => {
@@ -125,6 +180,83 @@ describe("worktree menu red behavior", () => {
 
 		expect(rendered).not.toContain("└ [Create] Freeform");
 		expect(rendered).toContain("└ [Create] Planned");
+	});
+
+	test("opens cleanup modal immediately instead of running git worktree prune", async () => {
+		const fixture = createCleanupWorkflowSubmitFixture();
+		const pruneSpy = vi.spyOn(fixture.controller as any, "pruneWorktrees").mockResolvedValue(undefined);
+
+		await fixture.submit("ignored");
+
+		expect(fixture.showHookCustomSpy).toHaveBeenCalledTimes(1);
+		expect(pruneSpy).not.toHaveBeenCalled();
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+	});
+
+	test("uses multi-select cleanup contract for space toggle and enter confirm", async () => {
+		const fixture = createCleanupWorkflowSubmitFixture();
+		const pruneSpy = vi.spyOn(fixture.controller as any, "pruneWorktrees").mockResolvedValue(undefined);
+		const controllerAny = fixture.controller as any;
+		controllerAny.performSelectedWorktreeCleanup = vi.fn(async () => undefined);
+		fixture.showHookCustomSpy.mockResolvedValue({
+			selectionKeys: { toggle: "space", confirm: "enter" },
+			selectedWorktrees: [
+				{
+					path: "/tmp/repo/.worktrees/feature-a",
+					branch: "feature/a",
+					remoteBranch: "origin/feature/a",
+					artifacts: ["/tmp/repo/.omp/worktrees/feature-a"],
+				},
+				{
+					path: "/tmp/repo/.worktrees/feature-b",
+					branch: "feature/b",
+					remoteBranch: "origin/feature/b",
+					artifacts: ["/tmp/repo/.omp/worktrees/feature-b"],
+				},
+			],
+		});
+
+		await fixture.submit("ignored");
+
+		expect(fixture.showHookCustomSpy).toHaveBeenCalledWith(expect.any(Function));
+		expect(controllerAny.performSelectedWorktreeCleanup).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.objectContaining({ path: "/tmp/repo/.worktrees/feature-a", branch: "feature/a" }),
+				expect.objectContaining({ path: "/tmp/repo/.worktrees/feature-b", branch: "feature/b" }),
+			]),
+			expect.objectContaining({
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: true,
+				removeArtifacts: true,
+			}),
+		);
+		expect(pruneSpy).not.toHaveBeenCalled();
+	});
+
+	test("requires explicit yes/no confirmation when current worktree is selected for cleanup", async () => {
+		const activeWorktreePath = "/tmp/repo/.worktrees/active-session";
+		const fixture = createCleanupWorkflowSubmitFixture({ currentCwd: activeWorktreePath });
+		const pruneSpy = vi.spyOn(fixture.controller as any, "pruneWorktrees").mockResolvedValue(undefined);
+		fixture.showHookCustomSpy.mockResolvedValue({
+			selectionKeys: { toggle: "space", confirm: "enter" },
+			selectedWorktrees: [
+				{
+					path: activeWorktreePath,
+					branch: "feature/active",
+					remoteBranch: "origin/feature/active",
+				},
+			],
+		});
+
+		await fixture.submit("ignored");
+
+		expect(fixture.showHookConfirmSpy).toHaveBeenCalledTimes(1);
+		expect(fixture.showHookConfirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining("Delete active worktree"),
+			expect.stringContaining(activeWorktreePath),
+		);
+		expect(pruneSpy).not.toHaveBeenCalled();
 	});
 
 	test("keeps disabled actions non-selectable while preserving selected styling", () => {
