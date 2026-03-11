@@ -3,8 +3,10 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { FORK_REFRESH_STATUS_KEY } from "../../../packages/coding-agent/src/modes/action-buttons";
-import {
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { FORK_MERGE_STATUS_KEY } from "../../../packages/coding-agent/src/modes/action-buttons";
+import screenshotsPickerExtension, {
 	_testExports,
 	type StagedImageState,
 } from "./index";
@@ -19,6 +21,11 @@ const {
 
 function createTempDir(label: string): string {
 	return join(tmpdir(), `omp-screenshots-picker-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+}
+
+async function writeTinyPng(path: string): Promise<void> {
+	const data = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B9pQAAAAASUVORK5CYII=", "base64");
+	await Bun.write(path, data);
 }
 
 describe("screenshots picker source resolution", () => {
@@ -117,9 +124,81 @@ describe("screenshots picker directory scanning", () => {
 	});
 });
 
+describe("screenshots picker modal hosting", () => {
+	const tempDirs: string[] = [];
+
+	afterEach(() => {
+		for (const dir of tempDirs.splice(0)) {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("opens in overlay mode, defers status widget updates, and forces full redraws for Kitty previews", async () => {
+		const originalProtocol = TERMINAL.imageProtocol;
+		(TERMINAL as unknown as { imageProtocol: ImageProtocol | null }).imageProtocol = ImageProtocol.Kitty;
+		try {
+			const cwd = createTempDir("overlay-picker");
+			const screenshotsDir = join(cwd, "screenshots");
+			const screenshotPath = join(screenshotsDir, "selection-2026-03-07.png");
+			mkdirSync(screenshotsDir, { recursive: true });
+			tempDirs.push(cwd);
+			await writeTinyPng(screenshotPath);
+
+			let showCommand: ((args: string[], ctx: ExtensionContext) => Promise<void>) | undefined;
+			const customCalls: Array<{ options?: { overlay?: boolean } }> = [];
+			const statusCalls: Array<string | undefined> = [];
+			const editorTextCalls: string[] = [];
+			const renderCalls: Array<boolean | undefined> = [];
+			const extensionApi = {
+				on: () => {},
+				registerCommand: (name: string, options: { handler: (args: string[], ctx: ExtensionContext) => Promise<void> }) => {
+					if (name === "ss") {
+						showCommand = options.handler;
+					}
+				},
+				registerShortcut: () => {},
+			} as unknown as ExtensionAPI;
+
+			screenshotsPickerExtension(extensionApi);
+			expect(showCommand).toBeDefined();
+
+			await showCommand!([], {
+				hasUI: true,
+				cwd,
+				ui: {
+					custom: async (factory, options) => {
+						customCalls.push({ options });
+						const component = await factory({ requestRender: (force?: boolean) => renderCalls.push(force) } as never, {} as never, {} as never, () => {});
+						component.handleInput?.(" ");
+						expect(statusCalls).toEqual([]);
+						return null;
+					},
+					notify: () => {},
+					setStatus: (_key, text) => {
+						statusCalls.push(text);
+					},
+					setEditorText: (text) => {
+						editorTextCalls.push(text);
+					},
+				},
+			} as ExtensionContext);
+
+			expect(customCalls).toHaveLength(1);
+			expect(customCalls[0]?.options).toEqual({ overlay: true });
+			expect(editorTextCalls).toEqual([""]);
+			expect(renderCalls).toContain(true);
+			expect(statusCalls).toHaveLength(1);
+			expect(statusCalls[0]).toContain("Shots 1");
+		} finally {
+			(TERMINAL as unknown as { imageProtocol: ImageProtocol | null }).imageProtocol = originalProtocol;
+		}
+	});
+});
+
+
 describe("screenshots picker status integration", () => {
 	test("orders the staged-screenshots indicator after the built-in workflow buttons and renders a compact pill", () => {
-		expect(screenshotsStatusKey > FORK_REFRESH_STATUS_KEY).toBe(true);
+		expect(screenshotsStatusKey > FORK_MERGE_STATUS_KEY).toBe(true);
 		expect(renderStagedStatusText(2)).toContain("Shots 2");
 		expect(renderStagedStatusText(2)).toContain("\x1b[");
 	});

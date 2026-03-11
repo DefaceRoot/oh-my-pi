@@ -409,7 +409,10 @@ function renderStagedStatusText(count: number): string {
 	return `\x1b[30;47m Shots ${count} \x1b[0m`;
 }
 
-function updateStagedWidget(ctx: ExtensionContext, state: StagedImageState): void {
+function updateStagedWidget(ctx: ExtensionContext, state: StagedImageState, options?: { suppress?: boolean }): void {
+	if (options?.suppress) {
+		return;
+	}
 	ctx.ui.setStatus(
 		SCREENSHOTS_STATUS_KEY,
 		state.images.length > 0 ? renderStagedStatusText(state.images.length) : undefined,
@@ -524,6 +527,7 @@ function encodeKittyWithCrop(
 
 export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 	const stagedState = createEmptyStagedState();
+	let selectorOpen = false;
 
 	function resetStaging(ctx?: ExtensionContext): void {
 		clearStagedState(stagedState);
@@ -680,9 +684,11 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 			return value;
 		}
 
+		selectorOpen = true;
 		try {
 			result = await ctx.ui.custom<string[] | null>((tui, theme, _keybindings, done) => {
-				requestPreviewRender = () => tui.requestRender();
+				const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol === ImageProtocol.Kitty);
+				requestPreviewRender = requestPickerRender;
 				let activeTab = 0;
 				let cursor = 0;
 				let scrollOffset = 0;
@@ -745,7 +751,7 @@ function clearRenderedKittyImage(): void {
 
 				const refreshInterval = setInterval(() => {
 					if (refreshTabsIfChanged()) {
-						tui.requestRender();
+						requestPickerRender();
 					}
 				}, SCREENSHOT_REFRESH_INTERVAL_MS);
 
@@ -1250,16 +1256,16 @@ function clearRenderedKittyImage(): void {
 								try {
 									unlinkSync(deletePendingPath);
 									removeScreenshotFromCurrentTab(deletePendingPath);
-									updateStagedWidget(ctx, stagedState);
-									tui.requestRender();
+									updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
+									requestPickerRender();
 								} catch {
 									clearPendingDelete();
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							clearPendingDelete();
-							tui.requestRender();
+							requestPickerRender();
 							return;
 						}
 
@@ -1268,8 +1274,8 @@ function clearRenderedKittyImage(): void {
 						}
 						if (matchesKey(data, "ctrl+shift+x")) {
 							clearAllStaged();
-							updateStagedWidget(ctx, stagedState);
-							tui.requestRender();
+							updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
+							requestPickerRender();
 							return;
 						}
 						if (matchesKey(data, "ctrl+t")) {
@@ -1279,7 +1285,7 @@ function clearRenderedKittyImage(): void {
 								scrollOffset = 0;
 								resetZoomViewport();
 								clearPendingDelete();
-								tui.requestRender();
+								requestPickerRender();
 							}
 							return;
 						}
@@ -1287,77 +1293,77 @@ function clearRenderedKittyImage(): void {
 							previewZoom = !previewZoom;
 							resetZoomViewport();
 							clearPendingDelete();
-							tui.requestRender();
+							requestPickerRender();
 							return;
 						}
 
 						if (previewZoom) {
 							if (data === "+" || data === "=") {
 								if (setZoomLevel(zoomLevel + ZOOM_LEVEL_STEP)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (data === "-" || data === "_") {
 								if (setZoomLevel(zoomLevel - ZOOM_LEVEL_STEP)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (data === "0") {
 								if (zoomLevel !== 1 || panX !== 0 || panY !== 0) {
 									resetZoomViewport();
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (data === "[" || data === "{") {
 								if (moveCursor(-1)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (data === "]" || data === "}") {
 								if (moveCursor(1)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (matchesKey(data, "left")) {
 								if (panViewport(-1, 0)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (matchesKey(data, "right")) {
 								if (panViewport(1, 0)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (matchesKey(data, "up")) {
 								if (panViewport(0, -1)) {
-									tui.requestRender();
+									requestPickerRender();
 									return;
 								}
 								if (supportsKittyInspector && zoomLevel > ZOOM_LEVEL_MIN) {
 									return;
 								}
 								if (moveCursor(-1)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
 							if (matchesKey(data, "down")) {
 								if (panViewport(0, 1)) {
-									tui.requestRender();
+									requestPickerRender();
 									return;
 								}
 								if (supportsKittyInspector && zoomLevel > ZOOM_LEVEL_MIN) {
 									return;
 								}
 								if (moveCursor(1)) {
-									tui.requestRender();
+									requestPickerRender();
 								}
 								return;
 							}
@@ -1365,22 +1371,22 @@ function clearRenderedKittyImage(): void {
 
 						if (matchesKey(data, "up")) {
 							if (moveCursor(-1)) {
-								tui.requestRender();
+								requestPickerRender();
 							}
 							return;
 						}
 						if (matchesKey(data, "down")) {
 							if (moveCursor(1)) {
-								tui.requestRender();
+								requestPickerRender();
 							}
 							return;
 						}
 						if (matchesKey(data, "space") || data === "s" || data === "S") {
 							if (currentScreenshot) {
 								toggleStagedScreenshot(currentScreenshot);
-								updateStagedWidget(ctx, stagedState);
+								updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
 								clearPendingDelete();
-								tui.requestRender();
+								requestPickerRender();
 							}
 							return;
 						}
@@ -1408,14 +1414,14 @@ function clearRenderedKittyImage(): void {
 						}
 						if ((data === "x" || data === "X") && stagedState.images.length > 0) {
 							clearAllStaged();
-							updateStagedWidget(ctx, stagedState);
+							updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
 							clearPendingDelete();
-							tui.requestRender();
+							requestPickerRender();
 							return;
 						}
 						if ((data === "d" || data === "D") && currentScreenshot) {
 							deletePendingPath = currentScreenshot.path;
-							tui.requestRender();
+							requestPickerRender();
 						}
 					},
 					dispose() {
@@ -1423,8 +1429,9 @@ function clearRenderedKittyImage(): void {
 						clearRenderedKittyImage();
 					},
 				};
-			});
+			}, { overlay: true });
 		} finally {
+			selectorOpen = false;
 			requestPreviewRender = null;
 		}
 
@@ -1442,6 +1449,7 @@ function clearRenderedKittyImage(): void {
 	pi.registerCommand("ss", {
 		description: "Show recent screenshots for quick attachment",
 		handler: async (_args, ctx) => {
+			ctx.ui.setEditorText("");
 			await showScreenshotSelector(ctx);
 			updateStagedWidget(ctx, stagedState);
 		},
