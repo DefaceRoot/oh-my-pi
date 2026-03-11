@@ -122,7 +122,7 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]?.assignmentPreview?.split("\n")).toHaveLength(8);
 	});
 
-	test("ingestTaskResults derives tokens from usage including cache fields", () => {
+	test("ingestTaskResults derives tokens from usage excluding cache fields", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
@@ -133,10 +133,10 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 180 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 150 });
 	});
 
-	test("ingestTaskResults prefers usage total_tokens over explicit tokens", () => {
+	test("ingestTaskResults prefers direct input/output over total token fields", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
@@ -154,7 +154,26 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 42 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 2 });
+	});
+
+	test("ingestTaskResults derives uncached tokens from totals when direct fields are missing", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "5-TotalMinusCache",
+				tokens: 999,
+				usage: {
+					cacheRead: 10,
+					cacheWrite: 5,
+					total_tokens: 80,
+				} as unknown as SingleResult["usage"],
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalMinusCache", tokens: 65 });
 	});
 
 	test("ingesting live and final updates for same id keeps a single grouped ref", () => {

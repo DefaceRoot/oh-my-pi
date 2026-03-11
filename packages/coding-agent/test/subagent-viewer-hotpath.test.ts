@@ -233,7 +233,7 @@ describe("InteractiveMode subagent token loading", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("loadTokensFromSessionPath includes cache usage when totals are absent", async () => {
+	test("loadTokensFromSessionPath excludes cache usage when totals are absent", async () => {
 		const sessionPath = path.join(tempDir, "cache-aware.jsonl");
 		await writeFile(
 			sessionPath,
@@ -253,10 +253,10 @@ describe("InteractiveMode subagent token loading", () => {
 		const mode = Object.create(InteractiveMode.prototype) as any;
 		const tokens = await mode.loadTokensFromSessionPath(sessionPath);
 
-		expect(tokens).toBe(198);
+		expect(tokens).toBe(165);
 	});
 
-	test("loadSubagentTranscript uses cache-aware assistant usage when session loads", async () => {
+	test("loadSubagentTranscript excludes cache usage when session loads", async () => {
 		const sessionPath = path.join(tempDir, "session-usage.jsonl");
 		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
 
@@ -282,6 +282,6 @@ describe("InteractiveMode subagent token loading", () => {
 		const mode = Object.create(InteractiveMode.prototype) as any;
 		const transcript = await mode.loadSubagentTranscript({ id: "cache-subagent", sessionPath } as SubagentViewRef);
 
-		expect(transcript?.tokens).toBe(130);
+		expect(transcript?.tokens).toBe(120);
 	});
 });

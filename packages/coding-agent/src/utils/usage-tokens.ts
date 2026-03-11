@@ -20,19 +20,25 @@ export function getDirectUsageTokens(usage: unknown): number | undefined {
 	}
 
 	const record = usage as Record<string, unknown>;
+	const input = readFirstFiniteNumber(record, INPUT_FIELDS);
+	const output = readFirstFiniteNumber(record, OUTPUT_FIELDS);
+	if (input !== undefined || output !== undefined) {
+		return (input ?? 0) + (output ?? 0);
+	}
+
 	const totalTokens = readFirstFiniteNumber(record, TOTAL_TOKEN_FIELDS);
+	const cacheRead = readFirstFiniteNumber(record, CACHE_READ_FIELDS);
+	const cacheWrite = readFirstFiniteNumber(record, CACHE_WRITE_FIELDS);
 	if (totalTokens !== undefined) {
+		if (cacheRead !== undefined || cacheWrite !== undefined) {
+			return Math.max(0, totalTokens - (cacheRead ?? 0) - (cacheWrite ?? 0));
+		}
 		return totalTokens;
 	}
 
-	const input = readFirstFiniteNumber(record, INPUT_FIELDS);
-	const output = readFirstFiniteNumber(record, OUTPUT_FIELDS);
-	const cacheRead = readFirstFiniteNumber(record, CACHE_READ_FIELDS);
-	const cacheWrite = readFirstFiniteNumber(record, CACHE_WRITE_FIELDS);
-
-	if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
-		return undefined;
+	if (cacheRead !== undefined || cacheWrite !== undefined) {
+		return 0;
 	}
 
-	return (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+	return undefined;
 }

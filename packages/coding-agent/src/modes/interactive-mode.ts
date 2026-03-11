@@ -589,7 +589,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	private buildSidebarTokenSection(): SidebarModel["tokens"] {
 		const contextUsage = this.session.getContextUsage();
 		const usageStats = this.sessionManager.getUsageStatistics();
-		const derivedTokens = usageStats.input + usageStats.output + usageStats.cacheRead + usageStats.cacheWrite;
+		const derivedTokens = usageStats.input + usageStats.output;
 		const costUsd = Number.isFinite(usageStats.cost) && usageStats.cost > 0 ? usageStats.cost : undefined;
 		const hasData = contextUsage !== undefined || derivedTokens > 0 || costUsd !== undefined;
 		if (!hasData) return undefined;
