@@ -5,9 +5,9 @@ import * as readlinePromises from "node:readline/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
+import { Container, matchesKey, Spacer, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils";
 import { getWorktreeBaseDir } from "@oh-my-pi/pi-utils/dirs";
-import { $ } from "bun";
 import type { SettingPath, SettingValue } from "../../config/settings";
 import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
@@ -15,7 +15,15 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { STTController, type SttState } from "../../stt";
-import { cleanupWorktree, ensureWorktree, getRepoRoot } from "../../task/worktree";
+import {
+	cleanupSelectedWorktrees,
+	cleanupWorktree,
+	ensureWorktree,
+	getRepoRoot,
+	listProjectWorktrees,
+	type WorktreeCleanupOptions,
+	type WorktreeCleanupTarget,
+} from "../../task/worktree";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
@@ -28,6 +36,151 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+interface WorktreeCleanupSelectorResult {
+	selectionKeys: { toggle: "space"; confirm: "enter" };
+	selectedWorktrees: WorktreeCleanupTarget[];
+	cancelled?: boolean;
+}
+
+class WorktreeCleanupSelectorComponent extends Container {
+	#worktrees: WorktreeCleanupTarget[];
+	#selectedIndex = 0;
+	#selectedPaths = new Set<string>();
+	#list = new Container();
+	#onDone: (result: WorktreeCleanupSelectorResult) => void;
+	#maxVisible = 10;
+
+	constructor(worktrees: WorktreeCleanupTarget[], onDone: (result: WorktreeCleanupSelectorResult) => void) {
+		super();
+		this.#worktrees = worktrees;
+		this.#onDone = onDone;
+
+		this.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(72)), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("accent", "  Cleanup worktrees"), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(this.#list);
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("dim", "  Space: toggle  Enter: confirm  Esc: cancel"), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(72)), 0, 0));
+
+		this.#renderList();
+	}
+
+	#formatWorktreeLabel(worktree: WorktreeCleanupTarget): string {
+		const labels: string[] = [];
+		if (worktree.branch) {
+			labels.push(worktree.branch);
+		} else {
+			labels.push("detached");
+		}
+		if (worktree.isCurrent) labels.push("active");
+		if (worktree.isMain) labels.push("root protected");
+		if (!worktree.exists) labels.push("path missing");
+		return labels.join(" • ");
+	}
+
+	#renderList(): void {
+		this.#list.clear();
+		if (this.#worktrees.length === 0) {
+			this.#list.addChild(new Text(theme.fg("warning", "  No worktrees found."), 0, 0));
+			return;
+		}
+
+		const startIndex = Math.max(
+			0,
+			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), this.#worktrees.length - this.#maxVisible),
+		);
+		const endIndex = Math.min(startIndex + this.#maxVisible, this.#worktrees.length);
+		let maxWidth = 0;
+		const lines: string[] = [];
+
+		for (let i = startIndex; i < endIndex; i++) {
+			const worktree = this.#worktrees[i];
+			if (!worktree) continue;
+			const isSelected = i === this.#selectedIndex;
+			const isToggled = this.#selectedPaths.has(worktree.path);
+			const marker = worktree.isMain ? "[-]" : isToggled ? "[x]" : "[ ]";
+			const cursor = isSelected ? `${theme.nav.cursor} ` : "  ";
+			const details = this.#formatWorktreeLabel(worktree);
+			const line = `${cursor}${marker} ${worktree.path} (${details})`;
+			maxWidth = Math.max(maxWidth, visibleWidth(line));
+			if (worktree.isMain) {
+				lines.push(theme.fg("dim", line));
+				continue;
+			}
+			lines.push(isSelected ? theme.fg("accent", line) : theme.fg("text", line));
+		}
+
+		for (const line of lines) {
+			this.#list.addChild(new Text(truncateToWidth(line, maxWidth), 0, 0));
+		}
+		this.#list.addChild(new Spacer(1));
+		this.#list.addChild(
+			new Text(
+				theme.fg(
+					"muted",
+					`  Selected ${this.#selectedPaths.size}/${this.#worktrees.filter(worktree => !worktree.isMain).length} removable worktrees`,
+				),
+				0,
+				0,
+			),
+		);
+	}
+
+	#toggleCurrent(): void {
+		const selected = this.#worktrees[this.#selectedIndex];
+		if (!selected || selected.isMain) return;
+		if (this.#selectedPaths.has(selected.path)) {
+			this.#selectedPaths.delete(selected.path);
+		} else {
+			this.#selectedPaths.add(selected.path);
+		}
+		this.#renderList();
+	}
+
+	#confirm(): void {
+		const selectedWorktrees = this.#worktrees.filter(worktree => this.#selectedPaths.has(worktree.path));
+		this.#onDone({
+			selectionKeys: { toggle: "space", confirm: "enter" },
+			selectedWorktrees,
+		});
+	}
+
+	#cancel(): void {
+		this.#onDone({
+			selectionKeys: { toggle: "space", confirm: "enter" },
+			selectedWorktrees: [],
+			cancelled: true,
+		});
+	}
+
+	handleInput(keyData: string): void {
+		if (matchesKey(keyData, "up") || keyData === "k") {
+			this.#selectedIndex = this.#selectedIndex === 0 ? this.#worktrees.length - 1 : this.#selectedIndex - 1;
+			this.#renderList();
+			return;
+		}
+		if (matchesKey(keyData, "down") || keyData === "j") {
+			this.#selectedIndex = this.#selectedIndex === this.#worktrees.length - 1 ? 0 : this.#selectedIndex + 1;
+			this.#renderList();
+			return;
+		}
+		if (keyData === " " || matchesKey(keyData, "space")) {
+			this.#toggleCurrent();
+			return;
+		}
+		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+			this.#confirm();
+			return;
+		}
+		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
+			this.#cancel();
+		}
+	}
 }
 
 export function detectLazygitInstallCommand(): { command: string; args: string[] } | null {
@@ -1253,7 +1406,7 @@ export class InputController {
 				await this.deleteCurrentWorktree();
 				return true;
 			case "cleanup-worktrees":
-				await this.pruneWorktrees();
+				await this.openWorktreeCleanupSelector();
 				return true;
 			default:
 				return false;
@@ -1296,31 +1449,82 @@ export class InputController {
 			this.ctx.showStatus(`Deleted worktree: ${currentCwd}`);
 			this.ctx.ui.requestRender();
 		} catch (error) {
-			this.ctx.showWarning(
-				`Failed to delete worktree: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			this.ctx.showWarning(`Failed to delete worktree: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
-	private async pruneWorktrees(): Promise<void> {
+	private async openWorktreeCleanupSelector(): Promise<void> {
 		const currentCwd = this.resolveSessionCwd();
+		let discoveredWorktrees: WorktreeCleanupTarget[] = [];
+		let discoveredRepoRoot: string | undefined;
+
 		try {
-			const repoRoot = await getRepoRoot(currentCwd);
-			const pruneResult = await $`git worktree prune`.cwd(repoRoot).quiet().nothrow();
-			if (pruneResult.exitCode !== 0) {
-				const stderr = pruneResult.stderr.toString().trim();
-				this.ctx.showWarning(stderr ? `Failed to cleanup worktrees: ${stderr}` : "Failed to cleanup worktrees.");
-				return;
-			}
-			this.ctx.showStatus("Cleaned up stale worktrees.");
-			this.ctx.ui.requestRender();
+			const inventory = await listProjectWorktrees(currentCwd);
+			discoveredWorktrees = inventory.worktrees;
+			discoveredRepoRoot = inventory.repoRoot;
 		} catch (error) {
 			this.ctx.showWarning(
-				`Failed to cleanup worktrees: ${error instanceof Error ? error.message : String(error)}`,
+				`Failed to enumerate worktrees for cleanup: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+
+		const selection = await this.ctx.showHookCustom<WorktreeCleanupSelectorResult>(
+			(_tui, _theme, _keybindings, done) => new WorktreeCleanupSelectorComponent(discoveredWorktrees, done),
+		);
+		if (!selection || selection.cancelled) return;
+		if (selection.selectedWorktrees.length === 0) {
+			this.ctx.showWarning("No worktrees selected for cleanup.");
+			return;
+		}
+
+		try {
+			const includesCurrentWorktree = selection.selectedWorktrees.some(
+				worktree => path.resolve(worktree.path) === path.resolve(currentCwd),
+			);
+			if (includesCurrentWorktree) {
+				const confirmationMessage = [
+					"This cleanup includes the active worktree:",
+					...selection.selectedWorktrees.map(worktree => `- ${worktree.path}`),
+					"",
+					"This will remove the local worktree, branches, and artifacts.",
+				].join("\n");
+				const confirmed = await this.ctx.showHookConfirm("Delete active worktree?", confirmationMessage);
+				if (!confirmed) return;
+				await this.ctx.sessionManager.moveTo(discoveredRepoRoot ?? (await getRepoRoot(currentCwd)));
+			}
+
+			await this.performSelectedWorktreeCleanup(selection.selectedWorktrees, {
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: true,
+				removeArtifacts: true,
+			});
+		} catch (error) {
+			this.ctx.showWarning(
+				`Failed to cleanup selected worktrees: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
 
+	private async performSelectedWorktreeCleanup(
+		selectedWorktrees: WorktreeCleanupTarget[],
+		options: WorktreeCleanupOptions,
+	): Promise<void> {
+		const currentCwd = this.resolveSessionCwd();
+		const repoRoot = await getRepoRoot(currentCwd);
+		const result = await cleanupSelectedWorktrees(repoRoot, selectedWorktrees, options);
+		if (result.warnings.length > 0) {
+			this.ctx.showWarning(result.warnings.join("\n"));
+		}
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorTopBorder();
+		this.ctx.showStatus(`Cleaned up ${result.cleaned.length} worktree${result.cleaned.length === 1 ? "" : "s"}.`);
+		this.ctx.ui.requestRender();
+	}
+
+	async pruneWorktrees(): Promise<void> {
+		this.ctx.showWarning("Legacy prune path is disabled; use Worktree → Cleanup instead.");
+	}
 
 	private getEditorTerminalPath(): string | null {
 		if (process.platform === "win32") {
