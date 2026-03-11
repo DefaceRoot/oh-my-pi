@@ -12,10 +12,10 @@ The `omp` command is a shell script at `<fork-root>/omp`. It runs:
 
 ```bash
 PI_CODING_AGENT_DIR=<fork-root>/agent \
-  bun --cwd=<fork-root>/packages/coding-agent src/cli.ts
+  bun <fork-root>/packages/coding-agent/src/cli.ts
 ```
 
-This means changes to fork source take effect on the next `omp` restart (next launch).
+Because the launcher does not pass `--cwd`, `omp` inherits the caller's current working directory for session runtime state. Changes to fork source still take effect on the next `omp` restart (next launch).
 
 ## What Updates Mean Now
 
