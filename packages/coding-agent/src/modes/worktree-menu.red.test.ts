@@ -58,6 +58,32 @@ async function createCommittedRepoWithUpstream(): Promise<{ repoDir: string; rem
 	return { repoDir, remoteDir };
 }
 
+async function createCommittedRepoWithMissingLinkedWorktree(): Promise<{ repoDir: string; missingWorktreePath: string }> {
+	const repoDir = await createCommittedRepo();
+	const missingWorktreePath = path.join(repoDir, ".worktrees", "stale");
+	await fs.mkdir(path.dirname(missingWorktreePath), { recursive: true });
+	runGit(repoDir, ["worktree", "add", "-b", "feature/stale", missingWorktreePath]);
+	await fs.rm(missingWorktreePath, { recursive: true, force: true });
+	return { repoDir, missingWorktreePath };
+}
+
+async function createCommittedRepoWithMissingLinkedWorktreeFromLinkedCwd(): Promise<{
+	repoDir: string;
+	currentWorktreePath: string;
+	missingWorktreePath: string;
+}> {
+	const repoDir = await createCommittedRepo();
+	const worktreeRoot = path.join(repoDir, ".worktrees");
+	const currentWorktreePath = path.join(worktreeRoot, "active");
+	const missingWorktreePath = path.join(worktreeRoot, "stale");
+	await fs.mkdir(worktreeRoot, { recursive: true });
+	runGit(repoDir, ["worktree", "add", "-b", "feature/active", currentWorktreePath]);
+	runGit(repoDir, ["worktree", "add", "-b", "feature/stale", missingWorktreePath]);
+	await fs.rm(missingWorktreePath, { recursive: true, force: true });
+	return { repoDir, currentWorktreePath, missingWorktreePath };
+}
+
+
 function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 	const sessionPromptSpy = vi.fn(async () => undefined);
 	const showHookCustomSpy = vi.fn(async () => undefined) as any;
@@ -253,6 +279,70 @@ describe("worktree menu red behavior", () => {
 			await fs.rm(repoDir, { recursive: true, force: true });
 		}
 	});
+
+	test("enumerates repository worktrees even when one linked worktree path is missing", async () => {
+		const { repoDir, missingWorktreePath } = await createCommittedRepoWithMissingLinkedWorktree();
+		try {
+			const fixture = createCleanupWorkflowSubmitFixture({ currentCwd: repoDir });
+			fixture.showHookCustomSpy.mockResolvedValue({
+				selectionKeys: { toggle: "space", confirm: "enter" },
+				selectedWorktrees: [],
+				cancelled: true,
+			});
+
+			await fixture.submit("ignored");
+
+			const firstWarning = fixture.showWarningSpy.mock.calls[0]?.[0] as string | undefined;
+			expect(firstWarning).toBeUndefined();
+
+			const selectorFactory = fixture.showHookCustomSpy.mock.calls[0]?.[0] as
+				| ((...args: unknown[]) => { render: (width: number) => string[] })
+				| undefined;
+			expect(selectorFactory).toBeDefined();
+			if (!selectorFactory) return;
+
+			const selector = selectorFactory(undefined, undefined, undefined, () => undefined);
+			const renderedSelector = stripAnsi(selector.render(220).join("\n"));
+			expect(renderedSelector).toContain(repoDir);
+			expect(renderedSelector).toContain(missingWorktreePath);
+			expect(renderedSelector).toContain("path missing");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+		}
+	});
+
+	test("enumerates repository worktrees from a linked cwd when another linked worktree path is missing", async () => {
+		const { repoDir, currentWorktreePath, missingWorktreePath } =
+			await createCommittedRepoWithMissingLinkedWorktreeFromLinkedCwd();
+		try {
+			const fixture = createCleanupWorkflowSubmitFixture({ currentCwd: currentWorktreePath });
+			fixture.showHookCustomSpy.mockResolvedValue({
+				selectionKeys: { toggle: "space", confirm: "enter" },
+				selectedWorktrees: [],
+				cancelled: true,
+			});
+
+			await fixture.submit("ignored");
+
+			const firstWarning = fixture.showWarningSpy.mock.calls[0]?.[0] as string | undefined;
+			expect(firstWarning).toBeUndefined();
+
+			const selectorFactory = fixture.showHookCustomSpy.mock.calls[0]?.[0] as
+				| ((...args: unknown[]) => { render: (width: number) => string[] })
+				| undefined;
+			expect(selectorFactory).toBeDefined();
+			if (!selectorFactory) return;
+
+			const selector = selectorFactory(undefined, undefined, undefined, () => undefined);
+			const renderedSelector = stripAnsi(selector.render(220).join("\n"));
+			expect(renderedSelector).toContain(currentWorktreePath);
+			expect(renderedSelector).toContain(missingWorktreePath);
+			expect(renderedSelector).toContain("path missing");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+		}
+	});
+
 
 	test("enumerates repository worktrees with upstream metadata without parser warnings when opening cleanup modal", async () => {
 		const { repoDir, remoteDir } = await createCommittedRepoWithUpstream();

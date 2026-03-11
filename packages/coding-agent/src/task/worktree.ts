@@ -464,18 +464,81 @@ async function resolveUpstreamBranch(repoRoot: string, branch: string): Promise<
 	return upstream || undefined;
 }
 
-async function resolveWorktreeArtifacts(repoRoot: string, worktreePath: string): Promise<string[]> {
+async function resolveLinkedWorktreeGitDirArtifact(
+	repoRoot: string,
+	worktreePath: string,
+): Promise<string | undefined> {
+	const commonGitDirRaw = await $`git rev-parse --git-common-dir`.cwd(repoRoot).quiet().nothrow().text();
+	const commonGitDir = commonGitDirRaw.trim();
+	if (!commonGitDir) return undefined;
+
+	const worktreesMetadataDir = path.resolve(repoRoot, commonGitDir, "worktrees");
+	let metadataEntries: Dirent[];
+	try {
+		metadataEntries = await fs.readdir(worktreesMetadataDir, { withFileTypes: true });
+	} catch (err) {
+		const errorCode = typeof err === "object" && err && "code" in err ? (err as { code?: string }).code : undefined;
+		if (isEnoent(err) || errorCode === "ENOTDIR") return undefined;
+		throw err;
+	}
+
+	const targetGitPath = path.join(worktreePath, ".git");
+	for (const entry of metadataEntries) {
+		if (!entry.isDirectory()) continue;
+		const candidateGitDir = path.join(worktreesMetadataDir, entry.name);
+		const gitdirPointerPath = path.join(candidateGitDir, "gitdir");
+		let gitdirPointer: string;
+		try {
+			gitdirPointer = (await fs.readFile(gitdirPointerPath, "utf8")).trim();
+		} catch (err) {
+			if (isEnoent(err)) continue;
+			throw err;
+		}
+
+		if (!gitdirPointer) continue;
+		const resolvedGitPath = path.resolve(candidateGitDir, gitdirPointer);
+		if (resolvedGitPath === targetGitPath) {
+			return candidateGitDir;
+		}
+	}
+
+	return undefined;
+}
+
+async function resolveWorktreeArtifacts(
+	repoRoot: string,
+	worktreePath: string,
+	worktreeExists?: boolean,
+): Promise<string[]> {
 	const artifacts = new Set<string>();
 	artifacts.add(path.join(repoRoot, ".omp", "worktrees", path.basename(worktreePath)));
 
-	const gitDirRaw = await $`git rev-parse --git-dir`.cwd(worktreePath).quiet().nothrow().text();
-	const gitDir = gitDirRaw.trim();
-	if (!gitDir) return Array.from(artifacts);
+	const addMissingWorktreeGitDirArtifact = async (): Promise<void> => {
+		const linkedGitDir = await resolveLinkedWorktreeGitDirArtifact(repoRoot, worktreePath);
+		if (linkedGitDir) artifacts.add(linkedGitDir);
+	};
 
-	const resolvedGitDir = path.resolve(worktreePath, gitDir);
-	const rootGitDir = path.join(repoRoot, ".git");
-	if (resolvedGitDir !== rootGitDir) {
-		artifacts.add(resolvedGitDir);
+	if (worktreeExists === false) {
+		await addMissingWorktreeGitDirArtifact();
+		return Array.from(artifacts);
+	}
+
+	try {
+		const gitDirRaw = await $`git rev-parse --git-dir`.cwd(worktreePath).quiet().nothrow().text();
+		const gitDir = gitDirRaw.trim();
+		if (!gitDir) return Array.from(artifacts);
+
+		const resolvedGitDir = path.resolve(worktreePath, gitDir);
+		const rootGitDir = path.join(repoRoot, ".git");
+		if (resolvedGitDir !== rootGitDir) {
+			artifacts.add(resolvedGitDir);
+		}
+	} catch (err) {
+		if (isEnoent(err)) {
+			await addMissingWorktreeGitDirArtifact();
+			return Array.from(artifacts);
+		}
+		throw err;
 	}
 
 	return Array.from(artifacts);
@@ -494,10 +557,10 @@ export async function listProjectWorktrees(cwd: string): Promise<WorktreeCleanup
 	const worktrees = await Promise.all(
 		records.map(async record => {
 			const worktreePath = path.resolve(record.path);
-			const [exists, remoteBranch, artifacts] = await Promise.all([
-				pathExists(worktreePath),
+			const exists = await pathExists(worktreePath);
+			const [remoteBranch, artifacts] = await Promise.all([
 				record.branch ? resolveUpstreamBranch(repoRoot, record.branch) : Promise.resolve(undefined),
-				resolveWorktreeArtifacts(repoRoot, worktreePath),
+				resolveWorktreeArtifacts(repoRoot, worktreePath, exists),
 			]);
 
 			return {
