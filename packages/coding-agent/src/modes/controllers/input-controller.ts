@@ -796,12 +796,16 @@ export class InputController {
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				const registry = this.ctx.session.modelRegistry;
 				const curatorModel = this.ctx.settings.getModelRole("curator");
-				generateSessionTitle(text, registry, curatorModel, this.ctx.session.sessionId)
+				const titleSessionId = this.ctx.session.sessionId;
+				generateSessionTitle(text, registry, curatorModel, titleSessionId)
 					.then(async title => {
-						if (title) {
-							await this.ctx.sessionManager.setSessionName(title);
-							setTerminalTitle(`π: ${title}`);
-						}
+						if (!title) return;
+						if (this.ctx.session.sessionId !== titleSessionId) return;
+						if (this.ctx.sessionManager.getSessionName()) return;
+						await this.ctx.sessionManager.setSessionName(title);
+						if (this.ctx.session.sessionId !== titleSessionId) return;
+						if (this.ctx.sessionManager.getSessionName() !== title) return;
+						setTerminalTitle(`π: ${title}`);
 					})
 					.catch(() => {});
 			}
@@ -1443,7 +1447,7 @@ export class InputController {
 		try {
 			const repoRoot = await getRepoRoot(currentCwd);
 			await this.ctx.sessionManager.moveTo(repoRoot);
-			await cleanupWorktree(currentCwd);
+			await cleanupWorktree(repoRoot, currentCwd);
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
 			this.ctx.showStatus(`Deleted worktree: ${currentCwd}`);

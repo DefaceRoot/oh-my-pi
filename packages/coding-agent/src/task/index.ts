@@ -21,9 +21,9 @@ import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
 import type { ModelRole } from "../config/model-registry";
-import { RolesConfig } from "../config/roles-config";
 import { isDefaultModelAlias } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { RolesConfig } from "../config/roles-config";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
@@ -124,9 +124,9 @@ function createScopedMcpManager(
 		typeof managerLike.getToolsForServers === "function"
 			? managerLike.getToolsForServers(allowedServers)
 			: managerLike.getTools().filter(tool => {
-				const serverName = getMcpServerName(tool);
-				return serverName ? allowed.has(serverName) : false;
-			});
+					const serverName = getMcpServerName(tool);
+					return serverName ? allowed.has(serverName) : false;
+				});
 	return {
 		getTools: () => scopedTools as any,
 		waitForConnection: async (name: string) => {
@@ -1012,7 +1012,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						} else if (effectiveIsolationMode === "fuse-projfs") {
 							await cleanupProjfsOverlay(isolationDir);
 						} else {
-							await cleanupWorktree(isolationDir);
+							await cleanupWorktree(await getRepoRoot(isolationDir), isolationDir);
 						}
 					}
 				}
