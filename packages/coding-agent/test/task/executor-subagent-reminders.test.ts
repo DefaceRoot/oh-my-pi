@@ -267,7 +267,7 @@ describe("runSubprocess submit_result reminders", () => {
 			for (let i = 0; i < 12; i++) {
 				emit({
 					type: "tool_execution_end",
-					toolCallId: `tool-error-${promptIndex}-${i}`,	
+					toolCallId: `tool-error-${promptIndex}-${i}`,
 					toolName: "submit_result",
 					result: {
 						content: [{ type: "text", text: `Output does not match schema ${i}` }],
@@ -330,6 +330,47 @@ describe("runSubprocess submit_result reminders", () => {
 		};
 		expect(createAgentSessionMock.mock.calls).toHaveLength(1);
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
+	});
+
+	it("passes parent compaction settings into the subagent session snapshot", async () => {
+		vi.clearAllMocks();
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-compaction-settings",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const parentSettings = Settings.isolated({
+			"compaction.strategy": "handoff",
+			"compaction.thresholdPercent": 70,
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-compaction-settings",
+			settings: parentSettings,
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		expect(createAgentSessionMock.mock.calls).toHaveLength(1);
+		const subagentSettings = createAgentSessionMock.mock.calls[0]?.[0]?.settings as Settings | undefined;
+		expect(subagentSettings?.get("compaction.strategy")).toBe("handoff");
+		expect(subagentSettings?.get("compaction.thresholdPercent")).toBe(70);
 	});
 
 	it("prefers explicit modelOverride thinking suffix over provided thinking level, including off", async () => {

@@ -88,6 +88,7 @@ import { executePython as executePythonCommand, type PythonResult } from "../ipy
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
 import type { PlanModeState } from "../plan-mode/state";
+import autoHandoffOverflowFocusPrompt from "../prompts/system/auto-handoff-overflow-focus.md" with { type: "text" };
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -273,6 +274,9 @@ interface HandoffOptions {
 /** Standard thinking levels */
 
 const AUTO_HANDOFF_THRESHOLD_FOCUS = renderPromptTemplate(autoHandoffThresholdFocusPrompt);
+
+const AUTO_HANDOFF_OVERFLOW_FOCUS = renderPromptTemplate(autoHandoffOverflowFocusPrompt);
+const FALLBACK_CONTEXT_WINDOW = 200_000;
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
@@ -2046,10 +2050,10 @@ export class AgentSession {
 				);
 			}
 
-			// Check if we need to compact before sending (catches aborted responses)
-			const lastAssistant = this.#findLastAssistantMessage();
-			if (lastAssistant && !options?.skipCompactionCheck) {
-				await this.#checkCompaction(lastAssistant, false);
+			// Check if we need to compact before sending (supports first-turn and error-turn checks)
+			if (!options?.skipCompactionCheck) {
+				const lastAssistant = this.#findLastAssistantMessage();
+				await this.#checkCompaction(lastAssistant, { includeAborted: true });
 			}
 
 			// Build messages array (custom messages if any, then user message)
@@ -3371,68 +3375,86 @@ Be thorough - include exact file paths, function names, error messages, and tech
 	 * 2. Overflow + no promotion target: run context maintenance, auto-retry on same model
 	 * 3. Threshold: Context over threshold, run context maintenance (no auto-retry)
 	 *
-	 * @param assistantMessage The assistant message to check
-	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param assistantMessage Optional assistant message to check (undefined for first-turn pre-send checks)
+	 * @param options.includeAborted Include aborted assistant messages (used for pre-prompt checks)
 	 */
-	async #checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
-		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
-		const contextWindow = this.model?.contextWindow ?? 0;
+	async #checkCompaction(
+		assistantMessage: AssistantMessage | undefined,
+		options?: { includeAborted?: boolean },
+	): Promise<void> {
+		const includeAborted = options?.includeAborted ?? false;
+		if (!includeAborted && assistantMessage?.stopReason === "aborted") return;
+		const contextWindow = this.#resolveRuntimeContextWindow();
 		const generation = this.#promptGeneration;
-		// Skip overflow check if the message came from a different model.
-		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
-		// This handles the case where an error was kept after compaction (in the "kept" region).
-		// The error shouldn't trigger another compaction since we already compacted.
-		// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
-		// is still in context but shouldn't trigger compaction again.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const errorIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
-		if (sameModel && !errorIsFromBeforeCompaction && isContextOverflow(assistantMessage, contextWindow)) {
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+		if (assistantMessage) {
+			// Skip overflow check if the message came from a different model.
+			// This handles the case where user switched from a smaller-context model (e.g. opus)
+			// to a larger-context model (e.g. codex) - the overflow error from the old model
+			// shouldn't trigger compaction for the new model.
+			const sameModel =
+				this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+			// This handles the case where an error was kept after compaction (in the "kept" region).
+			// The error shouldn't trigger another compaction since we already compacted.
+			// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
+			// is still in context but shouldn't trigger compaction again.
+			const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+			const errorIsFromBeforeCompaction =
+				compactionEntry !== null && assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
+			if (sameModel && !errorIsFromBeforeCompaction && isContextOverflow(assistantMessage, contextWindow)) {
+				// Remove the error message from agent state (it IS saved to session for history,
+				// but we don't want it in context for the retry)
+				const messages = this.agent.state.messages;
+				if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+					this.agent.replaceMessages(messages.slice(0, -1));
+				}
 
-			// Try context promotion first - switch to a larger model and retry without compacting
-			const promoted = await this.#tryContextPromotion(assistantMessage);
-			if (promoted) {
-				// Retry on the promoted (larger) model without compacting
-				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				// Try context promotion first - switch to a larger model and retry without compacting
+				const promoted = await this.#tryContextPromotion(assistantMessage);
+				if (promoted) {
+					// Retry on the promoted (larger) model without compacting
+					this.#scheduleAgentContinue({ delayMs: 100, generation });
+					return;
+				}
+
+				// No promotion target available fall through to compaction
+				const compactionSettings = this.settings.getGroup("compaction");
+				if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
+					await this.#runAutoCompaction("overflow", true);
+				}
 				return;
 			}
-
-			// No promotion target available fall through to compaction
-			const compactionSettings = this.settings.getGroup("compaction");
-			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				await this.#runAutoCompaction("overflow", true);
-			}
-			return;
 		}
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
 
-		// Case 2: Threshold - turn succeeded but context is getting large
-		// Skip if this was an error (non-overflow errors don't have usage data)
-		if (assistantMessage.stopReason === "error") return;
-		const pruneResult = await this.#pruneToolOutputs();
-		let contextTokens = calculateContextTokens(assistantMessage.usage);
-		if (pruneResult) {
-			contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
-		}
+		const contextTokens = await this.#resolveCompactionContextTokens(assistantMessage);
 		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			// Try promotion first — if a larger model is available, switch instead of compacting
-			const promoted = await this.#tryContextPromotion(assistantMessage);
+			const promoted = assistantMessage ? await this.#tryContextPromotion(assistantMessage) : false;
 			if (!promoted) {
 				await this.#runAutoCompaction("threshold", false);
 			}
 		}
+	}
+
+	#resolveRuntimeContextWindow(model: Model | undefined = this.model): number {
+		const contextWindow = model?.contextWindow;
+		if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
+			return contextWindow;
+		}
+		return FALLBACK_CONTEXT_WINDOW;
+	}
+
+	async #resolveCompactionContextTokens(assistantMessage: AssistantMessage | undefined): Promise<number> {
+		const pruneResult = await this.#pruneToolOutputs();
+		if (assistantMessage && assistantMessage.stopReason !== "error" && assistantMessage.stopReason !== "aborted") {
+			let contextTokens = calculateContextTokens(assistantMessage.usage);
+			if (pruneResult) {
+				contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
+			}
+			return contextTokens;
+		}
+		return this.#estimateContextTokens().tokens;
 	}
 	#enforceRewindBeforeYield(): boolean {
 		if (!this.#checkpointState || this.#pendingRewindReport) {
@@ -3616,7 +3638,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		if (!currentModel) return false;
 		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
 			return false;
-		const contextWindow = currentModel.contextWindow ?? 0;
+		const contextWindow = this.#resolveRuntimeContextWindow(currentModel);
 		if (contextWindow <= 0) return false;
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
 		if (!targetModel) return false;
@@ -3761,8 +3783,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
 		const generation = this.#promptGeneration;
-		let action: "context-full" | "handoff" =
-			compactionSettings.strategy === "handoff" && reason !== "overflow" ? "handoff" : "context-full";
+		let action: "context-full" | "handoff" = compactionSettings.strategy === "handoff" ? "handoff" : "context-full";
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 		// Properly abort and null existing controller before replacing
 		if (this.#autoCompactionAbortController) {
@@ -3771,8 +3792,8 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		this.#autoCompactionAbortController = new AbortController();
 
 		try {
-			if (compactionSettings.strategy === "handoff" && reason !== "overflow") {
-				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
+			if (action === "handoff") {
+				const handoffFocus = reason === "overflow" ? AUTO_HANDOFF_OVERFLOW_FOCUS : AUTO_HANDOFF_THRESHOLD_FOCUS;
 				const handoffResult = await this.handoff(handoffFocus, {
 					autoTriggered: true,
 					signal: this.#autoCompactionAbortController.signal,
@@ -3833,6 +3854,9 @@ Be thorough - include exact file paths, function names, error messages, and tech
 
 			const preparation = prepareCompaction(pathEntries, compactionSettings);
 			if (!preparation) {
+				if (reason === "overflow") {
+					throw new Error("Nothing to compact for overflow recovery");
+				}
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					action,
@@ -4138,7 +4162,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
 		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
+		const contextWindow = this.#resolveRuntimeContextWindow();
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
@@ -5084,7 +5108,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 			const msg = messages[i];
 			if (msg.role === "assistant") {
 				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.usage) {
+				if (assistantMsg.usage && assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "aborted") {
 					lastUsage = assistantMsg.usage;
 					lastUsageIndex = i;
 					break;

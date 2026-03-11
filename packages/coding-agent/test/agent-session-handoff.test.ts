@@ -180,7 +180,7 @@ describe("AgentSession handoff", () => {
 		expect(session.autoCompactionEnabled).toBe(true);
 	});
 
-	it("falls back to context-full maintenance for overflow when strategy is handoff", async () => {
+	it("uses handoff strategy for overflow-triggered auto maintenance", async () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("contextPromotion.enabled", false);
 
@@ -188,7 +188,7 @@ describe("AgentSession handoff", () => {
 		if (!model) {
 			throw new Error("Expected model to be set");
 		}
-		const handoffSpy = vi.spyOn(session, "handoff");
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "overflow handoff" });
 
 		const overflowAssistant: AssistantMessage = {
 			role: "assistant",
@@ -213,14 +213,72 @@ describe("AgentSession handoff", () => {
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowAssistant] });
 		await Bun.sleep(20);
 
-		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(handoffSpy).toHaveBeenCalledWith(expect.stringContaining("Overflow-triggered maintenance"), {
+			autoTriggered: true,
+			signal: expect.any(AbortSignal),
+		});
 		const startEvents = events.filter(event => event.type === "auto_compaction_start");
 		expect(startEvents).toHaveLength(1);
-		expect(startEvents[0]).toMatchObject({ type: "auto_compaction_start", reason: "overflow" });
+		expect(startEvents[0]).toMatchObject({ type: "auto_compaction_start", reason: "overflow", action: "handoff" });
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
 		expect(endEvents).toHaveLength(1);
-		expect(endEvents[0]).not.toMatchObject({
-			errorMessage: "Auto-handoff failed: no handoff document was generated",
+		expect(endEvents[0]).toMatchObject({
+			type: "auto_compaction_end",
+			action: "handoff",
+			aborted: false,
+			willRetry: false,
+		});
+	});
+
+	it("falls back to context-full and reports overflow recovery failure when handoff cannot produce output", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.keepRecentTokens", 1_000_000_000);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue(undefined);
+
+		const overflowAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "overflow" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "error",
+			errorMessage: "maximum context length is 200000 tokens, however you requested 200001 tokens",
+			usage: {
+				input: 120_000,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 120_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: overflowAssistant });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowAssistant] });
+		await Bun.sleep(20);
+
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		const startEvents = events.filter(event => event.type === "auto_compaction_start");
+		expect(startEvents).toHaveLength(1);
+		expect(startEvents[0]).toMatchObject({ type: "auto_compaction_start", reason: "overflow", action: "handoff" });
+		const endEvents = events.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]).toMatchObject({
+			type: "auto_compaction_end",
+			action: "context-full",
+			aborted: false,
+			willRetry: false,
+			errorMessage: expect.stringContaining(
+				"Context overflow recovery failed: Nothing to compact for overflow recovery",
+			),
 		});
 	});
 
