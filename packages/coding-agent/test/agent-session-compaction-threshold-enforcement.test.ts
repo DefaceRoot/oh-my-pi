@@ -167,4 +167,29 @@ describe("AgentSession compaction threshold enforcement", () => {
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 	});
+
+	it("marks threshold no-op maintenance distinctly from failure", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 50);
+		setContextWindow(4_000);
+		seedLargeUserContext(9_000);
+
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue(undefined);
+		await session.prompt("trigger threshold no-op");
+
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
+		const endEvents = events.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]).toMatchObject({
+			type: "auto_compaction_end",
+			action: "context-full",
+			aborted: false,
+			willRetry: false,
+			noOpReason: "nothing_to_compact",
+		});
+		expect(endEvents[0]).not.toMatchObject({
+			errorMessage: expect.any(String),
+		});
+	});
 });

@@ -369,9 +369,10 @@ describe("AgentSession handoff", () => {
 			action: "context-full",
 			aborted: false,
 			willRetry: false,
+			noOpReason: "nothing_to_compact",
 		});
 		expect(endEvents[0]).not.toMatchObject({
-			errorMessage: "Auto-handoff failed: no handoff document was generated",
+			errorMessage: expect.any(String),
 		});
 	});
 

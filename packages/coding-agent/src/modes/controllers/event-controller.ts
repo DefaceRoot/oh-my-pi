@@ -340,6 +340,8 @@ export class EventController {
 					});
 					this.ctx.statusLine.invalidate();
 					this.ctx.updateEditorTopBorder();
+				} else if (event.noOpReason === "nothing_to_compact") {
+					this.ctx.showStatus("Auto context-full maintenance skipped (nothing to compact)");
 				} else if (event.errorMessage) {
 					this.ctx.showWarning(event.errorMessage);
 				} else if (isHandoffAction) {

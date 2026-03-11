@@ -142,6 +142,7 @@ export type AgentSessionEvent =
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;
+			noOpReason?: "nothing_to_compact";
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
@@ -1436,6 +1437,7 @@ export class AgentSession {
 				aborted: event.aborted,
 				willRetry: event.willRetry,
 				errorMessage: event.errorMessage,
+				noOpReason: event.noOpReason,
 			});
 		} else if (event.type === "auto_retry_start") {
 			await this.#extensionRunner.emit({
@@ -3863,6 +3865,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 					result: undefined,
 					aborted: false,
 					willRetry: false,
+					noOpReason: "nothing_to_compact",
 				});
 				if (!willRetry && this.agent.hasQueuedMessages()) {
 					this.#scheduleAgentContinue({
