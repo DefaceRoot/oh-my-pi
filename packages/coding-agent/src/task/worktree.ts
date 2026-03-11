@@ -443,9 +443,23 @@ async function pathExists(targetPath: string): Promise<boolean> {
 }
 
 async function resolveUpstreamBranch(repoRoot: string, branch: string): Promise<string | undefined> {
-	const upstreamFormat = "%(upstream:short)";
 	const branchRef = `refs/heads/${branch}`;
-	const upstreamRaw = await $`git for-each-ref --format=${upstreamFormat} ${branchRef}`.cwd(repoRoot).quiet().text();
+	const child = Bun.spawn(["git", "for-each-ref", "--format=%(upstream:short)", branchRef], {
+		cwd: repoRoot,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	const [upstreamRaw, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	if (exitCode !== 0) {
+		const failure = stderr.trim();
+		throw new Error(failure || `Failed to resolve upstream branch for ${branch}.`);
+	}
 	const upstream = upstreamRaw.trim();
 	return upstream || undefined;
 }

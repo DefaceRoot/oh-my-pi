@@ -48,12 +48,21 @@ async function createCommittedRepo(): Promise<string> {
 	return repoDir;
 }
 
+async function createCommittedRepoWithUpstream(): Promise<{ repoDir: string; remoteDir: string }> {
+	const repoDir = await createCommittedRepo();
+	const remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-remote-"));
+	runGit(remoteDir, ["init", "--bare"]);
+	runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+	const currentBranch = runGit(repoDir, ["branch", "--show-current"]);
+	runGit(repoDir, ["push", "-u", "origin", currentBranch]);
+	return { repoDir, remoteDir };
+}
 
 function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 	const sessionPromptSpy = vi.fn(async () => undefined);
-	const showHookCustomSpy = vi.fn(async () => undefined);
+	const showHookCustomSpy = vi.fn(async () => undefined) as any;
 	const showHookConfirmSpy = vi.fn(async () => true);
-	const showWarningSpy = vi.fn();
+	const showWarningSpy = vi.fn((_message: string) => undefined);
 	const editor = {
 		setText: vi.fn(),
 		addToHistory: vi.fn(),
@@ -245,6 +254,36 @@ describe("worktree menu red behavior", () => {
 		}
 	});
 
+	test("enumerates repository worktrees with upstream metadata without parser warnings when opening cleanup modal", async () => {
+		const { repoDir, remoteDir } = await createCommittedRepoWithUpstream();
+		try {
+			const fixture = createCleanupWorkflowSubmitFixture({ currentCwd: repoDir });
+			fixture.showHookCustomSpy.mockResolvedValue({
+				selectionKeys: { toggle: "space", confirm: "enter" },
+				selectedWorktrees: [],
+				cancelled: true,
+			});
+
+			await fixture.submit("ignored");
+
+			const firstWarning = fixture.showWarningSpy.mock.calls[0]?.[0] as string | undefined;
+			expect(firstWarning).toBeUndefined();
+
+			const selectorFactory = fixture.showHookCustomSpy.mock.calls[0]?.[0] as
+				| ((...args: unknown[]) => { render: (width: number) => string[] })
+				| undefined;
+			expect(selectorFactory).toBeDefined();
+			if (!selectorFactory) return;
+
+			const selector = selectorFactory(undefined, undefined, undefined, () => undefined);
+			const renderedSelector = stripAnsi(selector.render(180).join("\n"));
+			expect(renderedSelector).toContain(repoDir);
+			expect(renderedSelector).not.toContain("No worktrees found.");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+			await fs.rm(remoteDir, { recursive: true, force: true });
+		}
+	});
 
 	test("uses multi-select cleanup contract for space toggle and enter confirm", async () => {
 		const fixture = createCleanupWorkflowSubmitFixture();
