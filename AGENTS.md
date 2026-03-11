@@ -477,6 +477,8 @@ When closing issues via commit:
 - GitHub CLI for issues/PRs
 - TUI interaction: use tmux
 
+- For bash commands that need user input or a real terminal (`sudo`, `ssh`, password prompts, interactive confirmation), set `pty: true`; PTY is opt-in, not automatic.
+
 ## Style
 
 - Keep answers short and concise

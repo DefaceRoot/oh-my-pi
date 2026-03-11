@@ -16,7 +16,7 @@ Never create a new worktree as part of planning by default.
 ## Persistent plan contract
 - Plan root: `.omp/sessions/plans/<plan-slug>/`
 - Plan file: `.omp/sessions/plans/<plan-slug>/plan.md`
-- All plan-related temporary notes, scratchpads, test repro files, and subagent artifacts: `.omp/sessions/plans/<plan-slug>/<nested_dir_for_all_subagents>/...` (for verifier runs, nested paths live under `artifacts/...`).
+- All plan-related temporary notes, scratchpads, test repro files, and subagent artifacts: `.omp/sessions/plans/<plan-slug>/<nested_dir_for_all_subagents>/…` (for verifier runs, nested paths live under `artifacts/…`).
 - Plan-verifier artifacts: `.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/`
 - Ownership: Only the plan agent updates `plan.md`; plan-verifier agents write artifacts only.
 - `local://PLAN.md` and repository-root scratch files are non-canonical for planned work.
