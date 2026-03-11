@@ -138,9 +138,11 @@ export function findActionButtonBounds(
 		const rendered = stripAnsi(renderedText);
 		if (!rendered.includes(button.label)) continue;
 		renderedCandidates.add(rendered);
-		const withoutTrailingSpace = rendered.trimEnd();
-		if (withoutTrailingSpace !== rendered && withoutTrailingSpace.includes(button.label)) {
-			renderedCandidates.add(withoutTrailingSpace);
+		for (const variant of [rendered.trimEnd(), rendered.trimStart(), rendered.trim()]) {
+			if (variant.length === 0 || variant === rendered) continue;
+			if (variant.includes(button.label)) {
+				renderedCandidates.add(variant);
+			}
 		}
 	}
 
@@ -168,4 +170,18 @@ export function findActionButtonBounds(
 	}
 
 	return bestMatch;
+}
+
+export function getActionButtonAtMouse(line: string, mouseCol: number): ActionButtonUi | undefined {
+	const plainLine = stripAnsi(line);
+	let bestHit: { button: ActionButtonUi; matchLength: number } | undefined;
+	for (const button of ACTION_BUTTONS) {
+		const bounds = findActionButtonBounds(plainLine, button, mouseCol);
+		if (!bounds) continue;
+		if (!bestHit || bounds.matchLength > bestHit.matchLength) {
+			bestHit = { button, matchLength: bounds.matchLength };
+		}
+	}
+
+	return bestHit?.button;
 }

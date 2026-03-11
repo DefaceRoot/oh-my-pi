@@ -40,10 +40,9 @@ import {
 	ACTION_BUTTONS,
 	type ActionButtonUi,
 	FORK_MERGE_BUTTON,
-	findActionButtonBounds,
+	getActionButtonAtMouse,
 	hasSameVisibleText,
 	LAZYGIT_BUTTON,
-	stripAnsi,
 	WORKTREE_MENU_BUTTON,
 } from "./action-buttons";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -1156,18 +1155,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private getActionButtonUnderMouse(event: TerminalMouseEvent): ActionButtonUi | undefined {
 		const rawLine = event.lineText ?? "";
-		const line = stripAnsi(rawLine);
-
-		let bestHit: { button: ActionButtonUi; matchLength: number } | undefined;
-		for (const button of ACTION_BUTTONS) {
-			const bounds = findActionButtonBounds(line, button, event.x);
-			if (!bounds) continue;
-			if (!bestHit || bounds.matchLength > bestHit.matchLength) {
-				bestHit = { button, matchLength: bounds.matchLength };
-			}
-		}
-
-		return bestHit?.button;
+		return getActionButtonAtMouse(rawLine, event.x);
 	}
 
 	private shouldUpdateActionButtonStatus(button: ActionButtonUi): boolean {
