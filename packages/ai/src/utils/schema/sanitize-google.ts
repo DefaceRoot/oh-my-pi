@@ -7,6 +7,7 @@ interface SanitizeSchemaOptions {
 	normalizeTypeArrayToNullable: boolean;
 	stripNullableKeyword: boolean;
 	unsupportedFields: ReadonlySet<string>;
+	transformBooleanSchemas: boolean;
 	seen: WeakSet<object>;
 }
 
@@ -39,13 +40,16 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
 		options.seen.add(value);
 		return value.map(entry => sanitizeSchemaImpl(entry, options));
 	}
-	if (value === true) {
-		// Boolean schema `true` means "accept any value" in JSON Schema 2020-12,
-		// but Google's Schema proto requires an object with a type field.
-		// Convert to a generic object schema.
-		return { type: "object", properties: {} };
-	}
-	if (value === false) {
+	if (value === true || value === false) {
+		if (!options.transformBooleanSchemas) {
+			return value;
+		}
+		if (value) {
+			// Boolean schema `true` means "accept any value" in JSON Schema 2020-12,
+			// but Google's Schema proto requires an object with a type field.
+			// Convert to a generic object schema.
+			return { type: "object", properties: {} };
+		}
 		// Boolean schema `false` means "reject everything".
 		// Google's API doesn't support this; use an empty enum to reject all values.
 		return { type: "string", enum: [] };
@@ -168,6 +172,7 @@ export function sanitizeSchemaForGoogle(value: unknown): unknown {
 		normalizeTypeArrayToNullable: true,
 		stripNullableKeyword: false,
 		unsupportedFields: UNSUPPORTED_SCHEMA_FIELDS,
+		transformBooleanSchemas: true,
 		seen: new WeakSet(),
 	});
 }
@@ -187,6 +192,7 @@ export function sanitizeSchemaForCCA(value: unknown): unknown {
 		normalizeTypeArrayToNullable: true,
 		stripNullableKeyword: true,
 		unsupportedFields: UNSUPPORTED_SCHEMA_FIELDS,
+		transformBooleanSchemas: true,
 		seen: new WeakSet(),
 	});
 }
@@ -218,6 +224,7 @@ export function sanitizeSchemaForMCP(value: unknown): unknown {
 		normalizeTypeArrayToNullable: false,
 		stripNullableKeyword: true,
 		unsupportedFields: MCP_UNSUPPORTED_SCHEMA_FIELDS,
+		transformBooleanSchemas: false,
 		seen: new WeakSet(),
 	});
 }
