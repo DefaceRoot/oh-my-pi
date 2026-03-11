@@ -4605,6 +4605,21 @@ const notifyWorktreeProgress = (
 			const taskInput = input as Record<string, unknown>;
 			const taskAgent =
 				typeof taskInput.agent === "string" ? taskInput.agent : undefined;
+			const isImplementationQualityLoopAgent =
+				taskAgent === "lint" ||
+				taskAgent === "code-reviewer" ||
+				taskAgent === "commit";
+			if (
+				activeImplementationWorkerGate &&
+				isImplementationQualityLoopAgent &&
+				taskInput.isolated === true
+			) {
+				return {
+					block: true,
+					reason:
+						"Implementation quality-loop subagents must reuse the current workspace. Do not set `isolated: true` for lint, code-reviewer, or commit handoffs.",
+				};
+			}
 			if (taskAgent === "verifier") {
 				const VERIFIER_DEFAULT_SKILLS = ["qa-test-planner"];
 				const existingSkills = Array.isArray(taskInput.skills)
