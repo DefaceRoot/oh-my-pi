@@ -38,11 +38,16 @@ function expectedRoleManagedTools(role: MainRole): string[] {
 	}
 	const exitPlanModeIndex = expected.indexOf("exit_plan_mode");
 	if (exitPlanModeIndex >= 0) expected.splice(exitPlanModeIndex, 1);
+	const submitResultIndex = expected.indexOf("submit_result");
+	if (submitResultIndex >= 0) expected.splice(submitResultIndex, 1);
 	return expected.sort();
 }
 
 function toManagedToolSet(names: string[]): string[] {
-	return names.map(normalizeManagedToolName).filter(name => MANAGED_TOOL_NAMES.has(name)).sort();
+	return names
+		.map(normalizeManagedToolName)
+		.filter(name => MANAGED_TOOL_NAMES.has(name))
+		.sort();
 }
 
 function createModel(id: string, name: string): Model {
@@ -153,7 +158,6 @@ describe("tool filtering (Phase 2 RED)", () => {
 		expect(toManagedToolSet(session.getActiveToolNames())).toContain("write");
 	});
 
-
 	it("rebuilds active tool allowlist when mode switches", async () => {
 		await Settings.init({
 			inMemory: true,
@@ -199,7 +203,13 @@ describe("tool filtering (Phase 2 RED)", () => {
 		const sessionManager = {
 			getLastModelChangeRole: () => lastRole,
 			appendModelChange: (_modelRef: string, role: string) => {
-				if (role === "default" || role === "ask" || role === "orchestrator" || role === "plan" || role === "custom") {
+				if (
+					role === "default" ||
+					role === "ask" ||
+					role === "orchestrator" ||
+					role === "plan" ||
+					role === "custom"
+				) {
 					lastRole = role;
 				}
 			},

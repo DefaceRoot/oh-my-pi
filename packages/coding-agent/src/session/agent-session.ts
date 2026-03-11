@@ -455,6 +455,7 @@ export class AgentSession {
 			});
 		});
 		this.#syncTodoPhasesFromBranch();
+		this.#enforceServiceTierForCurrentModel(false);
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -1569,6 +1570,25 @@ export class AgentSession {
 		return this.agent.serviceTier;
 	}
 
+	#normalizeServiceTierForModel(
+		serviceTier: ServiceTier | undefined,
+		model: Model | undefined = this.model,
+	): ServiceTier | undefined {
+		if (serviceTier === "priority" && model?.provider === "openai-codex") {
+			return undefined;
+		}
+		return serviceTier;
+	}
+
+	#enforceServiceTierForCurrentModel(persist: boolean): boolean {
+		const normalized = this.#normalizeServiceTierForModel(this.serviceTier);
+		if (this.serviceTier === normalized) return false;
+		this.agent.serviceTier = normalized;
+		if (persist) {
+			this.sessionManager.appendServiceTierChange(normalized ?? null);
+		}
+		return true;
+	}
 	/** Whether agent is currently streaming a response */
 	get isStreaming(): boolean {
 		return this.agent.state.isStreaming || this.#promptInFlight;
@@ -2703,13 +2723,13 @@ export class AgentSession {
 		}
 
 		this.#setModelWithProviderSessionReset(model);
-		this.sessionManager.appendModelChange(`${model.provider}/${model.id}`, "temporary");
+		const requestedRole = role && this.#isMainRole(role) ? role : undefined;
+		const inferredRole = requestedRole ?? this.#resolveMainRoleForModel(model);
+		this.sessionManager.appendModelChange(`${model.provider}/${model.id}`, inferredRole ?? "temporary");
 		this.settings.getStorage()?.recordModelUsage(`${model.provider}/${model.id}`);
 
 		// Re-apply the current thinking level for the newly selected model
 		this.setThinkingLevel(this.thinkingLevel);
-		const requestedRole = role && this.#isMainRole(role) ? role : undefined;
-		const inferredRole = requestedRole ?? this.#resolveMainRoleForModel(model);
 		if (inferredRole) {
 			await this.#applyRoleToolAllowlist(inferredRole);
 		}
@@ -2924,20 +2944,21 @@ export class AgentSession {
 		return this.serviceTier === "priority";
 	}
 
-	setServiceTier(serviceTier: ServiceTier | undefined): void {
-		if (this.serviceTier === serviceTier) return;
-		this.agent.serviceTier = serviceTier;
-		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
+	setServiceTier(serviceTier: ServiceTier | undefined): boolean {
+		const normalized = this.#normalizeServiceTierForModel(serviceTier);
+		if (this.serviceTier !== normalized) {
+			this.agent.serviceTier = normalized;
+			this.sessionManager.appendServiceTierChange(normalized ?? null);
+		}
+		return normalized === "priority";
 	}
 
-	setFastMode(enabled: boolean): void {
-		this.setServiceTier(enabled ? "priority" : undefined);
+	setFastMode(enabled: boolean): boolean {
+		return this.setServiceTier(enabled ? "priority" : undefined);
 	}
 
 	toggleFastMode(): boolean {
-		const enabled = !this.isFastModeEnabled();
-		this.setFastMode(enabled);
-		return enabled;
+		return this.setFastMode(!this.isFastModeEnabled());
 	}
 
 	/**
@@ -3675,12 +3696,13 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		return candidate;
 	}
 
-	#setModelWithProviderSessionReset(model: Model): void {
+	#setModelWithProviderSessionReset(model: Model, persistServiceTierAdjustment = true): void {
 		const currentModel = this.model;
 		if (currentModel) {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(this.#applySessionModelOverrides(model));
+		this.#enforceServiceTierForCurrentModel(persistServiceTierAdjustment);
 	}
 
 	#closeCodexProviderSessionsForHistoryRewrite(): void {
@@ -4674,7 +4696,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 				const availableModels = this.#modelRegistry.getAvailable();
 				const match = availableModels.find(m => m.provider === provider && m.id === modelId);
 				if (match) {
-					this.#setModelWithProviderSessionReset(match);
+					this.#setModelWithProviderSessionReset(match, false);
 				}
 			}
 		}
@@ -4693,7 +4715,11 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		}
 
 		if (hasServiceTierEntry) {
-			this.agent.serviceTier = sessionContext.serviceTier;
+			const restoredServiceTier = this.#normalizeServiceTierForModel(sessionContext.serviceTier);
+			this.agent.serviceTier = restoredServiceTier;
+			if (restoredServiceTier !== sessionContext.serviceTier) {
+				this.sessionManager.appendServiceTierChange(restoredServiceTier ?? null);
+			}
 		} else {
 			this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
 		}

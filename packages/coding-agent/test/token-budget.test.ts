@@ -21,9 +21,9 @@ type MainRole = "default" | "orchestrator" | "plan" | "ask";
 
 const ROLE_TOOL_COUNT_TARGETS: Record<MainRole, number> = {
 	default: 22,
-	orchestrator: 16,
+	orchestrator: 6,
 	plan: 20,
-	ask: 11,
+	ask: 7,
 };
 
 const TEST_SKILLS: Skill[] = [
@@ -119,6 +119,8 @@ function expectedStartupManagedToolCount(role: MainRole): number {
 	}
 	const exitPlanModeIndex = expected.indexOf("exit_plan_mode");
 	if (exitPlanModeIndex >= 0) expected.splice(exitPlanModeIndex, 1);
+	const submitResultIndex = expected.indexOf("submit_result");
+	if (submitResultIndex >= 0) expected.splice(submitResultIndex, 1);
 	return expected.length;
 }
 

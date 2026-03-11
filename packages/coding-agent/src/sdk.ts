@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import {
 	Agent,
 	type AgentEvent,
@@ -7,7 +8,6 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { Message, Model } from "@oh-my-pi/pi-ai";
-import * as path from "node:path";
 
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -85,9 +85,9 @@ import {
 	BashTool,
 	BUILTIN_TOOLS,
 	createTools,
-	filterToolNamesByRoleAllowlist,
 	EditTool,
 	FindTool,
+	filterToolNamesByRoleAllowlist,
 	GrepTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
@@ -479,6 +479,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 					aborted: event.aborted,
 					willRetry: event.willRetry,
 					errorMessage: event.errorMessage,
+					noOpReason: event.noOpReason,
 				},
 				ctx,
 			),
@@ -645,6 +646,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const getRoleToolAllowlist = (role: string | undefined): string[] => {
 		return rolesConfig.getToolsForRole(normalizeMainRole(role));
 	};
+	const getRoleMcpAllowlist = (role: string | undefined): string[] => {
+		return rolesConfig.getMcpForRole(normalizeMainRole(role));
+	};
 	const getLoadedToolServerName = (loaded: { serverName?: string; tool: CustomTool }): string | undefined => {
 		if (loaded.serverName && loaded.serverName.length > 0) return loaded.serverName;
 		const mcpTool = loaded.tool as CustomTool & { mcpServerName?: string };
@@ -652,10 +656,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? mcpTool.mcpServerName
 			: undefined;
 	};
+	const getMcpServerNameForTool = (tool: AgentTool): string | undefined => {
+		const mcpTool = tool as AgentTool & { mcpServerName?: string };
+		return typeof mcpTool.mcpServerName === "string" && mcpTool.mcpServerName.length > 0
+			? mcpTool.mcpServerName
+			: undefined;
+	};
+	const managedRuntimeAliases = new Map<string, string>([["puppeteer", "browser"]]);
+	const toManagedRoleToolName = (toolName: string): string | undefined => {
+		if (toolName in BUILTIN_TOOLS || toolName in HIDDEN_TOOLS) {
+			return toolName;
+		}
+		return managedRuntimeAliases.get(toolName);
+	};
 
 	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
-	const startupRoleMcpAllowlist = rolesConfig.getMcpForRole(startupRole);
+	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
 	const startupRoleMcpServerSet = new Set(startupRoleMcpAllowlist);
 
 	const modelApiKeyAvailability = new Map<string, boolean>();
@@ -937,8 +954,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const requestedBuiltinToolNames =
-		options.toolNames && options.toolNames.length > 0 ? options.toolNames : undefined;
+	const requestedBuiltinToolNames = options.toolNames && options.toolNames.length > 0 ? options.toolNames : undefined;
 	const builtinTools = await logger.timeAsync("createAllTools", () =>
 		createTools(
 			toolSession,
@@ -1226,8 +1242,34 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const resolveToolNamesForRole = (role: string, availableToolNames: string[]): string[] => {
-		const filtered = filterToolNamesByRoleAllowlist(availableToolNames, settings, getRoleToolAllowlist(role));
-		const selectedTools = filtered.map(name => toolRegistry.get(name)).filter((tool): tool is AgentTool => tool !== undefined);
+		const normalizedRole = normalizeMainRole(role);
+		const managedRoleFiltered = filterToolNamesByRoleAllowlist(
+			availableToolNames,
+			settings,
+			getRoleToolAllowlist(normalizedRole),
+		);
+		const managedRoleSet = new Set(managedRoleFiltered);
+		const allowedMcpServers = new Set(getRoleMcpAllowlist(normalizedRole));
+		const filtered = availableToolNames.filter(name => {
+			const tool = toolRegistry.get(name);
+			if (!tool) return false;
+
+			const managedName = toManagedRoleToolName(name);
+			if (managedName) {
+				if (managedName === "exit_plan_mode") return false;
+				return managedRoleSet.has(name);
+			}
+
+			const mcpServerName = getMcpServerNameForTool(tool);
+			if (mcpServerName) {
+				return allowedMcpServers.has(mcpServerName);
+			}
+
+			return false;
+		});
+		const selectedTools = filtered
+			.map(name => toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined);
 		if (selectedTools.some(tool => tool.deferrable === true)) {
 			return filtered;
 		}
@@ -1248,9 +1290,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
 		toolContextStore.setToolNames(toolNames);
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		const currentMode = normalizeMainRole(sessionManager.getLastModelChangeRole());
+		const currentRoleMcpAllowlist = getRoleMcpAllowlist(currentMode);
 
 		// Build combined append prompt: memory instructions + MCP server instructions
-		const serverInstructions = mcpManager?.getServerInstructions(startupRoleMcpAllowlist);
+		const serverInstructions = mcpManager?.getServerInstructions(currentRoleMcpAllowlist);
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		if (serverInstructions && serverInstructions.size > 0) {
 			const MAX_INSTRUCTIONS_LENGTH = 4000;
@@ -1268,7 +1312,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			appendPrompt = parts.join("\n\n");
 		}
-		const currentMode = normalizeMainRole(sessionManager.getLastModelChangeRole());
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
 			skills,

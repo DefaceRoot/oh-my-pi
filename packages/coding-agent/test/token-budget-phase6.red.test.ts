@@ -2,25 +2,25 @@ import { afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Type } from "@sinclair/typebox";
-import type { CustomTool, LoadedCustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { DEFAULT_ROLES_CONFIG } from "@oh-my-pi/pi-coding-agent/config/roles-config";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool, LoadedCustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@oh-my-pi/pi-coding-agent/tools";
 import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Type } from "@sinclair/typebox";
 import { measureStartupTokenBudgets } from "../../../scripts/measure-startup-tokens";
 
 type MainRole = "default" | "orchestrator" | "plan" | "ask";
 
 const ROLE_TOOL_COUNT_TARGETS: Record<MainRole, number> = {
 	default: 22,
-	orchestrator: 16,
+	orchestrator: 6,
 	plan: 20,
-	ask: 11,
+	ask: 7,
 };
 
 const ROLE_TOKEN_BUDGET_TARGETS: Record<MainRole, number> = {
@@ -112,12 +112,12 @@ function createMockCustomTool(name: string): CustomTool {
 		label: name,
 		description: `${name} custom tool`,
 		parameters: Type.Object({}),
-		renderCall: () => "",
-		renderResult: () => "",
+		renderCall: () => null as any,
+		renderResult: () => null as any,
 		execute: async () => ({
 			content: [{ type: "text" as const, text: `${name} ok` }],
 		}),
-	};
+	} as any;
 }
 
 function estimateTextTokens(text: string): number {
@@ -141,6 +141,8 @@ function expectedStartupManagedToolCount(role: MainRole): number {
 	}
 	const exitPlanModeIndex = expected.indexOf("exit_plan_mode");
 	if (exitPlanModeIndex >= 0) expected.splice(exitPlanModeIndex, 1);
+	const submitResultIndex = expected.indexOf("submit_result");
+	if (submitResultIndex >= 0) expected.splice(submitResultIndex, 1);
 	return expected.length;
 }
 
@@ -292,7 +294,9 @@ describe("Phase 6 RED: per-mode startup integration contracts", () => {
 		const defaultOnlyActiveTool = session
 			.getActiveToolNames()
 			.find(
-				name => DEFAULT_ROLES_CONFIG.roles.default.tools.includes(name) && !DEFAULT_ROLES_CONFIG.roles.ask.tools.includes(name),
+				name =>
+					DEFAULT_ROLES_CONFIG.roles.default.tools.includes(name) &&
+					!DEFAULT_ROLES_CONFIG.roles.ask.tools.includes(name),
 			);
 		expect(defaultOnlyActiveTool).toBeDefined();
 
@@ -307,7 +311,6 @@ describe("Phase 6 RED: per-mode startup integration contracts", () => {
 		}
 		expect(session.getActiveToolNames()).not.toContain(defaultOnlyActiveTool);
 	});
-
 
 	it("omits excluded tool guidance and excluded skills from each rendered mode prompt", async () => {
 		const prompts = {
@@ -385,7 +388,6 @@ describe("Phase 6 RED: startup token benchmark script contract", () => {
 			}
 		}
 	});
-
 
 	it("requires a startup token measurement script that reports per-mode totals and budget targets", async () => {
 		const repoRoot = path.resolve(import.meta.dir, "../../..");
