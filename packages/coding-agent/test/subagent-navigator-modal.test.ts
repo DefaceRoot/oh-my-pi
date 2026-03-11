@@ -6,16 +6,26 @@ import type {
 	SubagentViewGroup,
 	SubagentViewRef,
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 function renderText(modal: SubagentNavigatorModal, width = 120): string {
 	return Bun.stripANSI(modal.render(width).join("\n"));
 }
 
 function renderLines(modal: SubagentNavigatorModal, width = 120): string[] {
-	return modal.render(width).map(l => Bun.stripANSI(l));
+	return modal.render(width).map(line => Bun.stripANSI(line));
+}
+
+function renderRawLines(modal: SubagentNavigatorModal, width = 120): string[] {
+	return modal.render(width);
+}
+
+function typeFilterQuery(modal: SubagentNavigatorModal, query: string): string {
+	modal.handleInput("/");
+	for (const ch of query) {
+		modal.handleInput(ch);
+	}
+	return renderText(modal, 120);
 }
 
 function makeRef(id: string, overrides?: Partial<SubagentViewRef>): SubagentViewRef {
@@ -25,16 +35,9 @@ function makeRef(id: string, overrides?: Partial<SubagentViewRef>): SubagentView
 		model: "claude-sonnet-4-20250514",
 		description: `Task for ${id}`,
 		tokens: 12_000,
-		tokenCapacity: 200_000,
 		status: "running" as SubagentStatus,
 		lastUpdatedMs: Date.now() - 5_000,
-		thinkingLevel: "medium",
-		startedAt: Date.now() - 60_000,
-		elapsedMs: 60_000,
-		sessionId: "sess-001",
-		parentAgentName: "orchestrator",
-		depth: 1,
-		assignmentPreview: "Do some work",
+		contextPreview: `Context for ${id}`,
 		...overrides,
 	};
 }
@@ -43,13 +46,13 @@ function makeGroup(rootId: string, refs: SubagentViewRef[]): SubagentViewGroup {
 	return {
 		rootId,
 		refs,
-		lastUpdatedMs: Math.max(...refs.map(r => r.lastUpdatedMs ?? 0)),
+		lastUpdatedMs: refs.length > 0 ? Math.max(...refs.map(r => r.lastUpdatedMs ?? 0)) : Date.now(),
 	};
 }
 
 function createModal(
 	groups: SubagentViewGroup[],
-	selection: SubagentNavigatorSelection = { groupIndex: 0, nestedIndex: -1 },
+	selection?: SubagentNavigatorSelection,
 	overrides?: {
 		onSelectionChange?: (s: SubagentNavigatorSelection) => void;
 		onOpenSelection?: (s: SubagentNavigatorSelection) => void;
@@ -86,621 +89,433 @@ function multiGroupSetup(): { groups: SubagentViewGroup[]; refs: SubagentViewRef
 	return { groups, refs: [...group1Refs, ...group2Refs] };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
 describe("SubagentNavigatorModal", () => {
 	beforeAll(() => {
 		initTheme();
 	});
 
-	// ═══ Layout ═══
-
-	describe("split-pane layout", () => {
-		test("renders split pane at width >= 80", () => {
+	describe("quick navigator layout", () => {
+		test("renders quick-nav columns with numbering and last-active metadata", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
-			const text = renderText(modal, 100);
-			// Title bar present
+			const text = renderText(modal, 120);
+
 			expect(text).toContain("Subagent Flight Deck");
-			// List columns present
-			expect(text).toContain("Role");
+			expect(text).toContain("#");
+			expect(text).toContain("Title");
 			expect(text).toContain("Status");
+			expect(text).toContain("Role");
+			expect(text).toContain("Model");
+			expect(text).toContain("Last Active");
 			expect(text).toContain("Tokens");
-			// Detail pane content for selected agent
-			expect(text).toContain("Agent: explore");
+			expect(text).not.toContain("Agent:");
+			expect(text).not.toContain("Thinking:");
 		});
 
-		test("renders detail pane content for selected agent", () => {
+		test("renders compact title chrome in top border", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
-			const text = renderText(modal, 120);
-			// Detail pane shows model info for selected (first) agent
-			expect(text).toContain("claude-sonnet-4-20250514");
+			const lines = renderLines(modal, 100);
+
+			expect(lines[0]).toContain("Subagent Flight Deck 1/3 active");
+			expect(lines[0]).not.toContain(" Subagent Flight Deck (");
 		});
 
-		test("title bar contains active count", () => {
+		test("applies dark overlay surface to entire modal", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
-			const text = renderText(modal, 120);
-			// 1 running agent out of 3 total
-			expect(text).toContain("1/3 active");
+			const rawLines = renderRawLines(modal, 100);
+
+			expect(rawLines.length).toBeGreaterThan(3);
+			expect(rawLines.every(line => line.includes("\x1b[48;"))).toBe(true);
+		});
+
+		test("uses stronger chrome with framed borders and separators", () => {
+			const { groups } = singleGroupSetup();
+			const modal = createModal(groups);
+			const lines = renderLines(modal, 100);
+
+			expect(lines[0]).toContain("┌");
+			expect(lines[0]).toContain("┐");
+			expect(lines[lines.length - 1]).toContain("└");
+			expect(lines[lines.length - 1]).toContain("┘");
+			expect(lines.some(line => /^│.*│$/.test(line))).toBe(true);
 		});
 	});
 
-	describe("single-pane fallback", () => {
-		test("renders list only when width < 80", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal, 60);
-			// List is present
-			expect(text).toContain("explore");
-			expect(text).toContain("research");
-			// Detail pane metadata should NOT appear (no split)
-			expect(text).not.toContain("Agent: explore");
-		});
-
-		test("list columns adapt to narrow width", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const lines = renderLines(modal, 50);
-			// Should still render without crashing
-			expect(lines.length).toBeGreaterThan(3);
-		});
-	});
-
-	// ═══ Status rendering ═══
-
-	describe("status glyphs and colors", () => {
-		test("renders status glyphs for all statuses", () => {
-			const statuses: Array<{ status: SubagentStatus; glyph: string; label: string }> = [
-				{ status: "running", glyph: "●", label: "RUNNING" },
-				{ status: "completed", glyph: "◉", label: "DONE" },
-				{ status: "failed", glyph: "✗", label: "FAILED" },
-				{ status: "pending", glyph: "◌", label: "PENDING" },
-				{ status: "cancelled", glyph: "⊘", label: "CANCEL" },
+	describe("list rows", () => {
+		test("renders index, title, status, role, model, last-active, and tokens", () => {
+			const now = Date.now();
+			const refs = [
+				makeRef("explore-001", {
+					description: "Build runbook dashboard",
+					agent: "explore",
+					model: "claude-sonnet-4-20250514",
+					status: "running",
+					lastUpdatedMs: now - 12_000,
+					tokens: 12_400,
+				}),
 			];
-			for (const { status, glyph, label } of statuses) {
-				const refs = [makeRef(`agent-${status}`, { status })];
-				const groups = [makeGroup(`agent-${status}`, refs)];
-				const modal = createModal(groups);
-				const text = renderText(modal);
-				expect(text).toContain(glyph);
-				expect(text).toContain(label);
-			}
-		});
-	});
+			const modal = createModal([makeGroup("explore-001", refs)]);
+			const lines = renderLines(modal, 120);
+			const text = lines.join("\n");
 
-	// ═══ List pane columns ═══
-
-	describe("list pane columns", () => {
-		test("renders ordinal numbers", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("01");
-			expect(text).toContain("02");
-			expect(text).toContain("03");
-		});
-
-		test("renders role names", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal);
+			expect(text).toContain("Build runbook dashboard");
+			expect(text).toContain("RUNNING");
 			expect(text).toContain("explore");
-			expect(text).toContain("research");
-			expect(text).toContain("lint");
+			expect(text).toContain("claude-sonnet-4-202505");
+			expect(text).toContain("12s ago");
+			expect(text).toContain("12.4k");
+			expect(lines.some(line => /│\s*1\s*│\s*Build runbook dashboard\s*│\s*●\s+RUNNING\s*│\s*explore/.test(line))).toBe(true);
 		});
 
-		test("renders token counts with formatting", () => {
-			const refs = [makeRef("agent-1", { tokens: 12_400 })];
-			const groups = [makeGroup("agent-1", refs)];
+		test("renders color-coded statuses for root and nested rows", () => {
+			const refs = [
+				makeRef("agent-running", { status: "running" }),
+				makeRef("agent-complete", { status: "completed", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-failed", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-pending", { status: "pending", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-cancelled", { status: "cancelled", parentId: "agent-running", rootId: "agent-running" }),
+			];
+			const modal = createModal([makeGroup("agent-running", refs)]);
+			const rawText = renderRawLines(modal, 140).join("\n");
+
+			expect(rawText).toContain(`${theme.getFgAnsi("success")}RUNNING`);
+			expect(rawText).toContain(`${theme.getFgAnsi("accent")}DONE`);
+			expect(rawText).toContain(`${theme.getFgAnsi("error")}FAILED`);
+			expect(rawText).toContain(`${theme.getFgAnsi("warning")}PENDING`);
+			expect(rawText).toContain(`${theme.getFgAnsi("muted")}CANCELED`);
+		});
+
+
+		test("renders missing last-active values as --- without breaking alignment", () => {
+			const refs = [makeRef("agent-1", { lastUpdatedMs: undefined, tokens: 42 })];
+			const modal = createModal([makeGroup("agent-1", refs)]);
+			const lines = renderLines(modal, 120);
+			expect(lines.some(line => /│\s*---\s*│\s*42\s*│?$/.test(line))).toBe(true);
+		});
+
+		test("renders --- when group recency is ordinal without real timestamps", () => {
+			const refs = [makeRef("agent-1", { lastUpdatedMs: undefined, lastSeenOrder: 321, tokens: 42 })];
+			const groups: SubagentViewGroup[] = [{ rootId: "agent-1", refs, lastUpdatedMs: 321 }];
 			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("12.4k");
+			const lines = renderLines(modal, 120);
+
+			expect(lines.some(line => /│\s*---\s*│\s*42\s*│?$/.test(line))).toBe(true);
+		});
+
+		test("title uses description first, then context preview, then id fallback", () => {
+			const refs = [
+				makeRef("agent-explicit", { description: "Authoritative title", contextPreview: "Fallback context" }),
+				makeRef("agent-context-only", { description: undefined, contextPreview: "Context title" }),
+				makeRef("agent-fallback-title", { description: undefined, contextPreview: undefined }),
+			];
+			const modal = createModal([makeGroup("agent-explicit", refs)]);
+			const text = renderText(modal, 120);
+
+			expect(text).toContain("Authoritative title");
+			expect(text).toContain("Context title");
+			expect(text).toContain("fallback title");
 		});
 
 		test("renders missing tokens as ---", () => {
 			const refs = [makeRef("agent-1", { tokens: undefined })];
-			const groups = [makeGroup("agent-1", refs)];
-			const modal = createModal(groups);
-			const text = renderText(modal);
+			const modal = createModal([makeGroup("agent-1", refs)]);
+			const text = renderText(modal, 120);
 			expect(text).toContain("---");
 		});
 
-		test("nested refs show » prefix", () => {
+		test("keeps rows within target width for long titles and models", () => {
+			const refs = [
+				makeRef("long-1", {
+					description:
+						"This is a very long title that should be truncated in the quick navigator row to preserve readability",
+					model: "anthropic/claude-sonnet-4-very-long-model-string-that-should-not-break-column-layout",
+				}),
+			];
+			const modal = createModal([makeGroup("long-1", refs)]);
+			const lines = renderLines(modal, 72);
+			expect(lines.every(line => line.length <= 72)).toBe(true);
+		});
+
+		test("shows group separators and nested row marker", () => {
 			const { groups } = multiGroupSetup();
 			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("»");
+			const text = renderText(modal, 120);
+			const lines = renderLines(modal, 120);
+			const separators = lines.filter(line => /^│─+│$/.test(line));
+
+			expect(text).toContain("↳ ");
+			expect(separators.length).toBeGreaterThanOrEqual(2);
 		});
 	});
 
-	// ═══ Selection highlighting ═══
+		test("renders a status summary footer for visible parent and nested agents", () => {
+			const refs = [
+				makeRef("agent-running", { status: "running" }),
+				makeRef("agent-complete", { status: "completed", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-failed-a", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-failed-b", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-pending", { status: "pending", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("agent-cancelled", { status: "cancelled", parentId: "agent-running", rootId: "agent-running" }),
+			];
+			const modal = createModal([makeGroup("agent-running", refs)]);
+			const text = renderText(modal, 140);
 
-	describe("selection highlighting", () => {
-		test("first item is selected by default", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const sel = modal.getSelection();
-			expect(sel).toEqual({ groupIndex: 0, nestedIndex: -1 });
+			expect(text).toContain("1 running");
+			expect(text).toContain("1 done");
+			expect(text).toContain("2 failed");
+			expect(text).toContain("1 pending");
+			expect(text).toContain("1 canceled");
 		});
 
-		test("initial selection is respected", () => {
-			const { groups } = multiGroupSetup();
-			const modal = createModal(groups, { groupIndex: 1, nestedIndex: -1 });
-			const sel = modal.getSelection();
-			expect(sel).toEqual({ groupIndex: 1, nestedIndex: -1 });
+
+	describe("initial selection", () => {
+		test("defaults to the most recently active entry when no selection is provided", () => {
+			const now = Date.now();
+			const refs = [
+				makeRef("root-old", { status: "completed", lastUpdatedMs: now - 120_000 }),
+				makeRef("child-new", {
+					status: "running",
+					parentId: "root-old",
+					rootId: "root-old",
+					lastUpdatedMs: now - 2_000,
+				}),
+			];
+			const modal = createModal([makeGroup("root-old", refs)]);
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
+		});
+
+		test("uses most recently updated entry even when nothing is running", () => {
+			const now = Date.now();
+			const refs = [
+				makeRef("root-old", { status: "completed", lastUpdatedMs: now - 200_000 }),
+				makeRef("child-new", {
+					status: "failed",
+					parentId: "root-old",
+					rootId: "root-old",
+					lastUpdatedMs: now - 3_000,
+				}),
+			];
+			const modal = createModal([makeGroup("root-old", refs)]);
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
+		});
+
+		test("uses lastSeenOrder fallback for default latest-active selection", () => {
+			const refs = [
+				makeRef("root-old", { status: "completed", lastUpdatedMs: undefined, lastSeenOrder: 1 }),
+				makeRef("child-new", {
+					status: "completed",
+					parentId: "root-old",
+					rootId: "root-old",
+					lastUpdatedMs: undefined,
+					lastSeenOrder: 9,
+				}),
+			];
+			const groups: SubagentViewGroup[] = [{ rootId: "root-old", refs, lastUpdatedMs: 9 }];
+			const modal = createModal(groups);
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
 		});
 	});
 
-	// ═══ Group separators ═══
-
-	describe("group separators", () => {
-		test("renders separator between groups", () => {
-			const { groups } = multiGroupSetup();
-			const modal = createModal(groups);
-			const lines = renderLines(modal);
-			// Count horizontal rule lines (─) in the body
-			const separatorLines = lines.filter(
-				l => l.match(/^─+$/) || (l.includes("─") && !l.includes("Role") && !l.includes("Subagent")),
-			);
-			// There should be at least the column header separator + group separator
-			expect(separatorLines.length).toBeGreaterThanOrEqual(2);
-		});
-	});
-
-	// ═══ Keyboard navigation ═══
-
-	describe("keyboard navigation — list pane", () => {
-		test("down arrow moves selection forward", () => {
-			const { groups } = singleGroupSetup();
-			const onSelectionChange = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onSelectionChange });
-
-			modal.handleInput("\x1b[B"); // down arrow
-			const sel = modal.getSelection();
-			// Should have moved to index 1 (second item in the flat list)
-			expect(sel.groupIndex).toBe(0);
-			expect(sel.nestedIndex).toBe(0); // first nested
-		});
-
-		test("j key moves selection forward", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("j");
-			const sel = modal.getSelection();
-			expect(sel.nestedIndex).toBe(0);
-		});
-
-		test("up arrow moves selection backward", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: 0 });
-			modal.handleInput("\x1b[A"); // up arrow
-			const sel = modal.getSelection();
-			expect(sel.nestedIndex).toBe(-1); // back to root
-		});
-
-		test("k key moves selection backward", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: 0 });
-			modal.handleInput("k");
-			const sel = modal.getSelection();
-			expect(sel.nestedIndex).toBe(-1);
-		});
-
-		test("selection wraps around at boundaries", () => {
+	describe("keyboard navigation and open behavior", () => {
+		test("j/k and arrow keys move selection with wraparound", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 });
-			// Move up from first item should wrap to last
+
+			modal.handleInput("j");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
+
+			modal.handleInput("\x1b[A");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: -1 });
+
 			modal.handleInput("k");
-			const sel = modal.getSelection();
-			expect(sel.nestedIndex).toBe(1); // last nested index in 3-item group
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 1 });
 		});
 
-		test("Enter emits onOpenSelection", () => {
+		test("Enter emits onOpenSelection for current row", () => {
 			const { groups } = singleGroupSetup();
 			const onOpenSelection = vi.fn();
 			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onOpenSelection });
+
 			modal.handleInput("\n");
 			expect(onOpenSelection).toHaveBeenCalledTimes(1);
 			expect(onOpenSelection).toHaveBeenCalledWith({ groupIndex: 0, nestedIndex: -1 });
 		});
 
-		test("q emits onClose", () => {
+		test("q, Esc, and Ctrl+X close the navigator", () => {
 			const { groups } = singleGroupSetup();
 			const onClose = vi.fn();
 			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onClose });
+
 			modal.handleInput("q");
-			expect(onClose).toHaveBeenCalledTimes(1);
-		});
-
-		test("Esc emits onClose", () => {
-			const { groups } = singleGroupSetup();
-			const onClose = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onClose });
 			modal.handleInput("\x1b");
-			expect(onClose).toHaveBeenCalledTimes(1);
+			modal.handleInput("\x18");
+			expect(onClose).toHaveBeenCalledTimes(3);
 		});
-	});
 
-	// ═══ Focus switching ═══
-
-	describe("focus switching", () => {
-		test("Tab switches from list to detail pane", () => {
+		test("Tab does not switch into a detail pane", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
+
 			expect(modal.getFocus()).toBe("list");
 			modal.handleInput("\t");
-			expect(modal.getFocus()).toBe("detail");
-		});
-
-		test("Tab switches from detail back to list", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("\t"); // list -> detail
-			expect(modal.getFocus()).toBe("detail");
-			modal.handleInput("\t"); // detail -> list
 			expect(modal.getFocus()).toBe("list");
-		});
-
-		test("Esc in detail pane returns to list (does not close)", () => {
-			const { groups } = singleGroupSetup();
-			const onClose = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onClose });
-			modal.handleInput("\t"); // focus detail
-			expect(modal.getFocus()).toBe("detail");
-			modal.handleInput("\x1b"); // Esc
-			expect(modal.getFocus()).toBe("list");
-			expect(onClose).not.toHaveBeenCalled();
-		});
-
-		test("Enter in detail pane emits onOpenSelection", () => {
-			const { groups } = singleGroupSetup();
-			const onOpenSelection = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onOpenSelection });
-			modal.handleInput("\t"); // focus detail
-			modal.handleInput("\n"); // Enter
-			expect(onOpenSelection).toHaveBeenCalledTimes(1);
-		});
-
-		test("j/k in detail pane scrolls instead of moving selection", () => {
-			const { groups } = singleGroupSetup();
-			const onSelectionChange = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onSelectionChange });
-			modal.handleInput("\t"); // focus detail
-			onSelectionChange.mockClear();
-			modal.handleInput("j"); // scroll detail
-			// Selection should NOT change when in detail focus
-			expect(onSelectionChange).not.toHaveBeenCalled();
-			const sel = modal.getSelection();
-			expect(sel).toEqual({ groupIndex: 0, nestedIndex: -1 });
 		});
 	});
 
-	// ═══ Filter mode ═══
-
 	describe("filter mode", () => {
-		test("/ enters filter mode", () => {
+		test("/ enters filter mode and prompt is rendered", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
-			expect(modal.isFilterMode()).toBe(false);
 			modal.handleInput("/");
+			modal.handleInput("t");
+			modal.handleInput("e");
+
 			expect(modal.isFilterMode()).toBe(true);
+			expect(renderText(modal, 120)).toContain("/ te");
 		});
 
-		test("typing narrows list by agent name", () => {
+		test("Enter applies filter and Esc cancels in-progress filter", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
 			modal.handleInput("/");
 			modal.handleInput("e");
 			modal.handleInput("x");
-			modal.handleInput("p");
-			// Only "explore" should match
-			const text = renderText(modal);
+			modal.handleInput("\n");
+
+			expect(modal.isFilterMode()).toBe(false);
+			expect(modal.getFilterText()).toBe("ex");
+			let text = renderText(modal, 120);
 			expect(text).toContain("explore");
-			// Others should be filtered out
-			expect(text).not.toMatch(/\bresearch\b.*\bROLE\b/i);
+			expect(text).not.toContain("research");
+
+			modal.handleInput("/");
+			modal.handleInput("x");
+			modal.handleInput("y");
+			modal.handleInput("z");
+			modal.handleInput("\x1b");
+
+			expect(modal.isFilterMode()).toBe(false);
+			expect(modal.getFilterText()).toBe("");
+			text = renderText(modal, 120);
+			expect(text).toContain("explore");
+			expect(text).not.toContain("research");
+
+			const cancelFromFullList = createModal(groups);
+			cancelFromFullList.handleInput("/");
+			cancelFromFullList.handleInput("x");
+			cancelFromFullList.handleInput("y");
+			cancelFromFullList.handleInput("z");
+			cancelFromFullList.handleInput("\x1b");
+			const restoredText = renderText(cancelFromFullList, 120);
+			expect(restoredText).toContain("explore");
+			expect(restoredText).toContain("research");
+			expect(restoredText).toContain("lint");
 		});
 
-		test("filter matches status text", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
+		test("filter can match by status text and description", () => {
+			const refs = [
+				makeRef("agent-running", { status: "running", description: "Build dashboard" }),
+				makeRef("agent-failed", { status: "failed", description: "Run tests" }),
+			];
+			const modal = createModal([makeGroup("agent-running", refs)]);
+
 			modal.handleInput("/");
 			modal.handleInput("f");
 			modal.handleInput("a");
 			modal.handleInput("i");
 			modal.handleInput("l");
-			// "failed" status should match lint-003
-			const text = renderText(modal);
-			expect(text).toContain("lint");
+			expect(renderText(modal, 120)).toContain("Run tests");
+
+			modal.handleInput("\x1b");
+			modal.handleInput("/");
+			for (const ch of "dash") {
+				modal.handleInput(ch);
+			}
+			const text = renderText(modal, 120);
+			expect(text).toContain("Build dashboard");
 		});
 
-		test("filter matches description", () => {
+		test("filter matches description-backed visible title", () => {
 			const refs = [
-				makeRef("agent-1", { description: "Build the dashboard" }),
-				makeRef("agent-2", { description: "Run linter checks" }),
+				makeRef("agent-desc-title", {
+					agent: "planner",
+					status: "running",
+					description: "Description backed title",
+				}),
+				makeRef("agent-secondary", { agent: "planner", status: "running", description: "Secondary row" }),
 			];
-			const groups = [makeGroup("agent-1", refs)];
-			const modal = createModal(groups);
-			modal.handleInput("/");
-			modal.handleInput("l");
-			modal.handleInput("i");
-			modal.handleInput("n");
-			modal.handleInput("t");
-			const text = renderText(modal);
-			// agent-2 has "linter" in its description — it should match
-			// But the filter also matches agent name, so let's check the lines
-			expect(text).toContain("agent");
+			const modal = createModal([makeGroup("agent-desc-title", refs)]);
+			const text = typeFilterQuery(modal, "BACKED TITLE");
+
+			expect(text).toContain("Description backed title");
+			expect(text).not.toContain("Secondary row");
 		});
 
-		test("Esc cancels filter and restores full list", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("/");
-			modal.handleInput("x");
-			modal.handleInput("y");
-			modal.handleInput("z");
-			// Should filter to empty or near-empty
-			modal.handleInput("\x1b"); // Esc
-			expect(modal.isFilterMode()).toBe(false);
-			expect(modal.getFilterText()).toBe("");
-			// Full list restored
-			const text = renderText(modal);
-			expect(text).toContain("explore");
-			expect(text).toContain("research");
-			expect(text).toContain("lint");
-		});
-
-		test("Enter applies filter and exits filter mode", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("/");
-			modal.handleInput("e");
-			modal.handleInput("x");
-			modal.handleInput("\n"); // Enter
-			expect(modal.isFilterMode()).toBe(false);
-			// Filter text should be preserved (applied)
-			expect(modal.getFilterText()).toBe("ex");
-		});
-
-		test("backspace removes last character", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("/");
-			modal.handleInput("a");
-			modal.handleInput("b");
-			modal.handleInput("c");
-			expect(modal.getFilterText()).toBe("abc");
-			modal.handleInput("\x7f"); // backspace
-			expect(modal.getFilterText()).toBe("ab");
-		});
-
-		test("filter prompt is visible in list pane", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("/");
-			modal.handleInput("t");
-			modal.handleInput("e");
-			const text = renderText(modal);
-			expect(text).toContain("/ te");
-		});
-	});
-
-	// ═══ Footer ═══
-
-	describe("footer", () => {
-		test("footer shows status summary", () => {
+		test("filter matches context-preview-backed visible title", () => {
 			const refs = [
-				makeRef("a-1", { status: "running" }),
-				makeRef("a-2", { status: "completed" }),
-				makeRef("a-3", { status: "failed" }),
+				makeRef("agent-context-title", {
+					agent: "planner",
+					status: "running",
+					description: undefined,
+					contextPreview: "Context preview title",
+				}),
+				makeRef("agent-secondary", { agent: "planner", status: "running", description: "Secondary row" }),
 			];
-			const groups = [makeGroup("a-1", refs)];
-			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("1 running");
-			expect(text).toContain("1 done");
-			expect(text).toContain("1 failed");
+			const modal = createModal([makeGroup("agent-context-title", refs)]);
+			const text = typeFilterQuery(modal, "PREVIEW TITLE");
+
+			expect(text).toContain("Context preview title");
+			expect(text).not.toContain("Secondary row");
 		});
 
-		test("footer shows list-focused hints by default", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("nav");
-			expect(text).toContain("Enter open");
-			expect(text).toContain("filter");
-			expect(text).toContain("quit");
-		});
+		test("filter matches id-derived fallback visible title", () => {
+			const refs = [
+				makeRef("agent-fallback-only-title", {
+					agent: "planner",
+					status: "running",
+					description: undefined,
+					contextPreview: undefined,
+				}),
+				makeRef("agent-secondary", { agent: "planner", status: "running", description: "Secondary row" }),
+			];
+			const modal = createModal([makeGroup("agent-fallback-only-title", refs)]);
+			const text = typeFilterQuery(modal, "FALLBACK ONLY TITLE");
 
-		test("footer shows detail-focused hints when detail pane is focused", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("\t"); // focus detail
-			const text = renderText(modal);
-			expect(text).toContain("scroll");
-			expect(text).toContain("Tab list");
-			expect(text).toContain("Esc back");
-		});
-
-		test("footer shows filter hints during filter mode", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			modal.handleInput("/"); // enter filter
-			const text = renderText(modal);
-			expect(text).toContain("Enter apply");
-			expect(text).toContain("Esc cancel");
+			expect(text).toContain("fallback only title");
+			expect(text).not.toContain("Secondary row");
 		});
 	});
 
-	// ═══ setGroups API ═══
-
-	describe("setGroups update API", () => {
-		test("updates data and preserves selection when possible", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: 0 });
-			const sel1 = modal.getSelection();
-			expect(sel1).toEqual({ groupIndex: 0, nestedIndex: 0 });
-
-			// Update with same structure
-			const newRefs = [
-				makeRef("explore-001", { status: "completed", tokens: 20_000 }),
-				makeRef("research-002", { status: "completed" }),
-				makeRef("lint-003", { status: "completed" }),
-			];
-			const newGroups = [makeGroup("explore-001", newRefs)];
-			modal.setGroups(newGroups);
-
-			// Selection should remain at the same position
-			const sel2 = modal.getSelection();
-			expect(sel2).toEqual({ groupIndex: 0, nestedIndex: 0 });
-		});
-
-		test("updates rendering with new data", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			let text = renderText(modal);
-			expect(text).toContain("RUNNING");
-
-			// Update all to completed
-			const newRefs = [makeRef("explore-001", { status: "completed" })];
-			const newGroups = [makeGroup("explore-001", newRefs)];
-			modal.setGroups(newGroups);
-			text = renderText(modal);
-			expect(text).toContain("DONE");
-		});
-
-		test("setGroups with explicit selection overrides current", () => {
-			const { groups } = multiGroupSetup();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 });
-			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: -1 });
-
-			modal.setGroups(groups, { groupIndex: 1, nestedIndex: -1 });
-			expect(modal.getSelection()).toEqual({ groupIndex: 1, nestedIndex: -1 });
-		});
-
-		test("clamps selection when groups shrink", () => {
-			const { groups } = multiGroupSetup();
-			const modal = createModal(groups, { groupIndex: 1, nestedIndex: 0 });
-			// Now shrink to single group
-			const smallRefs = [makeRef("only-one", { status: "running" })];
-			const smallGroups = [makeGroup("only-one", smallRefs)];
-			modal.setGroups(smallGroups);
-			const sel = modal.getSelection();
-			expect(sel.groupIndex).toBe(0);
-		});
-	});
-
-	// ═══ Empty state ═══
-
-	describe("empty state", () => {
+	describe("empty state and resilience", () => {
 		test("renders empty message with no groups", () => {
 			const modal = createModal([]);
-			const text = renderText(modal);
+			const text = renderText(modal, 120);
 			expect(text).toContain("No subagents found");
 		});
 
-		test("renders empty message with empty group refs", () => {
-			const groups = [{ rootId: "none", refs: [], lastUpdatedMs: Date.now() }];
-			const modal = createModal(groups);
-			const text = renderText(modal);
-			expect(text).toContain("No subagents found");
-		});
-
-		test("keyboard nav does not crash on empty list", () => {
-			const modal = createModal([]);
-			expect(() => {
-				modal.handleInput("j");
-				modal.handleInput("k");
-				modal.handleInput("\t");
-				modal.handleInput("/");
-				modal.handleInput("a");
-				modal.handleInput("\x1b");
-			}).not.toThrow();
-		});
-	});
-
-	// ═══ Narrow width rendering ═══
-
-	describe("narrow width resilience", () => {
-		test("does not crash at width 1", () => {
+		test("rendering does not crash at narrow widths", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
 			expect(() => modal.render(1)).not.toThrow();
+			expect(() => modal.render(20)).not.toThrow();
 		});
 
-		test("does not crash at width 20", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const lines = modal.render(20);
-			expect(lines.length).toBeGreaterThan(0);
-		});
+		test("setGroups keeps or overrides selection as requested", () => {
+			const { groups } = multiGroupSetup();
+			const modal = createModal(groups, { groupIndex: 0, nestedIndex: 0 });
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
 
-		test("width 79 uses single-pane", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal, 79);
-			// Should NOT have detail pane content
-			expect(text).not.toContain("Agent: explore");
-		});
+			const updateRefs = [
+				makeRef("explore-001", { status: "completed", tokens: 99_000 }),
+				makeRef("research-002", { status: "completed" }),
+			];
+			modal.setGroups([makeGroup("explore-001", updateRefs)]);
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
 
-		test("width 80 uses split-pane", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal, 80);
-			// Should have detail pane content
-			expect(text).toContain("Agent: explore");
-		});
-	});
-
-	// ═══ Detail pane integration ═══
-
-	describe("detail pane integration", () => {
-		test("detail pane updates when selection changes", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 });
-			let text = renderText(modal, 120);
-			expect(text).toContain("Agent: explore");
-
-			modal.handleInput("j"); // move to research-002
-			text = renderText(modal, 120);
-			expect(text).toContain("Agent: research");
-		});
-
-		test("detail pane shows model info for selected agent", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const text = renderText(modal, 120);
-			expect(text).toContain("claude-sonnet-4-20250514");
-			expect(text).toContain("Thinking: medium");
-		});
-	});
-
-	// ═══ Selection change callback ═══
-
-	describe("selection change callback", () => {
-		test("fires on navigation", () => {
-			const { groups } = singleGroupSetup();
-			const onSelectionChange = vi.fn();
-			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onSelectionChange });
-			onSelectionChange.mockClear(); // clear initial call from constructor
-			modal.handleInput("j");
-			expect(onSelectionChange).toHaveBeenCalledTimes(1);
-		});
-	});
-
-	// ═══ Regression Tests ═══
-
-	describe("render output", () => {
-		test("render() returns only strings (no nested arrays)", () => {
-			const { groups } = singleGroupSetup();
-			const modal = createModal(groups);
-			const lines = modal.render(80);
-
-			expect(Array.isArray(lines)).toBe(true);
-			for (const line of lines) {
-				expect(typeof line).toBe("string");
-			}
+			modal.setGroups(groups, { groupIndex: 1, nestedIndex: -1 });
+			expect(modal.getSelection()).toEqual({ groupIndex: 1, nestedIndex: -1 });
 		});
 	});
 });

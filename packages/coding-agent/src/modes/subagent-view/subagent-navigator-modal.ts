@@ -1,28 +1,20 @@
 import { Container, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { theme } from "../theme/theme";
-import { SubagentDetailPane } from "./subagent-detail-pane";
 import type { SubagentNavigatorSelection, SubagentStatus, SubagentViewGroup, SubagentViewRef } from "./types";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const SPLIT_PANE_MIN_WIDTH = 80;
-const LIST_PANE_RATIO = 0.35;
 const MAX_VISIBLE_ROWS = 18;
+const MIN_INDEX_WIDTH = 3;
+const MIN_TITLE_WIDTH = 12;
+const MIN_STATUS_WIDTH = 10;
+const MIN_ROLE_WIDTH = 8;
+const MIN_MODEL_WIDTH = 12;
+const MIN_LAST_ACTIVE_WIDTH = 9;
+const TOKENS_WIDTH = 8;
+const COLUMN_SEPARATOR = " │ ";
 
-const STATUS_GLYPHS: Record<
-	SubagentStatus,
-	{ glyph: string; label: string; color: "success" | "muted" | "error" | "dim" }
-> = {
-	running: { glyph: "●", label: "RUNNING", color: "success" },
-	completed: { glyph: "◉", label: "DONE", color: "muted" },
-	failed: { glyph: "✗", label: "FAILED", color: "error" },
-	pending: { glyph: "◌", label: "PENDING", color: "dim" },
-	cancelled: { glyph: "⊘", label: "CANCEL", color: "muted" },
-};
+const MIN_TRUSTED_EPOCH_MS = 946_684_800_000;
 
-type FocusPane = "list" | "detail";
-
-// ─── Flat entry for the list ──────────────────────────────────────────────────
+type FocusPane = "list";
 
 interface FlatEntry {
 	ref: SubagentViewRef;
@@ -31,34 +23,44 @@ interface FlatEntry {
 	isRoot: boolean;
 }
 
-// ─── SubagentNavigatorModal ───────────────────────────────────────────────────
+interface NavigatorColumns {
+	indexW: number;
+	titleW: number;
+	statusW: number;
+	roleW: number;
+	modelW: number;
+	lastActiveW: number;
+	tokensW: number;
+}
+
+type StatusColor = "success" | "accent" | "error" | "warning" | "muted";
+
+interface StatusDisplay {
+	glyph: string;
+	label: string;
+	summaryLabel: string;
+	color: StatusColor;
+}
+
+const STATUS_ORDER: SubagentStatus[] = ["running", "completed", "failed", "pending", "cancelled"];
 
 export class SubagentNavigatorModal extends Container {
-	// ─ Data ─
 	#groups: SubagentViewGroup[] = [];
 	#flatRefs: FlatEntry[] = [];
 	#flatIndex = 0;
 	#scrollOffset = 0;
 
-	// ─ Focus ─
-	#focus: FocusPane = "list";
-
-	// ─ Filter ─
 	#filterMode = false;
 	#filterText = "";
 	#unfilteredFlatRefs: FlatEntry[] = [];
 
-	// ─ Sub-components ─
-	#detailPane = new SubagentDetailPane();
-
-	// ─ Callbacks ─
 	readonly #onSelectionChange: (selection: SubagentNavigatorSelection) => void;
 	readonly #onOpenSelection: (selection: SubagentNavigatorSelection) => void;
 	readonly #onClose: () => void;
 
 	constructor(
 		groups: SubagentViewGroup[],
-		selection: SubagentNavigatorSelection,
+		selection: SubagentNavigatorSelection | undefined,
 		options: {
 			onSelectionChange: (selection: SubagentNavigatorSelection) => void;
 			onOpenSelection: (selection: SubagentNavigatorSelection) => void;
@@ -72,9 +74,8 @@ export class SubagentNavigatorModal extends Container {
 		this.setGroups(groups, selection);
 	}
 
-	// ─── Public API ───────────────────────────────────────────────────────────
-
 	setGroups(groups: SubagentViewGroup[], selection?: SubagentNavigatorSelection): void {
+		const previousSelectedId = this.#flatRefs[this.#flatIndex]?.ref.id;
 		this.#groups = groups;
 		this.#buildFlatList();
 		this.#unfilteredFlatRefs = [...this.#flatRefs];
@@ -83,9 +84,13 @@ export class SubagentNavigatorModal extends Container {
 		}
 		if (selection) {
 			this.#flatIndex = this.#selectionToFlatIndex(selection);
+		} else if (previousSelectedId) {
+			const previousIndex = this.#flatRefs.findIndex(entry => entry.ref.id === previousSelectedId);
+			this.#flatIndex = previousIndex >= 0 ? previousIndex : this.#findMostRecentFlatIndex();
+		} else {
+			this.#flatIndex = this.#findMostRecentFlatIndex();
 		}
 		this.#clampSelection();
-		this.#syncDetailPane();
 		this.#emitSelection();
 	}
 
@@ -94,7 +99,7 @@ export class SubagentNavigatorModal extends Container {
 	}
 
 	getFocus(): FocusPane {
-		return this.#focus;
+		return "list";
 	}
 
 	isFilterMode(): boolean {
@@ -110,54 +115,22 @@ export class SubagentNavigatorModal extends Container {
 			this.#handleFilterInput(keyData);
 			return;
 		}
-
-		if (this.#focus === "detail") {
-			this.#handleDetailInput(keyData);
-			return;
-		}
-
 		this.#handleListInput(keyData);
 	}
 
-	// ─── Render ───────────────────────────────────────────────────────────────
-
 	render(width: number): string[] {
-		width = Math.max(1, width);
-		const isSplit = width >= SPLIT_PANE_MIN_WIDTH;
+		const safeWidth = Math.max(3, width);
+		const innerWidth = Math.max(1, safeWidth - 2);
 
-		const lines: string[] = [];
-
-		// Title bar
-		lines.push(this.#renderTitleBar(width));
-
-		// Body
-		if (isSplit) {
-			const listWidth = Math.max(20, Math.floor(width * LIST_PANE_RATIO));
-			const detailWidth = Math.max(10, width - listWidth - 1); // 1 for separator
-			const listLines = this.#renderListPane(listWidth);
-			const detailLines = this.#renderDetailPane(detailWidth);
-			const bodyHeight = Math.max(listLines.length, detailLines.length, MAX_VISIBLE_ROWS);
-
-			const sep = theme.fg("border", theme.boxSharp.vertical);
-			for (let i = 0; i < bodyHeight; i++) {
-				const left = i < listLines.length ? listLines[i]! : padToWidth("", listWidth);
-				const right = i < detailLines.length ? detailLines[i]! : "";
-				lines.push(`${left}${sep}${right}`);
-			}
-		} else {
-			const listLines = this.#renderListPane(width);
-			for (const line of listLines) {
-				lines.push(line);
-			}
-		}
-
-		// Footer
-		lines.push(...this.#renderFooter(width));
-
-		return lines;
+		const bodyLines = this.#renderBody(innerWidth);
+		const lines = [
+			this.#renderTopBorder(innerWidth),
+			...bodyLines.map(line => this.#frameRow(line, innerWidth)),
+			this.#frameRow(theme.fg("dim", this.#buildFooterHint()), innerWidth),
+			this.#renderBottomBorder(innerWidth),
+		];
+		return lines.map(line => theme.overlaySurface(line));
 	}
-
-	// ─── Input Handlers ───────────────────────────────────────────────────────
 
 	#handleListInput(keyData: string): void {
 		if (matchesKey(keyData, "up") || keyData === "k") {
@@ -172,12 +145,11 @@ export class SubagentNavigatorModal extends Container {
 			this.#onOpenSelection(this.getSelection());
 			return;
 		}
-		if (matchesKey(keyData, "tab")) {
-			this.#focus = "detail";
-			return;
-		}
 		if (keyData === "/") {
 			this.#enterFilterMode();
+			return;
+		}
+		if (matchesKey(keyData, "tab")) {
 			return;
 		}
 		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || keyData === "q") {
@@ -186,28 +158,6 @@ export class SubagentNavigatorModal extends Container {
 		}
 		if (matchesKey(keyData, "ctrl+x")) {
 			this.#onClose();
-		}
-	}
-
-	#handleDetailInput(keyData: string): void {
-		if (keyData === "j" || matchesKey(keyData, "down")) {
-			this.#detailPane.scrollBy(1);
-			return;
-		}
-		if (keyData === "k" || matchesKey(keyData, "up")) {
-			this.#detailPane.scrollBy(-1);
-			return;
-		}
-		if (matchesKey(keyData, "tab")) {
-			this.#focus = "list";
-			return;
-		}
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			this.#onOpenSelection(this.getSelection());
-			return;
-		}
-		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
-			this.#focus = "list";
 		}
 	}
 
@@ -224,21 +174,16 @@ export class SubagentNavigatorModal extends Container {
 			this.#filterText = this.#filterText.slice(0, -1);
 			this.#applyFilter();
 			this.#clampSelection();
-			this.#syncDetailPane();
 			this.#emitSelection();
 			return;
 		}
-		// Only accept printable single characters
 		if (keyData.length === 1 && keyData.charCodeAt(0) >= 32) {
 			this.#filterText += keyData;
 			this.#applyFilter();
 			this.#clampSelection();
-			this.#syncDetailPane();
 			this.#emitSelection();
 		}
 	}
-
-	// ─── Filter Logic ─────────────────────────────────────────────────────────
 
 	#enterFilterMode(): void {
 		this.#filterMode = true;
@@ -251,7 +196,6 @@ export class SubagentNavigatorModal extends Container {
 		this.#filterText = "";
 		this.#flatRefs = [...this.#unfilteredFlatRefs];
 		this.#clampSelection();
-		this.#syncDetailPane();
 		this.#emitSelection();
 	}
 
@@ -262,20 +206,18 @@ export class SubagentNavigatorModal extends Container {
 		}
 		const needle = this.#filterText.toLowerCase();
 		this.#flatRefs = this.#unfilteredFlatRefs.filter(entry => {
+			const title = this.#resolveTitle(entry.ref).toLowerCase();
 			const name = (entry.ref.agent ?? entry.ref.id).toLowerCase();
 			const status = (entry.ref.status ?? "").toLowerCase();
 			const desc = (entry.ref.description ?? "").toLowerCase();
-			return name.includes(needle) || status.includes(needle) || desc.includes(needle);
+			return title.includes(needle) || name.includes(needle) || status.includes(needle) || desc.includes(needle);
 		});
 	}
-
-	// ─── Selection ────────────────────────────────────────────────────────────
 
 	#moveSelection(delta: number): void {
 		if (this.#flatRefs.length === 0) return;
 		this.#flatIndex = (this.#flatIndex + delta + this.#flatRefs.length) % this.#flatRefs.length;
 		this.#clampSelection();
-		this.#syncDetailPane();
 		this.#emitSelection();
 	}
 
@@ -295,16 +237,9 @@ export class SubagentNavigatorModal extends Container {
 		this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset, maxOffset));
 	}
 
-	#syncDetailPane(): void {
-		const entry = this.#flatRefs[this.#flatIndex];
-		this.#detailPane.setRef(entry?.ref);
-	}
-
 	#emitSelection(): void {
 		this.#onSelectionChange(this.#flatIndexToSelection(this.#flatIndex));
 	}
-
-	// ─── Flat list management ─────────────────────────────────────────────────
 
 	#buildFlatList(): void {
 		this.#flatRefs = [];
@@ -342,35 +277,34 @@ export class SubagentNavigatorModal extends Container {
 		return anyInGroup >= 0 ? anyInGroup : 0;
 	}
 
-	// ─── Renderers ────────────────────────────────────────────────────────────
-
-	#renderTitleBar(width: number): string {
-		const counts = this.#countByStatus();
-		const activeCount = counts.running;
-		const totalCount = this.#flatRefs.length;
-		const titleText = ` Subagent Flight Deck (${activeCount}/${totalCount} active) `;
-		const styledTitle = theme.bold(theme.fg("accent", titleText));
-		const h = theme.boxSharp.horizontal;
-
-		const titleVisibleLen = visibleWidth(titleText);
-		const cornerLeft = theme.fg("border", theme.boxSharp.topLeft);
-		const cornerRight = theme.fg("border", theme.boxSharp.topRight);
-		const leadLen = 2;
-		const trailLen = Math.max(0, width - titleVisibleLen - leadLen - 2);
-		const leadBorder = theme.fg("border", h.repeat(leadLen));
-		const trailBorder = theme.fg("border", h.repeat(trailLen));
-
-		return `${cornerLeft}${leadBorder}${styledTitle}${trailBorder}${cornerRight}`;
+	#findMostRecentFlatIndex(): number {
+		if (this.#flatRefs.length === 0) return 0;
+		let bestIndex = 0;
+		let bestScore = this.#getRecencyScore(this.#flatRefs[0], 0);
+		for (let idx = 1; idx < this.#flatRefs.length; idx += 1) {
+			const entry = this.#flatRefs[idx];
+			if (!entry) continue;
+			const score = this.#getRecencyScore(entry, idx);
+			if (score > bestScore) {
+				bestScore = score;
+				bestIndex = idx;
+			}
+		}
+		return bestIndex;
 	}
 
-	#renderListPane(width: number): string[] {
+	#getRecencyScore(entry: FlatEntry, index: number): number {
+		const refScore = entry.ref.lastUpdatedMs ?? entry.ref.lastSeenOrder;
+		if (typeof refScore === "number" && Number.isFinite(refScore)) return refScore;
+		const groupScore = this.#groups[entry.groupIdx]?.lastUpdatedMs;
+		if (typeof groupScore === "number" && Number.isFinite(groupScore)) return groupScore;
+		return this.#flatRefs.length - index;
+	}
+
+	#renderBody(width: number): string[] {
 		const lines: string[] = [];
-
-		// Column header
-		const headerLine = this.#formatListHeader(width);
-		lines.push(headerLine);
-		lines.push(theme.fg("muted", "─".repeat(width)));
-
+		lines.push(this.#renderHeader(width));
+		lines.push(theme.fg("border", "─".repeat(width)));
 		if (this.#flatRefs.length === 0) {
 			const msg = this.#filterMode ? "No matches" : "No subagents found";
 			const pad = Math.max(0, Math.floor((width - visibleWidth(msg)) / 2));
@@ -378,152 +312,179 @@ export class SubagentNavigatorModal extends Container {
 		} else {
 			const start = this.#scrollOffset;
 			const end = Math.min(this.#flatRefs.length, start + MAX_VISIBLE_ROWS);
-			let prevGroupIdx: number | undefined;
-
+			let previousGroup: number | undefined;
 			for (let i = start; i < end; i++) {
 				const entry = this.#flatRefs[i];
 				if (!entry) continue;
-
-				if (prevGroupIdx !== undefined && prevGroupIdx !== entry.groupIdx) {
-					lines.push(theme.fg("muted", "─".repeat(width)));
+				if (previousGroup !== undefined && previousGroup !== entry.groupIdx) {
+					lines.push(theme.fg("border", "─".repeat(width)));
 				}
-				prevGroupIdx = entry.groupIdx;
-				lines.push(this.#renderListRow(entry, i, width));
+				lines.push(this.#renderRow(entry, i, width));
+				previousGroup = entry.groupIdx;
 			}
+			lines.push(theme.fg("border", "─".repeat(width)));
+			lines.push(this.#renderStatusSummary(width));
 		}
 
-		// Filter prompt line
 		if (this.#filterMode) {
-			lines.push(theme.fg("accent", `/ ${this.#filterText}█`));
+			lines.push(theme.fg("accent", truncateToWidth(`/ ${this.#filterText}█`, width)));
 		}
 
 		return lines;
 	}
 
-	#formatListHeader(width: number): string {
-		const cols = buildColumnSpec(width);
-		const header = `${"#".padEnd(cols.indexW)} ${"Role".padEnd(cols.roleW)} ${"Status".padEnd(cols.statusW)} ${"Tokens".padEnd(cols.tokensW)} ${"Age".padEnd(cols.ageW)}`;
-		return theme.bold(truncateToWidth(` ${header}`, width));
+	#renderHeader(width: number): string {
+		const cols = buildColumnSpec(width, this.#flatRefs.length);
+		const header = `${"#".padStart(cols.indexW)}${COLUMN_SEPARATOR}${"Title".padEnd(cols.titleW)}${COLUMN_SEPARATOR}${"Status".padEnd(cols.statusW)}${COLUMN_SEPARATOR}${"Role".padEnd(cols.roleW)}${COLUMN_SEPARATOR}${"Model".padEnd(cols.modelW)}${COLUMN_SEPARATOR}${"Last Active".padEnd(cols.lastActiveW)}${COLUMN_SEPARATOR}${"Tokens".padStart(cols.tokensW)}`;
+		return theme.bold(theme.fg("accent", truncateToWidth(header, width)));
 	}
 
-	#renderListRow(entry: FlatEntry, idx: number, width: number): string {
-		const cols = buildColumnSpec(width);
-		const isSelected = idx === this.#flatIndex;
-		const prefix = entry.isRoot ? "" : "» ";
-
-		const ordinal = String(idx + 1).padStart(2, "0");
-		const indexLabel = `${prefix}${ordinal}`.padEnd(cols.indexW).slice(0, cols.indexW);
-
-		const roleName = entry.ref.agent ?? "?";
-		const role = roleName.slice(0, cols.roleW).padEnd(cols.roleW);
-
-		const status = entry.ref.status ?? "pending";
-		const statusEntry = STATUS_GLYPHS[status] ?? STATUS_GLYPHS.pending;
-		const statusText = `${statusEntry.glyph} ${statusEntry.label}`;
-		const statusCell = statusText.padEnd(cols.statusW).slice(0, cols.statusW);
-		const coloredStatus = theme.fg(statusEntry.color, statusCell);
-
+	#renderRow(entry: FlatEntry, idx: number, width: number): string {
+		const cols = buildColumnSpec(width, this.#flatRefs.length);
+		const selected = idx === this.#flatIndex;
+		const sep = theme.fg("border", COLUMN_SEPARATOR);
+		const titlePrefix = entry.isRoot ? "" : "↳ ";
+		const index = String(idx + 1).padStart(cols.indexW);
+		const titleText = `${titlePrefix}${this.#resolveTitle(entry.ref)}`;
+		const title = padToWidth(truncateToWidth(titleText, cols.titleW), cols.titleW);
+		const status = padToWidth(truncateToWidth(renderStatusCell(entry.ref.status), cols.statusW), cols.statusW);
+		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "task", cols.roleW), cols.roleW);
+		const model = padToWidth(truncateToWidth(entry.ref.model ?? "default", cols.modelW), cols.modelW);
+		const lastActiveMs = entry.ref.lastUpdatedMs ?? this.#groups[entry.groupIdx]?.lastUpdatedMs;
+		const lastActiveLabel = formatLastActive(lastActiveMs);
+		const lastActive = padToWidth(truncateToWidth(lastActiveLabel, cols.lastActiveW), cols.lastActiveW);
 		const tokens = formatTokens(entry.ref.tokens).padStart(cols.tokensW);
-		const age = formatAge(entry.ref.lastUpdatedMs).padEnd(cols.ageW);
+		const row = `${theme.fg("text", index)}${sep}${theme.fg("text", title)}${sep}${status}${sep}${theme.fg("text", role)}${sep}${theme.fg("text", model)}${sep}${theme.fg(lastActiveLabel === "---" ? "dim" : "text", lastActive)}${sep}${theme.fg("text", tokens)}`;
+		const fitted = padToWidth(truncateToWidth(row, width), width);
 
-		// Build the line parts (no status coloring yet)
-		const plainParts = ` ${indexLabel} ${role} `;
-		const afterStatus = ` ${tokens} ${age}`;
-
-		const linePlain = truncateToWidth(`${plainParts}${statusCell}${afterStatus}`, width);
-
-		if (isSelected) {
-			// For selected: highlight with accent. Status coloring is subsumed by selection highlight.
-			return theme.bold(theme.fg("accent", linePlain));
+		if (selected) {
+			return theme.bg("selectedBg", theme.bold(fitted));
 		}
-
-		// For non-selected: apply status color to the status cell only
-		const lineWithColor = truncateToWidth(`${plainParts}${coloredStatus}${afterStatus}`, width);
-		return theme.fg("text", lineWithColor);
+		return fitted;
 	}
 
-	#renderDetailPane(width: number): string[] {
-		this.#detailPane.setAvailableHeight(Math.max(1, MAX_VISIBLE_ROWS));
-		return this.#detailPane.render(width);
+	#renderStatusSummary(width: number): string {
+		const chips = STATUS_ORDER.map(status => {
+			const count = this.#flatRefs.reduce(
+				(sum, entry) => sum + (normalizeStatus(entry.ref.status) === status ? 1 : 0),
+				0,
+			);
+			return count > 0 ? renderStatusSummaryChip(status, count) : null;
+		}).filter((chip): chip is string => chip !== null);
+
+		return padToWidth(truncateToWidth(chips.join("  "), width), width);
 	}
 
-	#renderFooter(width: number): string[] {
-		const lines: string[] = [];
+
+	#resolveTitle(ref: SubagentViewRef): string {
+		return ref.description ?? ref.contextPreview ?? extractSubagentTitleFromId(ref.id);
+	}
+
+	#renderTopBorder(innerWidth: number): string {
+		const running = this.#flatRefs.reduce((count, entry) => count + (entry.ref.status === "running" ? 1 : 0), 0);
+		const titleText = `Subagent Flight Deck ${running}/${this.#flatRefs.length} active`;
 		const h = theme.boxSharp.horizontal;
-		const bL = theme.fg("border", theme.boxSharp.bottomLeft);
-		const bR = theme.fg("border", theme.boxSharp.bottomRight);
-
-		// Status summary line
-		const summary = this.#buildStatusSummary();
-		const hints = this.#buildFooterHints();
-
-		const summaryVW = visibleWidth(summary);
-		const hintsVW = visibleWidth(hints);
-		const gap = Math.max(2, width - summaryVW - hintsVW - 4);
-		const footerContent = ` ${summary}${" ".repeat(gap)}${hints} `;
-
-		lines.push(truncateToWidth(footerContent, width));
-
-		// Bottom border
-		lines.push(`${bL}${theme.fg("border", h.repeat(Math.max(0, width - 2)))}${bR}`);
-
-		return lines;
+		const topLeft = theme.fg("border", theme.boxSharp.topLeft);
+		const topRight = theme.fg("border", theme.boxSharp.topRight);
+		const leadLen = 1;
+		const maxTitleWidth = Math.max(0, innerWidth - leadLen);
+		const clippedTitle = truncateToWidth(titleText, maxTitleWidth);
+		const trailLen = Math.max(0, innerWidth - leadLen - visibleWidth(clippedTitle));
+		const lead = theme.fg("border", h.repeat(leadLen));
+		const trail = theme.fg("border", h.repeat(trailLen));
+		const title = theme.bold(theme.fg("accent", clippedTitle));
+		return `${topLeft}${lead}${title}${trail}${topRight}`;
 	}
 
-	#buildStatusSummary(): string {
-		const counts = this.#countByStatus();
-		const parts: string[] = [];
-		if (counts.running > 0) parts.push(theme.fg("success", `● ${counts.running} running`));
-		if (counts.completed > 0) parts.push(theme.fg("muted", `◉ ${counts.completed} done`));
-		if (counts.failed > 0) parts.push(theme.fg("error", `✗ ${counts.failed} failed`));
-		if (counts.pending > 0) parts.push(theme.fg("dim", `◌ ${counts.pending} pending`));
-		if (counts.cancelled > 0) parts.push(theme.fg("muted", `⊘ ${counts.cancelled} cancel`));
-		return parts.join("  ");
+	#renderBottomBorder(innerWidth: number): string {
+		const h = theme.fg("border", theme.boxSharp.horizontal.repeat(innerWidth));
+		const left = theme.fg("border", theme.boxSharp.bottomLeft);
+		const right = theme.fg("border", theme.boxSharp.bottomRight);
+		return `${left}${h}${right}`;
 	}
 
-	#buildFooterHints(): string {
+	#frameRow(content: string, innerWidth: number): string {
+		const side = theme.fg("border", theme.boxSharp.vertical);
+		const fitted = padToWidth(truncateToWidth(content, innerWidth), innerWidth);
+		return `${side}${fitted}${side}`;
+	}
+
+	#buildFooterHint(): string {
 		if (this.#filterMode) {
-			return theme.fg("muted", "Enter apply  Esc cancel");
+			return "Enter apply  Esc cancel";
 		}
-		if (this.#focus === "detail") {
-			return theme.fg("muted", "j/k scroll  Tab list  Enter open  Esc back");
-		}
-		return theme.fg("muted", "↑↓ nav  Enter open  / filter  Tab detail  q quit");
-	}
-
-	#countByStatus(): Record<SubagentStatus, number> {
-		const counts: Record<SubagentStatus, number> = {
-			running: 0,
-			completed: 0,
-			failed: 0,
-			pending: 0,
-			cancelled: 0,
-		};
-		for (const entry of this.#flatRefs) {
-			const s = entry.ref.status ?? "pending";
-			counts[s] = (counts[s] ?? 0) + 1;
-		}
-		return counts;
+		return "↑↓ nav  Enter open  / filter  q quit";
 	}
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildColumnSpec(_width: number): {
-	indexW: number;
-	roleW: number;
-	statusW: number;
-	tokensW: number;
-	ageW: number;
-} {
+function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
+	const safeWidth = Math.max(1, width);
+	const indexW = clamp(String(Math.max(1, rowCount)).length + 1, MIN_INDEX_WIDTH, 5);
+	const statusW = MIN_STATUS_WIDTH;
+	const roleW = clamp(Math.floor(safeWidth * 0.13), MIN_ROLE_WIDTH, 14);
+	const modelW = clamp(Math.floor(safeWidth * 0.2), MIN_MODEL_WIDTH, 26);
+	const lastActiveW = clamp(Math.floor(safeWidth * 0.12), MIN_LAST_ACTIVE_WIDTH, 12);
+	const separators = COLUMN_SEPARATOR.length * 6;
+	const titleW = Math.max(
+		MIN_TITLE_WIDTH,
+		safeWidth - indexW - statusW - roleW - modelW - lastActiveW - TOKENS_WIDTH - separators,
+	);
 	return {
-		indexW: 4,
-		roleW: 10,
-		statusW: 10,
-		tokensW: 8,
-		ageW: 6,
+		indexW,
+		titleW,
+		statusW,
+		roleW,
+		modelW,
+		lastActiveW,
+		tokensW: TOKENS_WIDTH,
 	};
 }
+
+function extractSubagentTitleFromId(id: string): string {
+	const tail = id.split(".").pop() ?? id;
+	const dashIndex = tail.indexOf("-");
+	if (dashIndex >= 0 && dashIndex < tail.length - 1) {
+		return (
+			tail
+				.slice(dashIndex + 1)
+				.replace(/[_-]+/g, " ")
+				.trim() || tail
+		);
+	}
+	const normalized = tail.replace(/[_-]+/g, " ").trim();
+	return normalized || tail;
+}
+
+function normalizeStatus(status?: SubagentStatus): SubagentStatus {
+	return status ?? "pending";
+}
+
+function getStatusDisplay(status?: SubagentStatus): StatusDisplay {
+	switch (normalizeStatus(status)) {
+		case "running":
+			return { glyph: "●", label: "RUNNING", summaryLabel: "running", color: "success" };
+		case "completed":
+			return { glyph: "◉", label: "DONE", summaryLabel: "done", color: "accent" };
+		case "failed":
+			return { glyph: "✗", label: "FAILED", summaryLabel: "failed", color: "error" };
+		case "cancelled":
+			return { glyph: "⊘", label: "CANCELED", summaryLabel: "canceled", color: "muted" };
+		case "pending":
+		default:
+			return { glyph: "◌", label: "PENDING", summaryLabel: "pending", color: "warning" };
+	}
+}
+
+function renderStatusCell(status?: SubagentStatus): string {
+	const display = getStatusDisplay(status);
+	return `${theme.fg(display.color, display.glyph)} ${theme.fg(display.color, display.label)}`;
+}
+
+function renderStatusSummaryChip(status: SubagentStatus, count: number): string {
+	const display = getStatusDisplay(status);
+	return theme.fg(display.color, `${display.glyph} ${count} ${display.summaryLabel}`);
+}
+
 
 function formatTokens(tokens?: number): string {
 	if (tokens === undefined || tokens === null) return "---";
@@ -532,13 +493,25 @@ function formatTokens(tokens?: number): string {
 	return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
-function formatAge(lastUpdatedMs?: number): string {
-	if (!lastUpdatedMs || !Number.isFinite(lastUpdatedMs) || lastUpdatedMs <= 0) return "---";
-	const diff = Math.max(0, Date.now() - lastUpdatedMs);
-	if (diff < 5000) return "now";
-	if (diff < 60_000) return `${Math.floor(diff / 1000)}s`;
-	if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-	return `${Math.floor(diff / 3_600_000)}h`;
+function toTrustedEpochMs(value?: number): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	if (value < MIN_TRUSTED_EPOCH_MS) return undefined;
+	return value;
+}
+
+function formatLastActive(lastUpdatedMs?: number): string {
+	const trustedLastUpdatedMs = toTrustedEpochMs(lastUpdatedMs);
+	if (trustedLastUpdatedMs === undefined) return "---";
+	const diff = Math.max(0, Date.now() - trustedLastUpdatedMs);
+	if (diff < 5_000) return "now";
+	if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+	if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+	if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+	return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, value));
 }
 
 function padToWidth(text: string, width: number): string {
