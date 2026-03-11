@@ -10,6 +10,26 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.ui.requestRender();
 }
 
+function getFastModeModelLabel(ctx: InteractiveModeContext): string {
+	const model = ctx.session.model;
+	return model ? `${model.provider}/${model.id}` : "current model";
+}
+
+function isFastModeBlocked(ctx: InteractiveModeContext): boolean {
+	return ctx.session.model?.provider === "openai-codex";
+}
+
+function getFastModeBlockedMessage(ctx: InteractiveModeContext): string {
+	return `Fast mode is unavailable for ${getFastModeModelLabel(ctx)}; priority service tier stays off.`;
+}
+
+function getFastModeStatusMessage(ctx: InteractiveModeContext): string {
+	if (isFastModeBlocked(ctx)) {
+		return `Fast mode is off for ${getFastModeModelLabel(ctx)}. OpenAI Codex blocks priority service tier.`;
+	}
+	return `Fast mode is ${ctx.session.isFastModeEnabled() ? "on" : "off"} for ${getFastModeModelLabel(ctx)}.`;
+}
+
 /** Declarative subcommand definition for commands like /mcp. */
 export interface SubcommandDef {
 	name: string;
@@ -101,7 +121,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 	{
 		name: "fast",
-		description: "Toggle fast mode (OpenAI service tier priority)",
+		description: "Toggle fast mode (OpenAI service tier priority; unavailable for OpenAI Codex)",
 		subcommands: [
 			{ name: "on", description: "Enable fast mode" },
 			{ name: "off", description: "Disable fast mode" },
@@ -111,29 +131,40 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		handle: (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (!arg || arg === "toggle") {
+				const blocked = !runtime.ctx.session.isFastModeEnabled() && isFastModeBlocked(runtime.ctx);
+				const previous = runtime.ctx.session.isFastModeEnabled();
 				const enabled = runtime.ctx.session.toggleFastMode();
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus(`Fast mode ${enabled ? "enabled" : "disabled"}.`);
+				if (previous !== enabled) {
+					refreshStatusLine(runtime.ctx);
+				}
+				runtime.ctx.showStatus(
+					blocked ? getFastModeBlockedMessage(runtime.ctx) : `Fast mode ${enabled ? "enabled" : "disabled"}.`,
+				);
 				runtime.ctx.editor.setText("");
 				return;
 			}
 			if (arg === "on") {
-				runtime.ctx.session.setFastMode(true);
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus("Fast mode enabled.");
+				const previous = runtime.ctx.session.isFastModeEnabled();
+				const enabled = runtime.ctx.session.setFastMode(true);
+				if (previous !== enabled) {
+					refreshStatusLine(runtime.ctx);
+				}
+				runtime.ctx.showStatus(enabled ? "Fast mode enabled." : getFastModeBlockedMessage(runtime.ctx));
 				runtime.ctx.editor.setText("");
 				return;
 			}
 			if (arg === "off") {
-				runtime.ctx.session.setFastMode(false);
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus("Fast mode disabled.");
+				const previous = runtime.ctx.session.isFastModeEnabled();
+				const enabled = runtime.ctx.session.setFastMode(false);
+				if (previous !== enabled) {
+					refreshStatusLine(runtime.ctx);
+				}
+				runtime.ctx.showStatus(`Fast mode ${enabled ? "enabled" : "disabled"}.`);
 				runtime.ctx.editor.setText("");
 				return;
 			}
 			if (arg === "status") {
-				const enabled = runtime.ctx.session.isFastModeEnabled();
-				runtime.ctx.showStatus(`Fast mode is ${enabled ? "on" : "off"}.`);
+				runtime.ctx.showStatus(getFastModeStatusMessage(runtime.ctx));
 				runtime.ctx.editor.setText("");
 				return;
 			}
