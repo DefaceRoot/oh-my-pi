@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as nodeFs from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type {
 	SubagentIndexSnapshot,
 	SubagentViewGroup,
 	SubagentViewRef,
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 /**
  * Hot-path absence tests for the active viewer navigation path.
@@ -214,5 +218,70 @@ describe("viewer navigation hot path avoids sync FS when snapshot is populated",
 		expect(statSyncSpy).not.toHaveBeenCalled();
 		expect(scanSyncSpy).not.toHaveBeenCalled();
 		expect(mode.loadSubagentTranscript).toHaveBeenCalledTimes(3);
+	});
+});
+
+describe("InteractiveMode subagent token loading", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(os.tmpdir(), "omp-subagent-token-"));
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
+
+	test("loadTokensFromSessionPath includes cache usage when totals are absent", async () => {
+		const sessionPath = path.join(tempDir, "cache-aware.jsonl");
+		await writeFile(
+			sessionPath,
+			`${[
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5 } },
+				}),
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 } },
+				}),
+			].join("\n")}\n`,
+			"utf8",
+		);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const tokens = await mode.loadTokensFromSessionPath(sessionPath);
+
+		expect(tokens).toBe(198);
+	});
+
+	test("loadSubagentTranscript uses cache-aware assistant usage when session loads", async () => {
+		const sessionPath = path.join(tempDir, "session-usage.jsonl");
+		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
+
+		vi.spyOn(SessionManager, "open").mockResolvedValue({
+			getEntries: () => [
+				{ type: "session_init", task: "demo" },
+				{ type: "model_change", model: "claude-sonnet-4-20250514" },
+				{
+					type: "message",
+					message: { role: "assistant", usage: { input: 100, output: 20, cacheRead: 7, cacheWrite: 3 } },
+				},
+			],
+			buildSessionContext: () => ({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				thinkingLevel: "high",
+				models: {},
+				injectedTtsrRules: [],
+				mode: "none",
+				modeData: undefined,
+			}),
+		} as any);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "cache-subagent", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.tokens).toBe(130);
 	});
 });

@@ -36,6 +36,7 @@ import { getRecentSessions, type SessionContext, type SessionEntry, SessionManag
 import type { ExitPlanModeDetails } from "../tools";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
+import { getDirectUsageTokens } from "../utils/usage-tokens";
 import {
 	ACTION_BUTTONS,
 	type ActionButtonUi,
@@ -2424,22 +2425,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (normalized.length <= maxChars) return normalized;
 		return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 	}
-
-	private extractUncachedUsageTokens(usage: unknown): number | undefined {
-		if (!usage || typeof usage !== "object") return undefined;
-		const record = usage as Record<string, unknown>;
-		const input = typeof record.input === "number" && Number.isFinite(record.input) ? record.input : undefined;
-		const output = typeof record.output === "number" && Number.isFinite(record.output) ? record.output : undefined;
-		if (input !== undefined || output !== undefined) {
-			return (input ?? 0) + (output ?? 0);
+	private sumAssistantMessageUsageTokens(entries: ReadonlyArray<unknown>): number {
+		let tokens = 0;
+		for (const entry of entries) {
+			if (!entry || typeof entry !== "object") continue;
+			const record = entry as Record<string, unknown>;
+			if (record.type !== "message") continue;
+			const message = record.message;
+			if (!message || typeof message !== "object") continue;
+			if ((message as { role?: unknown }).role !== "assistant") continue;
+			const usageTokens = getDirectUsageTokens((message as { usage?: unknown }).usage);
+			if (typeof usageTokens === "number") tokens += usageTokens;
 		}
-		const totalTokens =
-			typeof record.totalTokens === "number" && Number.isFinite(record.totalTokens)
-				? record.totalTokens
-				: typeof record.total_tokens === "number" && Number.isFinite(record.total_tokens)
-					? record.total_tokens
-					: undefined;
-		return totalTokens;
+		return tokens;
 	}
 
 	private buildFallbackSubagentSessionContext(rawTranscript: string): {
@@ -2511,9 +2509,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			messages.push(message as AgentMessage);
 			if (role === "assistant") {
 				const usage = (message as { usage?: unknown }).usage;
-				const uncached = this.extractUncachedUsageTokens(usage);
-				if (typeof uncached === "number") {
-					tokens += uncached;
+				const usageTokens = getDirectUsageTokens(usage);
+				if (typeof usageTokens === "number") {
+					tokens += usageTokens;
 				}
 			}
 		}
@@ -2556,8 +2554,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				const latestModel = latestModelEntry?.type === "model_change" ? latestModelEntry.model : undefined;
 				const sessionTask = sessionInitEntry?.type === "session_init" ? sessionInitEntry.task : undefined;
 				const skillsUsed = this.extractUsedSkillNamesFromEntries(entries);
-				const usage = subSession.getUsageStatistics();
-				const tokens = usage.input + usage.output;
+				const tokensTotal = this.sumAssistantMessageUsageTokens(entries);
+				const tokens = tokensTotal > 0 ? tokensTotal : undefined;
 				const sessionContext = subSession.buildSessionContext();
 				if (sessionContext.messages.length === 0) {
 					const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
@@ -2610,17 +2608,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!(await Bun.file(sessionPath).exists())) return undefined;
 			const rawTranscript = await Bun.file(sessionPath).text();
 			const entries = parseJsonlLenient<Record<string, unknown>>(rawTranscript);
-			let tokens = 0;
-			for (const entry of entries) {
-				if (entry.type !== "message") continue;
-				const message = entry.message;
-				if (!message || typeof message !== "object") continue;
-				const role = (message as { role?: unknown }).role;
-				if (role !== "assistant") continue;
-				const usage = (message as { usage?: unknown }).usage;
-				const uncached = this.extractUncachedUsageTokens(usage);
-				if (typeof uncached === "number") tokens += uncached;
-			}
+			const tokens = this.sumAssistantMessageUsageTokens(entries);
 			return tokens > 0 ? tokens : undefined;
 		} catch {
 			return undefined;

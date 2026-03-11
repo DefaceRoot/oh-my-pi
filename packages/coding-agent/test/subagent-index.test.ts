@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
 import { SubagentIndex } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/subagent-index";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import { logger } from "@oh-my-pi/pi-utils";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -48,7 +48,7 @@ function buildTaskResult(overrides: Partial<SingleResult> & Pick<SingleResult, "
 async function seedTranscript(root: string, relativePath: string, mtime: Date): Promise<string> {
 	const fullPath = path.join(root, relativePath);
 	await mkdir(path.dirname(fullPath), { recursive: true });
-	await writeFile(fullPath, "{\"type\":\"session_init\",\"task\":\"demo\"}\n", "utf8");
+	await writeFile(fullPath, '{"type":"session_init","task":"demo"}\n', "utf8");
 	await utimes(fullPath, mtime, mtime);
 	return fullPath;
 }
@@ -122,17 +122,70 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]?.assignmentPreview?.split("\n")).toHaveLength(8);
 	});
 
+	test("ingestTaskResults derives tokens from usage including cache fields", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "4-CacheAware",
+				usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5 } as SingleResult["usage"],
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 180 });
+	});
+
+	test("ingestTaskResults prefers usage total_tokens over explicit tokens", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "5-TotalTokens",
+				tokens: 999,
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 100,
+					cacheWrite: 100,
+					total_tokens: 42,
+				} as unknown as SingleResult["usage"],
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 42 });
+	});
+
+	test("ingesting live and final updates for same id keeps a single grouped ref", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			{ ...buildTaskResult({ id: "3-Implement", tokens: 11, durationMs: 12 }), status: "running" } as SingleResult,
+		]);
+		index.ingestTaskResults([
+			{
+				...buildTaskResult({ id: "3-Implement", tokens: 77, durationMs: 120 }),
+				status: "completed",
+			} as SingleResult,
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.groups).toHaveLength(1);
+		expect(snapshot.groups[0]?.refs.map(ref => ref.id)).toEqual(["3-Implement"]);
+		expect(snapshot.refs[0]).toMatchObject({
+			id: "3-Implement",
+			status: "completed",
+			tokens: 77,
+		});
+	});
+
 	test("ignores invalid task-result shapes without throwing", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		expect(() =>
-			index.ingestTaskResults([
-				null,
-				undefined,
-				{},
-				{ id: 99 },
-				{ id: "", outputPath: 10 },
-			]),
+			index.ingestTaskResults([null, undefined, {}, { id: 99 }, { id: "", outputPath: 10 }]),
 		).not.toThrow();
 		expect(index.getSnapshot().refs).toEqual([]);
 	});
@@ -216,7 +269,6 @@ describe("SubagentIndex", () => {
 		expect(resolved.outputPath).toBe(safeOutputPath);
 	});
 
-
 	test("resolveSafePaths rejects in-root aliasing to another subagent id", async () => {
 		const now = new Date("2025-01-05T00:00:00.000Z");
 		const betaSessionPath = await seedTranscript(artifactsDir, "beta.jsonl", now);
@@ -232,7 +284,6 @@ describe("SubagentIndex", () => {
 		expect(resolved.outputPath).toBeUndefined();
 		expect(resolved.sessionPath).toBeUndefined();
 	});
-
 
 	test("overlapping reconcile calls apply last invocation wins", async () => {
 		class ControlledSubagentIndex extends SubagentIndex {

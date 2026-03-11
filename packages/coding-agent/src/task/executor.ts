@@ -28,6 +28,7 @@ import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
+import { getDirectUsageTokens } from "../utils/usage-tokens";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -372,24 +373,6 @@ function firstNumberField(record: Record<string, unknown>, keys: string[]): numb
 }
 
 /**
- * Normalize usage objects from different event formats.
- */
-function getUsageTokens(usage: unknown): number {
-	if (!usage || typeof usage !== "object") return 0;
-	const record = usage as Record<string, unknown>;
-
-	const totalTokens = firstNumberField(record, ["totalTokens", "total_tokens"]);
-	if (totalTokens !== undefined && totalTokens > 0) return totalTokens;
-
-	const input = firstNumberField(record, ["input", "input_tokens", "inputTokens"]) ?? 0;
-	const output = firstNumberField(record, ["output", "output_tokens", "outputTokens"]) ?? 0;
-	const cacheRead = firstNumberField(record, ["cacheRead", "cache_read", "cacheReadTokens"]) ?? 0;
-	const cacheWrite = firstNumberField(record, ["cacheWrite", "cache_write", "cacheWriteTokens"]) ?? 0;
-
-	return input + output + cacheRead + cacheWrite;
-}
-
-/**
  * Create proxy tools that reuse the parent's MCP connections.
  */
 function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
@@ -585,7 +568,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let submitResultErrorLoopDetected = false;
 	let submitResultPromptTimedOut = false;
 	let lastSubmitResultErrorText = "";
-
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -799,7 +781,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						lastSubmitResultErrorText = getToolResultText(event.result);
 						if (submitResultOnlyMode) {
 							submitResultErrorAttempts++;
-							if (submitResultErrorAttempts >= MAX_SUBMIT_RESULT_ERROR_ATTEMPTS && !submitResultErrorLoopDetected) {
+							if (
+								submitResultErrorAttempts >= MAX_SUBMIT_RESULT_ERROR_ATTEMPTS &&
+								!submitResultErrorLoopDetected
+							) {
 								submitResultErrorLoopDetected = true;
 								requestAbort("terminate");
 							}
@@ -898,16 +883,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// Extract and accumulate usage (prefer message.usage, fallback to event.usage)
 				const messageUsage = getMessageUsage(event.message) || (event as AgentEvent & { usage?: unknown }).usage;
 				if (messageUsage && typeof messageUsage === "object") {
+					const messageUsageTokens = getDirectUsageTokens(messageUsage) ?? 0;
 					// Only count assistant messages (not tool results, etc.)
 					if (role === "assistant") {
 						const usageRecord = messageUsage as Record<string, unknown>;
 						const costRecord = (messageUsage as { cost?: Record<string, unknown> }).cost;
 						hasUsage = true;
-						accumulatedUsage.input += getNumberField(usageRecord, "input") ?? 0;
-						accumulatedUsage.output += getNumberField(usageRecord, "output") ?? 0;
-						accumulatedUsage.cacheRead += getNumberField(usageRecord, "cacheRead") ?? 0;
-						accumulatedUsage.cacheWrite += getNumberField(usageRecord, "cacheWrite") ?? 0;
-						accumulatedUsage.totalTokens += getNumberField(usageRecord, "totalTokens") ?? 0;
+						accumulatedUsage.input +=
+							firstNumberField(usageRecord, ["input", "input_tokens", "inputTokens"]) ?? 0;
+						accumulatedUsage.output +=
+							firstNumberField(usageRecord, ["output", "output_tokens", "outputTokens"]) ?? 0;
+						accumulatedUsage.cacheRead +=
+							firstNumberField(usageRecord, ["cacheRead", "cache_read", "cacheReadTokens"]) ?? 0;
+						accumulatedUsage.cacheWrite +=
+							firstNumberField(usageRecord, ["cacheWrite", "cache_write", "cacheWriteTokens"]) ?? 0;
+						accumulatedUsage.totalTokens += messageUsageTokens;
 						if (costRecord) {
 							accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
 							accumulatedUsage.cost.output += getNumberField(costRecord, "output") ?? 0;
@@ -915,9 +905,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							accumulatedUsage.cost.cacheWrite += getNumberField(costRecord, "cacheWrite") ?? 0;
 							accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
 						}
+						// Accumulate tokens for progress display
+						progress.tokens += messageUsageTokens;
 					}
-					// Accumulate tokens for progress display
-					progress.tokens += getUsageTokens(messageUsage);
 				}
 				break;
 			}
@@ -1147,7 +1137,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						"",
 						"<submit-result-contract>",
 						"- On success, call submit_result with: { result: { data: <value matching the output schema> } }",
-						"- On failure, call submit_result with: { result: { error: \"reason\" } }",
+						'- On failure, call submit_result with: { result: { error: "reason" } }',
 						"- result MUST contain exactly one of data or error (never both)",
 						"- data MUST match the required output schema exactly",
 						"- Primitive, array, or null data is valid when the output schema allows it; do not wrap it in an object unless the schema requires that",
@@ -1258,9 +1248,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (submitResultErrorLoopDetected || submitResultPromptTimedOut) {
 		const loopReasons: string[] = [];
 		if (submitResultErrorLoopDetected) {
-			loopReasons.push(
-				`submit_result returned errors ${submitResultErrorAttempts} times in submit-only mode`,
-			);
+			loopReasons.push(`submit_result returned errors ${submitResultErrorAttempts} times in submit-only mode`);
 		}
 		if (submitResultPromptTimedOut) {
 			loopReasons.push(

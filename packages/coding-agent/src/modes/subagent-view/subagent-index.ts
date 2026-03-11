@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { SingleResult } from "../../task/types";
+import { getDirectUsageTokens } from "../../utils/usage-tokens";
 import type { SubagentIndexSnapshot, SubagentStatus, SubagentViewGroup, SubagentViewRef } from "./types";
 
 interface SubagentIndexOptions {
@@ -221,7 +222,7 @@ export class SubagentIndex {
 		const model = this.#formatSubagentModel(record.modelOverride);
 		if (model) existing.model = model;
 
-		const usageTokens = this.#extractUncachedUsageTokens(record.usage);
+		const usageTokens = getDirectUsageTokens(record.usage);
 		const explicitTokens = this.#readNumber(record.tokens);
 		if (explicitTokens !== undefined || usageTokens !== undefined) {
 			existing.tokens = usageTokens ?? explicitTokens;
@@ -541,19 +542,6 @@ export class SubagentIndex {
 		}
 		const values = modelOverride.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 		return values.length > 0 ? values.join(", ") : undefined;
-	}
-
-	#extractUncachedUsageTokens(usage: unknown): number | undefined {
-		if (!usage || typeof usage !== "object") {
-			return undefined;
-		}
-		const record = usage as Record<string, unknown>;
-		const input = this.#readNumber(record.input);
-		const output = this.#readNumber(record.output);
-		if (input !== undefined || output !== undefined) {
-			return (input ?? 0) + (output ?? 0);
-		}
-		return this.#readNumber(record.totalTokens) ?? this.#readNumber(record.total_tokens);
 	}
 
 	#extractTaskContextPreview(task: string): string | undefined {
