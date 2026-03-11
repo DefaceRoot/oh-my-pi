@@ -31,7 +31,7 @@ export class TerminalInfo {
 		if (this.imageProtocol === ImageProtocol.Sixel) {
 			return SIXEL_DCS_START_REGEX.test(line.slice(0, 128));
 		}
-		return line.slice(0, 64).includes(this.imageProtocol);
+		return line.includes(this.imageProtocol);
 	}
 
 	formatNotification(message: string): string {

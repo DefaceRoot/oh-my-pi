@@ -113,6 +113,22 @@ describe("terminal image rendering", () => {
 	});
 });
 
+describe("terminal image line detection", () => {
+	const originalProtocol = TERMINAL.imageProtocol;
+
+	afterEach(() => {
+		terminal.imageProtocol = originalProtocol;
+	});
+
+	it("detects Kitty graphics sequences even when text prefixes them on the same line", () => {
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		const mixedLine = `${"prefix ".repeat(20)}│ \x1b_Ga=T,f=100;AA==\x1b\\`;
+
+		expect(TERMINAL.isImageLine(mixedLine)).toBe(true);
+	});
+});
+
+
 describe("Windows Terminal Preview SIXEL detection", () => {
 	it("requires Windows platform, WT session, and known version 1.22+", () => {
 		expect(
