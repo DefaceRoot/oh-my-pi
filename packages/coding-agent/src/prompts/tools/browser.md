@@ -1,24 +1,22 @@
-Navigates, clicks, types, scrolls, drags, queries DOM content, and captures screenshots.
+Automate browser sessions: navigate, interact, query DOM, extract readable content, and capture screenshots.
 
 <instruction>
-- `"open"` starts a headless session (or implicitly on first action); `"goto"` navigates to `url`; `"close"` releases the browser
-- `"observe"` captures a numbered accessibility snapshot — prefer `click_id`/`type_id`/`fill_id` using returned `element_id` values; flags: `include_all`, `viewport_only`
-- `"click"`, `"type"`, `"fill"`, `"press"`, `"scroll"`, `"drag"` for selector-based interactions — prefer ARIA/text selectors (`p-aria/[name="Sign in"]`, `p-text/Continue`) over brittle CSS
-- `"click_id"`, `"type_id"`, `"fill_id"` to interact with observed elements without selectors
-- `"wait_for_selector"` before interacting when the page is dynamic
-- `"evaluate"` runs a JS expression in page context
-- `"get_text"`, `"get_html"`, `"get_attribute"` for DOM queries — batch via `args: [{ selector, attribute? }]`
-- `"extract_readable"` returns reader-mode content; `format`: `"markdown"` (default) or `"text"`
-- `"screenshot"` captures images (optionally with `selector`); can save to disk via `path`
+- `open` starts a headless session; `goto` navigates; `close` ends session.
+- Use `observe` to get accessibility snapshot + `element_id` targets.
+- Prefer `click_id` / `type_id` / `fill_id` after `observe`; selector actions are fallback.
+- Use `wait_for_selector` for dynamic pages.
+- `evaluate` runs page JS.
+- `get_text` / `get_html` / `get_attribute` query DOM (batch with `args`).
+- `extract_readable` returns reader-mode markdown/text.
+- `screenshot` captures visual output (optionally scoped by selector/path).
 </instruction>
 
 <critical>
-**You **MUST** default to `observe`, not `screenshot`.**
-- `observe` is cheaper, faster, and returns structured data — use it to understand page state, find elements, and plan interactions.
-- You **SHOULD** only use `screenshot` when visual appearance matters (verifying layout, debugging CSS, capturing a visual artifact for the user).
-- You **MUST NOT** screenshot just to "see what's on the page" — `observe` gives you that with element IDs you can act on immediately.
+- Default to `observe`, not `screenshot`.
+- Use screenshots only when visual appearance matters.
+- Do not screenshot solely to inspect page state.
 </critical>
 
 <output>
-Text for navigation/DOM queries, images for screenshots.
+Text for navigation/DOM queries; image output for screenshots.
 </output>

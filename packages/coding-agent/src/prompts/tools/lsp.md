@@ -1,33 +1,30 @@
-Interacts with Language Server Protocol servers for code intelligence.
+Use Language Server Protocol features for code intelligence and safe symbol edits.
 
 <operations>
-- `diagnostics`: Get errors/warnings for file, glob, or entire workspace (no file)
-- `definition`: Go to symbol definition → file path + position + 3-line source context
-- `type_definition`: Go to symbol type definition → file path + position + 3-line source context
-- `implementation`: Find concrete implementations → file path + position + 3-line source context
-- `references`: Find references → locations with 3-line source context (first 50), remaining location-only
-- `hover`: Get type info and documentation → type signature + docs
-- `symbols`: List symbols in file, or search workspace (with query, no file)
-- `rename`: Rename symbol across codebase → preview or apply edits
-- `code_actions`: List available quick-fixes/refactors/import actions; apply one when `apply: true` and `query` matches title or index
-- `status`: Show active language servers
-- `reload`: Restart the language server
+- `diagnostics`: file/glob/workspace diagnostics
+- `definition`, `type_definition`, `implementation`, `references`: jump/search symbol locations with context
+- `hover`: type/docs info
+- `symbols`: file/workspace symbol search
+- `rename`: symbol rename (preview/apply)
+- `code_actions`: list/apply quick-fixes/refactors/import actions
+- `status`: list active servers
+- `reload`: restart server
 </operations>
 
 <parameters>
-- `file`: File path; for diagnostics it may be a glob pattern (e.g., `src/**/*.ts`)
-- `line`: 1-indexed line number for position-based actions
-- `symbol`: Substring on the target line used to resolve column automatically
-- `occurrence`: 1-indexed match index when `symbol` appears multiple times on the same line
-- `query`: Symbol search query, code-action kind filter (list mode), or code-action selector (apply mode)
-- `new_name`: Required for rename
-- `apply`: Apply edits for rename/code_actions (default true for rename, list mode for code_actions unless explicitly true)
-- `timeout`: Request timeout in seconds (clamped to 5-60, default 20)
+- `file`: file path (diagnostics may accept globs)
+- `line`: 1-indexed line for position-based actions
+- `symbol`: substring on target line to resolve column
+- `occurrence`: 1-indexed disambiguation when symbol appears multiple times on one line
+- `query`: symbol search or code-action selector
+- `new_name`: required for rename
+- `apply`: apply edits (rename defaults true; code_actions defaults list mode)
+- `timeout`: request timeout seconds (5-60, default 20)
 </parameters>
 
 <caution>
-- Requires running LSP server for target language
-- Some operations require file to be saved to disk
-- Diagnostics glob mode samples up to 20 files per request to avoid long-running stalls on broad patterns
-- When `symbol` is provided for position-based actions, missing symbols or out-of-bounds `occurrence` values return an explicit error instead of silently falling back
+- Requires a running language server for target language.
+- Some actions require saved files.
+- Broad diagnostics globs are sampled to avoid long stalls.
+- Invalid `symbol`/`occurrence` returns explicit errors.
 </caution>
