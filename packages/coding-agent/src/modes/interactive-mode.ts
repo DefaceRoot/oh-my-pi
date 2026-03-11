@@ -69,6 +69,7 @@ import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SubagentIndex } from "./subagent-view/subagent-index";
 import { SubagentNavigatorModal } from "./subagent-view/subagent-navigator-modal";
 import { SubagentArtifactsWatchManager } from "./subagent-view/subagent-watch";
+import { extractTaskContextPreview } from "./subagent-view/task-preview";
 import type {
 	SubagentIndexSnapshot,
 	SubagentNavigatorSelection,
@@ -1532,8 +1533,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentCycleIndex = currentSelection.groupIndex;
 			this.subagentNestedCycleIndex = currentSelection.refIndex;
 		} else {
-			this.subagentCycleIndex = options.scope === "root" && options.direction < 0 ? groups.length - 1 : 0;
-			this.subagentNestedCycleIndex = -1;
+			const latestSelection = this.findMostRecentSubagentSelection(groups);
+			if (latestSelection) {
+				this.subagentCycleIndex = latestSelection.groupIndex;
+				this.subagentNestedCycleIndex = latestSelection.refIndex;
+			} else {
+				this.subagentCycleIndex = options.scope === "root" && options.direction < 0 ? groups.length - 1 : 0;
+				this.subagentNestedCycleIndex = -1;
+			}
 		}
 
 		const selectedGroup = groups[this.subagentCycleIndex] ?? groups[0]!;
@@ -1564,7 +1571,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			groups,
 			{ groupIndex: this.subagentCycleIndex, nestedIndex: this.subagentNestedCycleIndex },
 			{
-				onSelectionChange: selection => this.applySubagentNavigatorSelection(selection, groups),
+				onSelectionChange: selection => this.applySubagentNavigatorSelection(selection),
 				onOpenSelection: selection => {
 					void this.openSubagentTranscriptFromNavigator(selection);
 				},
@@ -2070,6 +2077,34 @@ export class InteractiveMode implements InteractiveModeContext {
 		return undefined;
 	}
 
+	private findMostRecentSubagentSelection(
+		groups: SubagentViewGroup[],
+	): { groupIndex: number; refIndex: number } | undefined {
+		let best: { groupIndex: number; refIndex: number; score: number } | undefined;
+		for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+			const group = groups[groupIndex];
+			if (!group) continue;
+			const rootRef = this.getSubagentRootRef(group);
+			if (rootRef) {
+				const rootScore = this.getSubagentRecencyScore(rootRef);
+				if (!best || rootScore > best.score) {
+					best = { groupIndex, refIndex: -1, score: rootScore };
+				}
+			}
+			const nestedRefs = this.getSubagentNestedRefs(group);
+			for (let refIndex = 0; refIndex < nestedRefs.length; refIndex += 1) {
+				const ref = nestedRefs[refIndex];
+				if (!ref) continue;
+				const score = this.getSubagentRecencyScore(ref);
+				if (!best || score > best.score) {
+					best = { groupIndex, refIndex, score };
+				}
+			}
+		}
+		if (!best) return undefined;
+		return { groupIndex: best.groupIndex, refIndex: best.refIndex };
+	}
+
 	private getSubagentHierarchy(id: string): { rootId: string; parentId?: string; depth: number } {
 		const segments = id.split(".").filter(Boolean);
 		const rootId = segments[0] ?? id;
@@ -2133,7 +2168,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const actualModelLabel = transcript.model;
 		const modelLabel = actualModelLabel ?? requestedModelLabel ?? "default";
 		const contextLabel = this.clipPreview(
-			selected.contextPreview ?? transcript.contextPreview ?? selected.description ?? "(no context)",
+			selected.description ?? selected.contextPreview ?? transcript.contextPreview ?? "(no context)",
 			120,
 		);
 		const skillsUsed = transcript.skillsUsed ?? [];
@@ -2285,15 +2320,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return tail.replace(/[_-]+/g, " ").trim();
 	}
 
-	private extractTaskContextPreview(task: string): string | undefined {
-		const stripped = task.replace(/<swarm_context>[\s\S]*?<\/swarm_context>/g, " ");
-		const lines = stripped
-			.split("\n")
-			.map(line => line.trim())
-			.filter(Boolean);
-		return lines[0] ? this.clipPreview(lines[0], 160) : undefined;
-	}
-
 	private clipPreview(text: string, maxChars: number): string {
 		const normalized = text.replace(/\s+/g, " ").trim();
 		if (normalized.length <= maxChars) return normalized;
@@ -2354,7 +2380,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 
 			if (entry.type === "session_init" && typeof entry.task === "string" && !contextPreview) {
-				contextPreview = this.extractTaskContextPreview(entry.task);
+				contextPreview = extractTaskContextPreview(entry.task);
 				for (const skill of this.extractPreloadedSkillNames(entry.systemPrompt)) {
 					skillsUsed.add(skill);
 				}
@@ -2439,7 +2465,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						sessionContext: fallback.sessionContext,
 						model: latestModel ?? fallback.model,
 						tokens: fallback.tokens ?? tokens,
-						contextPreview: sessionTask ? this.extractTaskContextPreview(sessionTask) : fallback.contextPreview,
+						contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : fallback.contextPreview,
 						skillsUsed: skillsUsed ?? fallback.skillsUsed,
 					};
 				}
@@ -2450,7 +2476,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					sessionContext,
 					model: latestModel,
 					tokens,
-					contextPreview: sessionTask ? this.extractTaskContextPreview(sessionTask) : undefined,
+					contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : undefined,
 					skillsUsed,
 				};
 			} catch {

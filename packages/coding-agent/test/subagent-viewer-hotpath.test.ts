@@ -284,4 +284,46 @@ describe("InteractiveMode subagent token loading", () => {
 
 		expect(transcript?.tokens).toBe(120);
 	});
+	test("loadSubagentTranscript context preview skips prompt template headers", async () => {
+		const sessionPath = path.join(tempDir, "session-template.jsonl");
+		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
+
+		const templatedTask = [
+			"═══════════Background═══════════",
+			"<context>",
+			"## Goal",
+			"Shared context",
+			"</context>",
+			"",
+			"═══════════Task═══════════",
+			"Your assignment is below. Your work begins now.",
+			"<goal>",
+			"## Target",
+			"- Investigate navigator title fallback",
+			"</goal>",
+		].join("\n");
+
+		vi.spyOn(SessionManager, "open").mockResolvedValue({
+			getEntries: () => [
+				{ type: "session_init", task: templatedTask },
+				{ type: "model_change", model: "claude-sonnet-4-20250514" },
+			],
+			buildSessionContext: () => ({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				thinkingLevel: "high",
+				models: {},
+				injectedTtsrRules: [],
+				mode: "none",
+				modeData: undefined,
+			}),
+		} as any);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "templated-subagent", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.contextPreview).toBe("Investigate navigator title fallback");
+		expect(transcript?.contextPreview).not.toContain("Background");
+	});
+
+
 });

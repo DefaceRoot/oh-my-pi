@@ -226,6 +226,66 @@ describe("overlay live-update: navigator", () => {
 		expect(mode.subagentCycleIndex).toBe(0);
 		expect(mode.subagentViewActiveId).toBe("0-Explore");
 	});
+	test("syncSubagentOverlaysForSnapshotChange does not resolve navigator selection through stale group order", async () => {
+		const exploreRef = makeRef("0-Explore", { agent: "explore", lastUpdatedMs: 100 });
+		const researchRef = makeRef("1-Research", { agent: "research", lastUpdatedMs: 200 });
+		const initialGroups = [makeGroup("0-Explore", [exploreRef]), makeGroup("1-Research", [researchRef])];
+		const overlayHandle: MockOverlayHandle = {
+			hide: vi.fn(),
+			setHidden: vi.fn(),
+			isHidden: () => false,
+		};
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.subagentSnapshot = makeSnapshot([exploreRef, researchRef], initialGroups, 1);
+		mode.subagentViewActiveId = "1-Research";
+		mode.subagentCycleIndex = 1;
+		mode.subagentNestedCycleIndex = -1;
+		mode.subagentNestedArrowMode = false;
+		mode.subagentNavigatorComponent = undefined;
+		mode.subagentNavigatorClose = undefined;
+		mode.subagentNavigatorOverlay = undefined;
+		mode.subagentNavigatorGroups = [];
+		mode.subagentSessionViewer = undefined;
+		mode.subagentSessionOverlay = undefined;
+		mode.subagentCycleSignature = undefined;
+		mode.subagentViewRequestToken = 0;
+		mode.statusLine = { setHookStatus: vi.fn() };
+		mode.ui = {
+			requestRender: vi.fn(),
+			showOverlay: vi.fn(() => overlayHandle),
+			terminal: { rows: 40, columns: 120 },
+		};
+		mode.keybindings = { getDisplayString: vi.fn(() => "Ctrl+X") };
+		mode.showStatus = vi.fn();
+		mode.showWarning = vi.fn();
+		mode.loadMissingTokensForGroups = vi.fn(async () => undefined);
+		mode.isInitialized = true;
+
+		mode.openSubagentNavigator();
+		expect(mode.subagentViewActiveId).toBe("1-Research");
+		mode.statusLine.setHookStatus.mockClear();
+
+		const refreshedResearchRef = makeRef("1-Research", { agent: "research", lastUpdatedMs: 1_000, tokens: 5000 });
+		const refreshedExploreRef = makeRef("0-Explore", { agent: "explore", lastUpdatedMs: 100, tokens: 1200 });
+		const reorderedGroups = [
+			makeGroup("1-Research", [refreshedResearchRef]),
+			makeGroup("0-Explore", [refreshedExploreRef]),
+		];
+		const updatedSnapshot = makeSnapshot([refreshedResearchRef, refreshedExploreRef], reorderedGroups, 2);
+
+		await mode.syncSubagentOverlaysForSnapshotChange(updatedSnapshot, "watch");
+
+		const selectedIds = mode.statusLine.setHookStatus.mock.calls
+			.map((call: [string, string | undefined]) => call[1])
+			.filter((value: string | undefined): value is string => typeof value === "string" && value.includes("task "))
+			.map(value => (value.includes("1-Research") ? "1-Research" : value.includes("0-Explore") ? "0-Explore" : value));
+
+		expect(selectedIds).toHaveLength(2);
+		expect(selectedIds).toEqual(["1-Research", "1-Research"]);
+		expect(mode.subagentViewActiveId).toBe("1-Research");
+		expect(mode.subagentCycleIndex).toBe(0);
+	});
 });
 
 describe("overlay live-update: viewer", () => {
