@@ -1,0 +1,246 @@
+roles: 
+  default: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+      - chrome-devtools
+    skills: all
+  orchestrator: 
+    tools: 
+      - read
+      - bash
+      - task
+      - await
+      - todo_write
+      - ask
+    mcp: 
+      - augment
+    skills: 
+      categories: 
+        - workflow
+        - infra
+  plan: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - web_search
+      - fetch
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - render_mermaid
+      - resolve
+      - exit_plan_mode
+    mcp: 
+      - augment
+    skills: 
+      categories: 
+        - planning
+        - workflow
+  ask: 
+    tools: 
+      - read
+      - find
+      - grep
+      - fetch
+      - web_search
+      - lsp
+      - task
+      - submit_result
+    mcp: 
+      - augment
+    skills: none
+  explore: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  implement: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+      - better-context
+    skills: all
+  code-reviewer: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  designer: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+      - chrome-devtools
+    skills: all
+  research: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+subagents: 
+  designer: 
+    mcp: 
+      - augment
+      - chrome-devtools
+  grafana: 
+    mcp: 
+      - augment
+      - grafana
+  research: 
+    mcp: 
+      - augment
+      - better-context
+  explore: 
+    mcp: 
+      - augment
+      - better-context
+  ask-explore: 
+    mcp: []
+  ask-research: 
+    mcp:
+      - augment
+  _default: 
+    mcp: 
+      - augment

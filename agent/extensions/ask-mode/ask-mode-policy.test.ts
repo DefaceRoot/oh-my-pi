@@ -177,7 +177,8 @@ describe("ask-mode policy", () => {
     it("keeps persisted ask tools aligned with enforced parent ask policy", async () => {
       const configuredTools = await readAskToolsFromRepoRoles();
       for (const tool of configuredTools) {
-        expect(decisionFor(parentAskContext(), tool)).toBeUndefined();
+        const input = tool === "task" ? { agent: "ask-explore" } : undefined;
+        expect(decisionFor(parentAskContext(), tool, input)).toBeUndefined();
       }
     });
   });
