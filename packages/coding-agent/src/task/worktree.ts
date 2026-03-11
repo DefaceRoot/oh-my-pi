@@ -587,6 +587,11 @@ function isMissingBranchError(stderr: string): boolean {
 	);
 }
 
+function isMissingWorktreeError(stderr: string): boolean {
+	const normalized = stderr.toLowerCase();
+	return normalized.includes("no such file or directory") || normalized.includes("not a working tree");
+}
+
 async function removeLocalBranch(repoRoot: string, branch: string): Promise<void> {
 	const result = await $`git branch -D ${branch}`.cwd(repoRoot).quiet().nothrow();
 	if (result.exitCode === 0) return;
@@ -615,6 +620,53 @@ async function removeRemoteBranch(repoRoot: string, remoteBranch: string): Promi
 	throw new Error(stderr || `Failed to delete remote branch ${remoteBranch}.`);
 }
 
+async function removeRemoteTrackingBranch(repoRoot: string, remoteBranch: string): Promise<void> {
+	const result = await $`git branch -dr ${remoteBranch}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return;
+	const stderr = result.stderr.toString().trim();
+	if (isMissingBranchError(stderr)) return;
+	throw new Error(stderr || `Failed to delete remote-tracking branch ${remoteBranch}.`);
+}
+
+async function getGitConfigValue(repoRoot: string, key: string): Promise<string | undefined> {
+	const result = await $`git config --get ${key}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode !== 0) return undefined;
+	const value = result.text().trim();
+	return value || undefined;
+}
+
+async function listGitRemotes(repoRoot: string): Promise<string[]> {
+	const result = await $`git remote`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode !== 0) {
+		const stderr = result.stderr.toString().trim();
+		throw new Error(stderr || "Failed to enumerate git remotes.");
+	}
+	return result
+		.text()
+		.split("\n")
+		.map(remote => remote.trim())
+		.filter(Boolean);
+}
+
+async function resolveRemoteCleanupBranch(repoRoot: string, branch: string): Promise<string | undefined> {
+	const remotes = await listGitRemotes(repoRoot);
+	if (remotes.length === 0) return undefined;
+
+	const configuredPushRemote = await getGitConfigValue(repoRoot, `branch.${branch}.pushRemote`);
+	const configuredBranchRemote = await getGitConfigValue(repoRoot, `branch.${branch}.remote`);
+	const configuredDefaultRemote = await getGitConfigValue(repoRoot, "remote.pushDefault");
+	const configuredRemote = [configuredPushRemote, configuredBranchRemote, configuredDefaultRemote].find(
+		(remote): remote is string => Boolean(remote) && remotes.includes(remote),
+	);
+	if (configuredRemote) {
+		return `${configuredRemote}/${branch}`;
+	}
+	if (remotes.length === 1) {
+		return `${remotes[0]}/${branch}`;
+	}
+	return undefined;
+}
+
 export async function cleanupSelectedWorktrees(
 	repoRoot: string,
 	targets: WorktreeCleanupTarget[],
@@ -638,22 +690,23 @@ export async function cleanupSelectedWorktrees(
 	for (const target of uniqueTargets) {
 		const resolvedPath = path.resolve(target.path);
 		if (options.removeLocalWorktree) {
-			await cleanupWorktree(target.path);
+			await cleanupWorktree(resolvedRepoRoot, target.path);
 		}
 
-		if (options.removeLocalBranch) {
-			if (target.branch) {
-				await removeLocalBranch(resolvedRepoRoot, target.branch);
-			} else {
-				warnings.push(`Skipped local branch deletion for detached worktree: ${target.path}`);
-			}
+		if (options.removeLocalBranch && target.branch) {
+			await removeLocalBranch(resolvedRepoRoot, target.branch);
 		}
 
-		if (options.removeRemoteBranch) {
-			if (!target.remoteBranch) {
-				warnings.push(`Skipped remote branch deletion for ${target.path}: missing remote branch metadata.`);
-			} else {
-				await removeRemoteBranch(resolvedRepoRoot, target.remoteBranch);
+		if (options.removeRemoteBranch && target.branch) {
+			const remoteBranch =
+				target.remoteBranch ?? (await resolveRemoteCleanupBranch(resolvedRepoRoot, target.branch));
+			if (remoteBranch) {
+				await removeRemoteBranch(resolvedRepoRoot, remoteBranch);
+				await removeRemoteTrackingBranch(resolvedRepoRoot, remoteBranch);
+			} else if ((await listGitRemotes(resolvedRepoRoot)).length > 0) {
+				warnings.push(
+					`Skipped remote branch deletion for ${target.path}: could not determine a remote counterpart for ${target.branch}.`,
+				);
 			}
 		}
 
@@ -671,14 +724,14 @@ export async function cleanupSelectedWorktrees(
 	return { cleaned, warnings };
 }
 
-export async function cleanupWorktree(dir: string): Promise<void> {
+export async function cleanupWorktree(repoRoot: string, dir: string): Promise<void> {
 	try {
-		const commonDirRaw = await $`git rev-parse --git-common-dir`.cwd(dir).quiet().nothrow().text();
-		const commonDir = commonDirRaw.trim();
-		if (commonDir) {
-			const resolvedCommon = path.resolve(dir, commonDir);
-			const repoRoot = path.dirname(resolvedCommon);
-			await $`git worktree remove -f ${dir}`.cwd(repoRoot).quiet().nothrow();
+		const result = await $`git worktree remove -f ${dir}`.cwd(repoRoot).quiet().nothrow();
+		if (result.exitCode !== 0) {
+			const stderr = result.stderr.toString().trim();
+			if (stderr && !isMissingWorktreeError(stderr)) {
+				throw new Error(stderr || `Failed to remove worktree: ${dir}`);
+			}
 		}
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });

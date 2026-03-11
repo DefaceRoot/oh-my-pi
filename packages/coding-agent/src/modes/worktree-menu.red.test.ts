@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../config/settings";
+import { cleanupSelectedWorktrees, listProjectWorktrees } from "../task/worktree";
 import { flattenWorkflowMenuActions, WORKFLOW_MENUS } from "./action-buttons";
 import { StatusLineComponent } from "./components/status-line";
 import { InputController } from "./controllers/input-controller";
@@ -58,7 +59,10 @@ async function createCommittedRepoWithUpstream(): Promise<{ repoDir: string; rem
 	return { repoDir, remoteDir };
 }
 
-async function createCommittedRepoWithMissingLinkedWorktree(): Promise<{ repoDir: string; missingWorktreePath: string }> {
+async function createCommittedRepoWithMissingLinkedWorktree(): Promise<{
+	repoDir: string;
+	missingWorktreePath: string;
+}> {
 	const repoDir = await createCommittedRepo();
 	const missingWorktreePath = path.join(repoDir, ".worktrees", "stale");
 	await fs.mkdir(path.dirname(missingWorktreePath), { recursive: true });
@@ -83,6 +87,69 @@ async function createCommittedRepoWithMissingLinkedWorktreeFromLinkedCwd(): Prom
 	return { repoDir, currentWorktreePath, missingWorktreePath };
 }
 
+async function createCommittedRepoWithMissingDetachedWorktree(): Promise<{
+	repoDir: string;
+	missingWorktreePath: string;
+}> {
+	const repoDir = await createCommittedRepo();
+	const missingWorktreePath = path.join(repoDir, ".worktrees", "detached");
+	await fs.mkdir(path.dirname(missingWorktreePath), { recursive: true });
+	runGit(repoDir, ["worktree", "add", "--detach", missingWorktreePath, "HEAD"]);
+	await fs.rm(missingWorktreePath, { recursive: true, force: true });
+	return { repoDir, missingWorktreePath };
+}
+
+async function createCommittedRepoWithRemoteBranchWithoutUpstream(): Promise<{
+	repoDir: string;
+	remoteDir: string;
+	missingWorktreePath: string;
+	branchName: string;
+}> {
+	const { repoDir, remoteDir } = await createCommittedRepoWithUpstream();
+	const branchName = "feature/remote-fallback";
+	const missingWorktreePath = path.join(repoDir, ".worktrees", "remote-fallback");
+	await fs.mkdir(path.dirname(missingWorktreePath), { recursive: true });
+	runGit(repoDir, ["worktree", "add", "-b", branchName, missingWorktreePath]);
+	runGit(repoDir, ["push", "origin", branchName]);
+	try {
+		runGit(repoDir, ["config", "--unset-all", `branch.${branchName}.remote`]);
+	} catch {}
+	try {
+		runGit(repoDir, ["config", "--unset-all", `branch.${branchName}.merge`]);
+	} catch {}
+	await fs.rm(missingWorktreePath, { recursive: true, force: true });
+	return { repoDir, remoteDir, missingWorktreePath, branchName };
+}
+
+async function createCommittedRepoWithAmbiguousRemoteBranchWithoutUpstream(): Promise<{
+	repoDir: string;
+	primaryRemoteDir: string;
+	secondaryRemoteDir: string;
+	missingWorktreePath: string;
+	branchName: string;
+}> {
+	const { repoDir, remoteDir: primaryRemoteDir } = await createCommittedRepoWithUpstream();
+	const secondaryRemoteDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-secondary-remote-"));
+	runGit(secondaryRemoteDir, ["init", "--bare"]);
+	runGit(repoDir, ["remote", "add", "backup", secondaryRemoteDir]);
+	runGit(repoDir, ["config", "remote.pushDefault", ""]);
+	const branchName = "feature/multi-remote-ambiguous";
+	const missingWorktreePath = path.join(repoDir, ".worktrees", "multi-remote-ambiguous");
+	await fs.mkdir(path.dirname(missingWorktreePath), { recursive: true });
+	runGit(repoDir, ["worktree", "add", "-b", branchName, missingWorktreePath]);
+	runGit(repoDir, ["push", "backup", branchName]);
+	try {
+		runGit(repoDir, ["config", "--unset-all", `branch.${branchName}.pushRemote`]);
+	} catch {}
+	try {
+		runGit(repoDir, ["config", "--unset-all", `branch.${branchName}.remote`]);
+	} catch {}
+	try {
+		runGit(repoDir, ["config", "--unset-all", `branch.${branchName}.merge`]);
+	} catch {}
+	await fs.rm(missingWorktreePath, { recursive: true, force: true });
+	return { repoDir, primaryRemoteDir, secondaryRemoteDir, missingWorktreePath, branchName };
+}
 
 function createCleanupWorkflowSubmitFixture(options?: { currentCwd?: string }) {
 	const sessionPromptSpy = vi.fn(async () => undefined);
@@ -343,6 +410,129 @@ describe("worktree menu red behavior", () => {
 		}
 	});
 
+	test("cleans up missing linked worktrees even when the path is already gone", async () => {
+		const { repoDir, missingWorktreePath } = await createCommittedRepoWithMissingLinkedWorktree();
+		try {
+			const inventory = await listProjectWorktrees(repoDir);
+			const missingWorktree = inventory.worktrees.find(worktree => worktree.path === missingWorktreePath);
+			expect(missingWorktree).toBeDefined();
+			if (!missingWorktree) return;
+
+			expect(missingWorktree.exists).toBe(false);
+
+			const result = await cleanupSelectedWorktrees(repoDir, [missingWorktree], {
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: false,
+				removeArtifacts: true,
+			});
+
+			expect(result.warnings).toEqual([]);
+			expect(result.cleaned).toHaveLength(1);
+			expect(result.cleaned[0]?.path).toBe(missingWorktreePath);
+			expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(missingWorktreePath);
+			expect(runGit(repoDir, ["branch", "--list", "feature/stale"])).toBe("");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+		}
+	});
+
+	test("cleans up missing detached worktrees without partial-cleanup warnings", async () => {
+		const { repoDir, missingWorktreePath } = await createCommittedRepoWithMissingDetachedWorktree();
+		try {
+			const inventory = await listProjectWorktrees(repoDir);
+			const missingWorktree = inventory.worktrees.find(worktree => worktree.path === missingWorktreePath);
+			expect(missingWorktree).toBeDefined();
+			if (!missingWorktree) return;
+
+			expect(missingWorktree.exists).toBe(false);
+			expect(missingWorktree.branch).toBeUndefined();
+			expect(missingWorktree.remoteBranch).toBeUndefined();
+
+			const result = await cleanupSelectedWorktrees(repoDir, [missingWorktree], {
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: true,
+				removeArtifacts: true,
+			});
+
+			expect(result.warnings).toEqual([]);
+			expect(result.cleaned).toHaveLength(1);
+			expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(missingWorktreePath);
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+		}
+	});
+
+	test("deletes same-name remote branches when upstream metadata is missing", async () => {
+		const { repoDir, remoteDir, missingWorktreePath, branchName } =
+			await createCommittedRepoWithRemoteBranchWithoutUpstream();
+		try {
+			const inventory = await listProjectWorktrees(repoDir);
+			const missingWorktree = inventory.worktrees.find(worktree => worktree.path === missingWorktreePath);
+			expect(missingWorktree).toBeDefined();
+			if (!missingWorktree) return;
+
+			expect(missingWorktree.exists).toBe(false);
+			expect(missingWorktree.branch).toBe(branchName);
+			expect(missingWorktree.remoteBranch).toBeUndefined();
+
+			const result = await cleanupSelectedWorktrees(repoDir, [missingWorktree], {
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: true,
+				removeArtifacts: true,
+			});
+
+			expect(result.warnings).toEqual([]);
+			expect(result.cleaned).toHaveLength(1);
+			expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(missingWorktreePath);
+			expect(runGit(repoDir, ["branch", "--list", branchName])).toBe("");
+			expect(runGit(remoteDir, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${branchName}`])).toBe("");
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+			await fs.rm(remoteDir, { recursive: true, force: true });
+		}
+	});
+
+	test("warns instead of guessing remote cleanup target when metadata is absent in multi-remote repositories", async () => {
+		const { repoDir, primaryRemoteDir, secondaryRemoteDir, missingWorktreePath, branchName } =
+			await createCommittedRepoWithAmbiguousRemoteBranchWithoutUpstream();
+		try {
+			const inventory = await listProjectWorktrees(repoDir);
+			const missingWorktree = inventory.worktrees.find(worktree => worktree.path === missingWorktreePath);
+			expect(missingWorktree).toBeDefined();
+			if (!missingWorktree) return;
+
+			expect(missingWorktree.exists).toBe(false);
+			expect(missingWorktree.branch).toBe(branchName);
+			expect(missingWorktree.remoteBranch).toBeUndefined();
+
+			const result = await cleanupSelectedWorktrees(repoDir, [missingWorktree], {
+				removeLocalWorktree: true,
+				removeLocalBranch: true,
+				removeRemoteBranch: true,
+				removeArtifacts: true,
+			});
+
+			expect(result.warnings).toEqual([
+				`Skipped remote branch deletion for ${missingWorktreePath}: could not determine a remote counterpart for ${branchName}.`,
+			]);
+			expect(result.cleaned).toHaveLength(1);
+			expect(runGit(repoDir, ["worktree", "list", "--porcelain"])).not.toContain(missingWorktreePath);
+			expect(runGit(repoDir, ["branch", "--list", branchName])).toBe("");
+			expect(
+				runGit(primaryRemoteDir, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${branchName}`]),
+			).toBe("");
+			expect(
+				runGit(secondaryRemoteDir, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${branchName}`]),
+			).toBe(branchName);
+		} finally {
+			await fs.rm(repoDir, { recursive: true, force: true });
+			await fs.rm(primaryRemoteDir, { recursive: true, force: true });
+			await fs.rm(secondaryRemoteDir, { recursive: true, force: true });
+		}
+	});
 
 	test("enumerates repository worktrees with upstream metadata without parser warnings when opening cleanup modal", async () => {
 		const { repoDir, remoteDir } = await createCommittedRepoWithUpstream();
