@@ -30,6 +30,29 @@ const ROLE_TOKEN_BUDGET_TARGETS: Record<MainRole, number> = {
 	ask: 8_000,
 };
 
+const HYBRID_MANAGED_STARTUP_BASELINE_TARGETS: Record<"default" | "plan", number> = {
+	default: 15_000,
+	plan: 14_000,
+};
+
+type StartupBudgetRow = Awaited<ReturnType<typeof measureStartupTokenBudgets>>[number];
+
+async function measureManagedStartupRowsForHybridBudget(): Promise<Map<MainRole, StartupBudgetRow>> {
+	const previousNodeEnv = process.env.NODE_ENV;
+	const previousBunEnv = process.env.BUN_ENV;
+	process.env.NODE_ENV = "test";
+	process.env.BUN_ENV = "test";
+	try {
+		const rows = await measureStartupTokenBudgets({ cwd: os.tmpdir() });
+		return new Map(rows.map(row => [row.mode, row]));
+	} finally {
+		if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+		else process.env.NODE_ENV = previousNodeEnv;
+		if (previousBunEnv === undefined) delete process.env.BUN_ENV;
+		else process.env.BUN_ENV = previousBunEnv;
+	}
+}
+
 const TEST_SKILLS: Skill[] = [
 	{
 		name: "brainstorming",
@@ -418,5 +441,24 @@ describe("Phase 6 RED: startup token benchmark script contract", () => {
 			expect(output.toLowerCase()).toContain(role);
 			expect(output).toContain(String(ROLE_TOKEN_BUDGET_TARGETS[role]));
 		}
+	});
+});
+
+
+describe("Phase 6 RED: hybrid managed startup baseline budgets", () => {
+	it("keeps default managed startup payload within the intended baseline target", async () => {
+		const rowsByMode = await measureManagedStartupRowsForHybridBudget();
+		const defaultRow = rowsByMode.get("default");
+		expect(defaultRow).toBeDefined();
+		if (!defaultRow) throw new Error("Missing managed startup measurement row for default");
+		expect(defaultRow.totalTokens).toBeLessThanOrEqual(HYBRID_MANAGED_STARTUP_BASELINE_TARGETS.default);
+	});
+
+	it("keeps plan managed startup payload within the intended baseline target", async () => {
+		const rowsByMode = await measureManagedStartupRowsForHybridBudget();
+		const planRow = rowsByMode.get("plan");
+		expect(planRow).toBeDefined();
+		if (!planRow) throw new Error("Missing managed startup measurement row for plan");
+		expect(planRow.totalTokens).toBeLessThanOrEqual(HYBRID_MANAGED_STARTUP_BASELINE_TARGETS.plan);
 	});
 });
