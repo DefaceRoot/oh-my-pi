@@ -1116,6 +1116,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			await session.prompt(task);
+			await session.waitForIdle();
 
 			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
 
@@ -1154,6 +1155,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					submitResultErrorAttempts = 0;
 					try {
 						await session.prompt(reminder, reminderToolChoice ? { toolChoice: reminderToolChoice } : undefined);
+						await session.waitForIdle();
 					} finally {
 						submitResultOnlyMode = false;
 						clearTimeout(timeoutId);
@@ -1176,7 +1178,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const lastAssistant = session.getLastAssistantMessage();
 			if (lastAssistant) {
-				if (lastAssistant.stopReason === "aborted") {
+				if (lastAssistant.stopReason === "aborted" && !submitResultCalled) {
 					aborted = abortReason === "signal" || abortReason === undefined;
 					if (aborted) {
 						abortReasonText ??= resolveSignalAbortReason();
