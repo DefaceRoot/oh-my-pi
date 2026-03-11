@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { YAML } from "bun";
+import { RolesConfig } from "@oh-my-pi/pi-coding-agent/config/roles-config";
 import { _testExports } from "./index.ts";
 
 type PolicyContext = ReturnType<(typeof _testExports)["isAskContext"]>;
@@ -40,6 +43,26 @@ const expectAllowed = (context: PolicyContext, toolName: string, input?: Record<
   expect(decision).toBeUndefined();
 };
 
+
+type RolesFileShape = {
+  roles?: Record<string, { tools?: unknown }>;
+};
+
+const repoRolesPath = path.resolve(import.meta.dir, "..", "..", "roles.yml");
+
+async function readAskToolsFromRepoRoles(): Promise<string[]> {
+  const parsed = YAML.parse(await Bun.file(repoRolesPath).text()) as RolesFileShape;
+  const tools = parsed.roles?.ask?.tools;
+  if (!Array.isArray(tools) || tools.some(tool => typeof tool !== "string")) {
+    throw new Error("Expected roles.yml to define roles.ask.tools as a string array");
+  }
+  return tools;
+}
+
+const readSubagentMcpFromRepoRoles = (agentName: string): string[] => {
+  const rolesConfig = new RolesConfig(repoRolesPath);
+  return rolesConfig.getMcpForSubagent(agentName);
+};
 describe("ask-mode policy", () => {
   describe("parent ask role", () => {
     it("blocks edit tool", () => {
@@ -150,6 +173,13 @@ describe("ask-mode policy", () => {
         agent: "lint",
       });
     });
+
+    it("keeps persisted ask tools aligned with enforced parent ask policy", async () => {
+      const configuredTools = await readAskToolsFromRepoRoles();
+      for (const tool of configuredTools) {
+        expect(decisionFor(parentAskContext(), tool)).toBeUndefined();
+      }
+    });
   });
 
   describe("ask-explore subagent", () => {
@@ -171,6 +201,13 @@ describe("ask-mode policy", () => {
       });
     });
 
+    it("keeps ask-explore MCP allocation aligned with ask-mode split policy", () => {
+      const configuredMcpServers = readSubagentMcpFromRepoRoles("ask-explore");
+      const askExploreAllowsAugment =
+        decisionFor(askExploreContext(), "mcp_augment_codebase_retrieval") === undefined;
+      expect(configuredMcpServers.includes("augment")).toBe(askExploreAllowsAugment);
+    });
+
     it("allows submit_result tool", () => {
       expectAllowed(askExploreContext(), "submit_result");
     });
@@ -189,6 +226,13 @@ describe("ask-mode policy", () => {
       expectBlocked(askResearchContext(), "task", {
         agent: "ask-explore",
       });
+    });
+
+    it("keeps ask-research MCP allocation aligned with ask-mode split policy", () => {
+      const configuredMcpServers = readSubagentMcpFromRepoRoles("ask-research");
+      const askResearchAllowsAugment =
+        decisionFor(askResearchContext(), "mcp_augment_codebase_retrieval") === undefined;
+      expect(configuredMcpServers.includes("augment")).toBe(askResearchAllowsAugment);
     });
 
     it("allows submit_result tool", () => {

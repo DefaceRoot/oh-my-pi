@@ -1,9 +1,25 @@
 import { describe, expect, test } from "bun:test";
+import * as path from "node:path";
+import { YAML } from "bun";
 import {
-	isOrchestratorParentToolAllowed,
-	resolveParentRuntimeRole,
-	shouldEnforceOrchestratorGuards,
+isOrchestratorParentToolAllowed,
+resolveParentRuntimeRole,
+shouldEnforceOrchestratorGuards,
 } from "./orchestrator-guard.ts";
+
+type RolesFileShape = {
+	roles?: Record<string, { tools?: unknown }>;
+};
+
+async function readOrchestratorToolsFromRepoRoles(): Promise<string[]> {
+	const rolesPath = path.resolve(import.meta.dir, "..", "..", "roles.yml");
+	const parsed = YAML.parse(await Bun.file(rolesPath).text()) as RolesFileShape;
+	const tools = parsed.roles?.orchestrator?.tools;
+	if (!Array.isArray(tools) || tools.some(tool => typeof tool !== "string")) {
+		throw new Error("Expected roles.yml to define roles.orchestrator.tools as a string array");
+	}
+	return tools;
+}
 
 describe("orchestrator parent guard decisions", () => {
 	test("enforces guard for parent turns when model role is orchestrator", () => {
@@ -44,5 +60,12 @@ describe("orchestrator parent guard decisions", () => {
 	test("parent orchestrator allowlist allows augment retrieval and blocks other MCP tools", () => {
 		expect(isOrchestratorParentToolAllowed("mcp_augment_codebase_retrieval")).toBe(true);
 		expect(isOrchestratorParentToolAllowed("mcp_better_context_ask")).toBe(false);
+	});
+
+	test("keeps persisted orchestrator tools aligned with enforced parent guard allowlist", async () => {
+		const configuredTools = await readOrchestratorToolsFromRepoRoles();
+		for (const tool of configuredTools) {
+			expect(isOrchestratorParentToolAllowed(tool)).toBe(true);
+		}
 	});
 });
