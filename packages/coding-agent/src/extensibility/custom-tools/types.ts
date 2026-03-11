@@ -99,6 +99,7 @@ export type CustomToolSessionEvent =
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;
+			noOpReason?: "nothing_to_compact";
 	  }
 	| {
 			reason: "auto_retry_start";

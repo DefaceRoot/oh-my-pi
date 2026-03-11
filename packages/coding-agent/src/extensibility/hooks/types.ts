@@ -406,6 +406,7 @@ export interface AutoCompactionEndEvent {
 	aborted: boolean;
 	willRetry: boolean;
 	errorMessage?: string;
+	noOpReason?: "nothing_to_compact";
 }
 
 /** Event data for auto_retry_start event. */
