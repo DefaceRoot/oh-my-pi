@@ -667,7 +667,8 @@ export class TUI extends Container {
 
 		const mouseEvent = parseSgrMouseEvent(data);
 		if (mouseEvent) {
-			const lineIndex = this.#viewportTopRow + Math.max(0, mouseEvent.y - 1);
+			const currentViewportTop = Math.max(0, this.#previousLines.length - this.terminal.rows);
+			const lineIndex = currentViewportTop + Math.max(0, mouseEvent.y - 1);
 			const lineText =
 				lineIndex >= 0 && lineIndex < this.#previousLines.length ? this.#previousLines[lineIndex] : "";
 			const handled = this.onMouse?.({ ...mouseEvent, lineIndex, lineText });

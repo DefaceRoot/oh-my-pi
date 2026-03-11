@@ -18,6 +18,20 @@ class StaticLinesComponent implements Component {
 	}
 }
 
+class MutableLinesComponent implements Component {
+	constructor(private lines: string[]) {}
+
+	setLines(lines: string[]): void {
+		this.lines = lines;
+	}
+
+	invalidate(): void {}
+
+	render(_width: number): string[] {
+		return [...this.lines];
+	}
+}
+
 describe("TUI mouse events", () => {
 	it("parses SGR mouse input and forwards visible line context", async () => {
 		const term = new VirtualTerminal(40, 4);
@@ -75,6 +89,44 @@ describe("TUI mouse events", () => {
 			expect(received?.action).toBe("release");
 			expect(received?.lineIndex).toBe(7);
 			expect(visibleText(received?.lineText ?? "").trim()).toBe("row-7");
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("maps mouse rows against current rendered lines after content shrinks", async () => {
+		const term = new VirtualTerminal(24, 3);
+		const tui = new TUI(term);
+		const lines = new MutableLinesComponent(Array.from({ length: 6 }, (_value, index) => `row-${index}`));
+		tui.addChild(lines);
+
+		let received: TerminalMouseEvent | undefined;
+		tui.onMouse = event => {
+			received = event;
+			return true;
+		};
+
+		try {
+			tui.start();
+			await Bun.sleep(0);
+			await term.flush();
+
+			expect(term.getViewport().at(-1)?.trim()).toBe("row-5");
+
+			lines.setLines(Array.from({ length: 4 }, (_value, index) => `row-${index}`));
+			tui.requestRender();
+			await Bun.sleep(0);
+			await term.flush();
+
+			const viewport = term.getViewport().map(line => line.trim());
+			expect(viewport).toContain("row-3");
+
+			term.sendInput("\x1b[<0;2;3m");
+			await Bun.sleep(0);
+
+			expect(received?.action).toBe("release");
+			expect(received?.lineIndex).toBe(3);
+			expect(visibleText(received?.lineText ?? "").trim()).toBe("row-3");
 		} finally {
 			tui.stop();
 		}
