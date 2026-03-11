@@ -443,10 +443,9 @@ async function pathExists(targetPath: string): Promise<boolean> {
 }
 
 async function resolveUpstreamBranch(repoRoot: string, branch: string): Promise<string | undefined> {
-	const upstreamRaw = await $`git for-each-ref --format=%(upstream:short) refs/heads/${branch}`
-		.cwd(repoRoot)
-		.quiet()
-		.text();
+	const upstreamFormat = "%(upstream:short)";
+	const branchRef = `refs/heads/${branch}`;
+	const upstreamRaw = await $`git for-each-ref --format=${upstreamFormat} ${branchRef}`.cwd(repoRoot).quiet().text();
 	const upstream = upstreamRaw.trim();
 	return upstream || undefined;
 }
