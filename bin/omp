@@ -7,4 +7,4 @@ FORK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 export PI_CODING_AGENT_DIR="$FORK_ROOT/agent"
 
-exec bun "$FORK_ROOT/packages/coding-agent/src/cli.ts" "$@"
+exec bun --cwd="$FORK_ROOT/packages/coding-agent" src/cli.ts "$@"
