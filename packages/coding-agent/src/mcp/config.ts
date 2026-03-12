@@ -20,6 +20,8 @@ export interface LoadMCPConfigsOptions {
 	filterExa?: boolean;
 	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
 	filterBrowser?: boolean;
+	/** Optional MCP server allowlist applied before connect orchestration */
+	allowedServerNames?: readonly string[];
 }
 
 /** Result of loading MCP configs */
@@ -95,6 +97,11 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	const enableProjectConfig = options?.enableProjectConfig ?? true;
 	const filterExa = options?.filterExa ?? true;
 	const filterBrowser = options?.filterBrowser ?? false;
+	const allowedServerNames = options?.allowedServerNames;
+	const allowedServerSet =
+		allowedServerNames === undefined
+			? undefined
+			: new Set(allowedServerNames.map(name => name.trim()).filter(name => name.length > 0));
 
 	// Load MCP servers via capability system
 	const result = await loadCapability<MCPServer>(mcpCapability.id, { cwd });
@@ -127,6 +134,11 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		exaApiKeys = exaResult.exaApiKeys;
 	}
 
+	if (allowedServerSet) {
+		configs = Object.fromEntries(Object.entries(configs).filter(([name]) => allowedServerSet.has(name)));
+		sources = Object.fromEntries(Object.entries(sources).filter(([name]) => allowedServerSet.has(name)));
+	}
+
 	if (filterBrowser) {
 		const browserResult = filterBrowserMCPServers(configs, sources);
 		configs = browserResult.configs;
@@ -134,6 +146,18 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	}
 
 	return { configs, exaApiKeys, sources };
+}
+
+/**
+ * Discover available MCP server names from current config discovery sources.
+ */
+export async function discoverMCPServerNames(cwd: string, enableProjectConfig: boolean = true): Promise<string[]> {
+	const { configs } = await loadAllMCPConfigs(cwd, {
+		enableProjectConfig,
+		filterExa: false,
+		filterBrowser: false,
+	});
+	return Object.keys(configs).sort((left, right) => left.localeCompare(right));
 }
 
 /** Pattern to match Exa MCP servers */

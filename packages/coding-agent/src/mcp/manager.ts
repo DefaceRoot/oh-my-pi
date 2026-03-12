@@ -109,6 +109,8 @@ export interface MCPDiscoverOptions {
 	filterExa?: boolean;
 	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
 	filterBrowser?: boolean;
+	/** Optional MCP server allowlist applied before connect orchestration */
+	allowedServerNames?: readonly string[];
 	/** Called when starting to connect to servers */
 	onConnecting?: (serverNames: string[]) => void;
 }
@@ -239,11 +241,25 @@ export class MCPManager {
 	 * Returns tools and any connection errors.
 	 */
 	async discoverAndConnect(options?: MCPDiscoverOptions): Promise<MCPLoadResult> {
-		const { configs, exaApiKeys, sources } = await loadAllMCPConfigs(this.cwd, {
+		const {
+			configs: discoveredConfigs,
+			exaApiKeys,
+			sources: discoveredSources,
+		} = await loadAllMCPConfigs(this.cwd, {
 			enableProjectConfig: options?.enableProjectConfig,
 			filterExa: options?.filterExa,
 			filterBrowser: options?.filterBrowser,
+			allowedServerNames: options?.allowedServerNames,
 		});
+		let configs = discoveredConfigs;
+		let sources = discoveredSources;
+		if (options?.allowedServerNames !== undefined) {
+			const allowedServerSet = new Set(
+				options.allowedServerNames.map(name => name.trim()).filter(name => name.length > 0),
+			);
+			configs = Object.fromEntries(Object.entries(configs).filter(([name]) => allowedServerSet.has(name)));
+			sources = Object.fromEntries(Object.entries(sources).filter(([name]) => allowedServerSet.has(name)));
+		}
 		const result = await this.connectServers(configs, sources, options?.onConnecting);
 		result.exaApiKeys = exaApiKeys;
 		return result;
