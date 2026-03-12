@@ -6,8 +6,9 @@ import {
 	findMostRecentSession,
 	loadEntriesFromFile,
 	resolveResumableSession,
+	SessionManager,
 } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("loadEntriesFromFile", () => {
 	let tempDir: string;
@@ -197,5 +198,47 @@ describe("resolveResumableSession", () => {
 
 		expect(match?.scope).toBe("local");
 		expect(match?.session.path).toBe(path.join(sessionDir, "2025-01-01_moved.jsonl"));
+	});
+});
+
+describe("SessionManager.moveTo", () => {
+	const originalAgentDir = getAgentDir();
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `session-test-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		setAgentDir(path.join(tempDir, "agent"));
+	});
+
+	afterEach(() => {
+		setAgentDir(originalAgentDir);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("moves a fresh persisted session before its session file exists on disk", async () => {
+		const cwd = path.join(tempDir, "repo");
+		const worktreeDir = path.join(cwd, ".worktrees", "freeform-test");
+		fs.mkdirSync(cwd, { recursive: true });
+
+		const manager = SessionManager.create(cwd);
+		const originalSessionFile = manager.getSessionFile();
+		expect(originalSessionFile).toBeDefined();
+		expect(fs.existsSync(originalSessionFile!)).toBe(false);
+
+		await manager.moveTo(worktreeDir);
+
+		const movedSessionFile = manager.getSessionFile();
+		expect(movedSessionFile).toBeDefined();
+		expect(movedSessionFile).not.toBe(originalSessionFile);
+		expect(manager.getCwd()).toBe(path.resolve(worktreeDir));
+		expect(fs.existsSync(movedSessionFile!)).toBe(true);
+		expect(fs.existsSync(originalSessionFile!)).toBe(false);
+
+		const entries = await loadEntriesFromFile(movedSessionFile!);
+		expect(entries[0]).toMatchObject({
+			type: "session",
+			cwd: path.resolve(worktreeDir),
+		});
 	});
 });

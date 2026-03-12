@@ -1395,12 +1395,15 @@ export class SessionManager {
 			const newSessionFile = path.join(newSessionDir, path.basename(oldSessionFile));
 			const oldArtifactDir = oldSessionFile.slice(0, -6); // strip .jsonl
 			const newArtifactDir = newSessionFile.slice(0, -6);
+			const hasSessionFileOnDisk = await this.storage.exists(oldSessionFile);
 			let movedSessionFile = false;
 			let movedArtifactDir = false;
 
 			try {
-				await fs.promises.rename(oldSessionFile, newSessionFile);
-				movedSessionFile = true;
+				if (hasSessionFileOnDisk) {
+					await fs.promises.rename(oldSessionFile, newSessionFile);
+					movedSessionFile = true;
+				}
 
 				try {
 					const stat = await fs.promises.stat(oldArtifactDir);
