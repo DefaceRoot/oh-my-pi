@@ -6,6 +6,7 @@ import { MODEL_ROLE_IDS, MODEL_ROLES, type ModelRegistry, type ModelRole } from 
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { RolesConfig } from "../../config/roles-config";
 import type { Settings } from "../../config/settings";
+import { discoverMCPServerNames } from "../../mcp/config";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { getThinkingLevelMetadata } from "../../thinking";
 import { fuzzyFilter } from "../../utils/fuzzy";
@@ -20,6 +21,44 @@ function makeInvertedBadge(label: string, color: ThemeColor): string {
 
 function formatDisplayId(id: string): string {
 	return /^gpt-/i.test(id) ? `GPT-${id.slice(4)}` : id;
+}
+
+const ALWAYS_ON_MCP_SERVER = "augment";
+
+function buildMcpMenuServerList(discoveredServers: readonly string[], selectedServers: ReadonlySet<string>): string[] {
+	const orderedDiscovered: string[] = [];
+	const discoveredSet = new Set<string>();
+	for (const server of discoveredServers) {
+		const normalized = server.trim();
+		if (normalized.length === 0 || normalized === ALWAYS_ON_MCP_SERVER || discoveredSet.has(normalized)) continue;
+		discoveredSet.add(normalized);
+		orderedDiscovered.push(normalized);
+	}
+	const selectedExtras: string[] = [];
+	const selectedExtraSet = new Set<string>();
+	for (const server of selectedServers) {
+		const normalized = server.trim();
+		if (
+			normalized.length === 0 ||
+			normalized === ALWAYS_ON_MCP_SERVER ||
+			discoveredSet.has(normalized) ||
+			selectedExtraSet.has(normalized)
+		) {
+			continue;
+		}
+		selectedExtraSet.add(normalized);
+		selectedExtras.push(normalized);
+	}
+	selectedExtras.sort((left, right) => left.localeCompare(right));
+	return [ALWAYS_ON_MCP_SERVER, ...orderedDiscovered, ...selectedExtras];
+}
+
+function mcpServerListsMatch(left: readonly string[], right: readonly string[]): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index += 1) {
+		if (left[index] !== right[index]) return false;
+	}
+	return true;
 }
 
 interface ModelItem {
@@ -77,6 +116,8 @@ export class ModelSelectorComponent extends Container {
 	#menuSelectedIndex: number = 0;
 	#mcpServers: string[] = [];
 	#mcpSelectedServers = new Set<string>();
+	#discoveredMcpServers: string[] = [];
+	#mcpDiscoveryVersion: number = 0;
 	#pendingRoleSelection: PendingRoleSelection | null = null;
 	// Tab state
 	#providers: string[] = [ALL_TAB];
@@ -108,6 +149,15 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		this.#loadRoleModels();
+		const initialDiscoveryVersion = ++this.#mcpDiscoveryVersion;
+		void this.#discoverMcpServers()
+			.then(discoveredServers => {
+				if (initialDiscoveryVersion !== this.#mcpDiscoveryVersion) return;
+				this.#discoveredMcpServers = discoveredServers;
+			})
+			.catch(() => {
+				// Keep role-config MCP servers when discovery fails during initialization.
+			});
 
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -600,17 +650,50 @@ export class ModelSelectorComponent extends Container {
 
 	#openMcpMenu(model: Model, role: ModelRole, thinkingLevel: ThinkingLevel): void {
 		this.#pendingRoleSelection = { model, role, thinkingLevel };
-		this.#mcpServers = this.#rolesConfig.getKnownMcpServers();
 		this.#mcpSelectedServers = new Set(this.#rolesConfig.getMcpForRole(role));
+		this.#mcpServers = buildMcpMenuServerList(this.#discoveredMcpServers, this.#mcpSelectedServers);
 		this.#menuSelectedIndex = 0;
 		this.#isThinkingMenuOpen = false;
 		this.#isMcpMenuOpen = true;
 		this.#updateView();
+		void this.#refreshMcpServersFromDiscovery();
 	}
 
 	#closeMcpMenu(): void {
+		this.#mcpDiscoveryVersion += 1;
 		this.#isMcpMenuOpen = false;
 		this.#menuContainer.clear();
+	}
+
+	async #discoverMcpServers(): Promise<string[]> {
+		return await discoverMCPServerNames(
+			this.#settings.getCwd(),
+			this.#settings.get("mcp.enableProjectConfig") ?? true,
+		);
+	}
+
+	async #refreshMcpServersFromDiscovery(): Promise<void> {
+		const discoveryVersion = ++this.#mcpDiscoveryVersion;
+		try {
+			const discoveredServers = await this.#discoverMcpServers();
+			if (discoveryVersion !== this.#mcpDiscoveryVersion) return;
+			this.#discoveredMcpServers = discoveredServers;
+			if (!this.#isMcpMenuOpen) return;
+			const mergedServers = buildMcpMenuServerList(discoveredServers, this.#mcpSelectedServers);
+			if (mcpServerListsMatch(this.#mcpServers, mergedServers)) return;
+			const highlightedServerName = this.#mcpServers[this.#menuSelectedIndex];
+			this.#mcpServers = mergedServers;
+			const highlightedServerIndex = highlightedServerName ? this.#mcpServers.indexOf(highlightedServerName) : -1;
+			if (highlightedServerIndex >= 0) {
+				this.#menuSelectedIndex = highlightedServerIndex;
+			} else if (this.#menuSelectedIndex >= this.#mcpServers.length) {
+				this.#menuSelectedIndex = Math.max(0, this.#mcpServers.length - 1);
+			}
+			this.#updateView();
+			this.#tui.requestRender();
+		} catch {
+			// Keep currently available MCP menu entries when discovery fails.
+		}
 	}
 
 	#updateMcpMenu(): void {
@@ -635,7 +718,9 @@ export class ModelSelectorComponent extends Container {
 		);
 		this.#menuContainer.addChild(new Spacer(1));
 		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
-		this.#menuContainer.addChild(new Text(theme.fg("text", `  MCP for: ${theme.bold(roleName)} (${theme.bold(pending.model.id)})`), 0, 0));
+		this.#menuContainer.addChild(
+			new Text(theme.fg("text", `  MCP for: ${theme.bold(roleName)} (${theme.bold(pending.model.id)})`), 0, 0),
+		);
 		this.#menuContainer.addChild(new Spacer(1));
 		for (let i = 0; i < optionLines.length; i++) {
 			const lineText = optionLines[i];

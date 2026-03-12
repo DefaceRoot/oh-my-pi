@@ -410,7 +410,8 @@ function registerPythonCleanup(): void {
 }
 
 function customToolToDefinition(tool: CustomTool): ToolDefinition {
-	const definition: ToolDefinition & { [TOOL_DEFINITION_MARKER]: true } = {
+	const mcpServerName = (tool as CustomTool & { mcpServerName?: string }).mcpServerName;
+	const definition: ToolDefinition & { [TOOL_DEFINITION_MARKER]: true; mcpServerName?: string } = {
 		name: tool.name,
 		label: tool.label,
 		description: tool.description,
@@ -432,6 +433,9 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 			: undefined,
 		[TOOL_DEFINITION_MARKER]: true,
 	};
+	if (typeof mcpServerName === "string" && mcpServerName.length > 0) {
+		definition.mcpServerName = mcpServerName;
+	}
 	return definition;
 }
 
@@ -649,15 +653,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const getRoleMcpAllowlist = (role: string | undefined): string[] => {
 		return rolesConfig.getMcpForRole(normalizeMainRole(role));
 	};
-	const getLoadedToolServerName = (loaded: { serverName?: string; tool: CustomTool }): string | undefined => {
-		if (loaded.serverName && loaded.serverName.length > 0) return loaded.serverName;
-		const mcpTool = loaded.tool as CustomTool & { mcpServerName?: string };
+	const getMcpServerNameForTool = (tool: AgentTool): string | undefined => {
+		const mcpTool = tool as AgentTool & { mcpServerName?: string };
 		return typeof mcpTool.mcpServerName === "string" && mcpTool.mcpServerName.length > 0
 			? mcpTool.mcpServerName
 			: undefined;
 	};
-	const getMcpServerNameForTool = (tool: AgentTool): string | undefined => {
-		const mcpTool = tool as AgentTool & { mcpServerName?: string };
+	const getMcpServerNameForLoadedTool = (loaded: { serverName?: string; tool: CustomTool }): string | undefined => {
+		if (loaded.serverName && loaded.serverName.length > 0) return loaded.serverName;
+		const mcpTool = loaded.tool as CustomTool & { mcpServerName?: string };
 		return typeof mcpTool.mcpServerName === "string" && mcpTool.mcpServerName.length > 0
 			? mcpTool.mcpServerName
 			: undefined;
@@ -673,7 +677,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
 	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
-	const startupRoleMcpServerSet = new Set(startupRoleMcpAllowlist);
+	const sessionMcpDiscoveryAllowlist =
+		(options.taskDepth ?? 0) > 0
+			? startupRoleMcpAllowlist
+			: Array.from(
+					new Set(
+						(["default", "orchestrator", "plan", "ask"] as const).flatMap(role => getRoleMcpAllowlist(role)),
+					),
+				);
+	const mcpServerNameByToolName = new Map<string, string>();
 
 	const modelApiKeyAvailability = new Map<string, boolean>();
 	const getModelAvailabilityKey = (candidate: Model): string =>
@@ -986,6 +998,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				filterExa: true,
 				// Filter browser MCP servers when builtin browser tool is active
 				filterBrowser: hasBrowserBuiltin,
+				allowedServerNames: sessionMcpDiscoveryAllowlist,
 				cacheStorage: settings.getStorage(),
 				authStorage,
 			}),
@@ -1007,13 +1020,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		if (mcpResult.tools.length > 0) {
-			const filteredMcpTools = mcpResult.tools.filter(loaded => {
-				const serverName = getLoadedToolServerName(loaded as { serverName?: string; tool: CustomTool });
-				return serverName ? startupRoleMcpServerSet.has(serverName) : false;
-			});
-			if (filteredMcpTools.length > 0) {
-				customTools.push(...filteredMcpTools.map(loaded => loaded.tool));
+			for (const loaded of mcpResult.tools) {
+				const serverName = getMcpServerNameForLoadedTool(loaded);
+				if (serverName) {
+					mcpServerNameByToolName.set(loaded.tool.name, serverName);
+				}
 			}
+			customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
 		}
 	}
 
@@ -1260,7 +1273,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return managedRoleSet.has(name);
 			}
 
-			const mcpServerName = getMcpServerNameForTool(tool);
+			const mcpServerName = mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
 			if (mcpServerName) {
 				return allowedMcpServers.has(mcpServerName);
 			}
@@ -1360,11 +1373,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		? roleAwareRequested
 		: roleAwareRequested.filter(name => name !== "exit_plan_mode");
 
-	// Custom tools and extension-registered tools are always included regardless of toolNames filter
+	// Custom tools and extension-registered tools are always included regardless of toolNames filter,
+	// except MCP tools which remain role-scoped.
 	const alwaysInclude: string[] = [
 		...(options.customTools?.map(t => (isCustomTool(t) ? t.name : t.name)) ?? []),
 		...registeredTools.map(t => t.definition.name),
-	];
+	].filter(name => !name.startsWith("mcp_"));
 	for (const name of alwaysInclude) {
 		if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
 			initialToolNames.push(name);
