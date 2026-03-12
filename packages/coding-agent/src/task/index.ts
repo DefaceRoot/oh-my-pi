@@ -20,9 +20,8 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
-import type { ModelRole } from "../config/model-registry";
-import { isDefaultModelAlias } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 import { RolesConfig } from "../config/roles-config";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -69,18 +68,6 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-function normalizeModelOverride(value: string | string[] | undefined): string | string[] | undefined {
-	if (Array.isArray(value)) {
-		const normalized = value.map(pattern => pattern.trim()).filter(pattern => pattern.length > 0);
-		return normalized.length > 0 ? normalized : undefined;
-	}
-	if (typeof value === "string") {
-		const normalized = value.trim();
-		return normalized.length > 0 ? normalized : undefined;
-	}
-	return undefined;
-}
-
 const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer", "commit"]);
 
 function normalizeRuntimeRole(role: string | undefined): string | undefined {
@@ -91,15 +78,6 @@ function normalizeRuntimeRole(role: string | undefined): string | undefined {
 function isOrchestratorParentSession(session: ToolSession): boolean {
 	if (!session.hasUI) return false;
 	return normalizeRuntimeRole(session.getRuntimeRole?.()) === "orchestrator";
-}
-
-function resolveRoleModelOverride(session: ToolSession, agentName: string): string | string[] | undefined {
-	const subagentRole = resolveSubagentRole(agentName);
-	const roleModelLookupOrder: ModelRole[] =
-		subagentRole === "implement" ? ["implement", "default"] : [subagentRole, "implement", "default"];
-	return roleModelLookupOrder
-		.map(role => normalizeModelOverride(session.settings.getModelRole(role)))
-		.find((value): value is string | string[] => value !== undefined);
 }
 function getMcpServerName(tool: unknown): string | undefined {
 	if (!tool || typeof tool !== "object") return undefined;
@@ -601,17 +579,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		// Apply per-agent model override from settings (highest priority), then role-based fallback
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides") as Record<string, string>;
-		const settingsModelOverride = normalizeModelOverride(agentModelOverrides[agentName]);
-		const roleModelOverride = resolveRoleModelOverride(this.session, effectiveAgent.name);
-		const effectiveAgentModel = normalizeModelOverride(
-			isDefaultModelAlias(effectiveAgent.model) ? undefined : effectiveAgent.model,
-		);
-		const modelOverride =
-			settingsModelOverride ??
-			roleModelOverride ??
-			effectiveAgentModel ??
-			normalizeModelOverride(this.session.getActiveModelString?.() ?? this.session.getModelString?.());
-		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
+		const settingsModelOverride = agentModelOverrides[agentName]?.trim() || undefined;
+		const { modelOverride, thinkingLevelOverride } = resolveSubagentLaunchOverrides({
+			session: this.session,
+			agentName: effectiveAgent.name,
+			agentModel: effectiveAgent.model,
+			agentThinkingLevel: effectiveAgent.thinkingLevel,
+			settingsModelOverride,
+		});
 
 		// Output schema priority: agent frontmatter > params > inherited from parent session
 		const effectiveOutputSchema = effectiveAgent.output ?? outputSchema ?? this.session.outputSchema;
