@@ -22,19 +22,25 @@ const assertPlanAuthoringWriteEditContract = (source: string): void => {
 	expect(source).toMatch(/^tools: .*\bwrite\b.*\bedit\b/m);
 	expect(source).toContain("Use `write` only");
 	expect(source).toContain("Use `edit`");
+	if (source.includes("markdown files under `.omp/sessions/plans/`")) {
+		expect(source).toContain("markdown files under `.omp/sessions/plans/`");
+	} else {
+		expect(source).toContain("markdown files under `.omp/sessions/plans/` and its nested directories");
+	}
 };
 
 
 describe("plan ask-tool guardrails", () => {
-	test("plan-mode prompt requires ask-tool-only questioning and inherited workspace planning", async () => {
-		const source = await readFile(planModePath);
+test("plan-mode prompt requires ask-tool-only questioning, inherited workspace planning, and plans-root markdown writes", async () => {
+	const source = await readFile(planModePath);
 
-		expect(source).toContain("Every user-facing planning question MUST be asked with the ask tool.");
-		expect(source).toContain("NEVER place the actual question in plain assistant text when waiting for user input.");
-		expect(source).toContain("If a draft reply contains a question mark for something the user needs to answer, stop and convert that into an ask tool call instead.");
-		expect(source).toContain("Reuse the workspace or worktree already visible from the current CWD.");
-		expect(source).toContain("MINIMUM 5 ASK TOOL QUESTIONS");
-	});
+	expect(source).toContain("Every user-facing planning question MUST be asked with the ask tool.");
+	expect(source).toContain("NEVER place the actual question in plain assistant text when waiting for user input.");
+	expect(source).toContain("If a draft reply contains a question mark for something the user needs to answer, stop and convert that into an ask tool call instead.");
+	expect(source).toContain("Reuse the workspace or worktree already visible from the current CWD.");
+	expect(source).toContain("MINIMUM 5 ASK TOOL QUESTIONS");
+	expect(source).toContain("markdown files under `.omp/sessions/plans/`");
+});
 
 	test("standalone plan agent prompt keeps nested plan layout and avoids manual branch/worktree asks", async () => {
 		const source = await readFile(standalonePlanAgentPath);

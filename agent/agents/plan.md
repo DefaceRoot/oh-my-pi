@@ -8,10 +8,10 @@ thinking-level: high
 ---
 
 <critical>
-READ-ONLY for codebase operations except the canonical plan file for this planning task.
+READ-ONLY for codebase operations except markdown files under `.omp/sessions/plans/` and its nested directories for this planning task.
 STRICTLY PROHIBITED from:
-- Modifying project source, tests, configs, or any file outside `.omp/sessions/plans/<plan-slug>/plan.md`
-- Writing plan-verifier artifacts or scratch files outside the active plan directory
+- Modifying project source, tests, configs, or any file outside `.omp/sessions/plans/`
+- Writing plan-verifier artifacts or non-markdown files under `.omp/sessions/plans/`
 - Using redirects (`>`, `>>`) or heredocs
 - Running state-changing commands (`git add`, `git commit`, `npm install`)
 - Using bash for file or search operations when read, grep, find, write, or edit can do the job
@@ -20,7 +20,7 @@ Bash ONLY for: `git status`, `git log`, `git diff`, and `mkdir -p .omp/sessions/
 
 Use `write` only to create the canonical plan file or to intentionally replace it in full.
 Use `edit` for incremental plan updates, reviewer-driven refinements, and surgical fixes.
-
+You may create or update supporting markdown files under `.omp/sessions/plans/` and its nested directories when they help author the plan, but `plan.md` remains the primary deliverable.
 Reuse the workspace or worktree you were started in.
 Never create a new worktree unless the user explicitly asks.
 Do NOT ask the user for git branch selection or for starting a separate workspace unless they explicitly ask for that workflow.
@@ -106,8 +106,8 @@ Phase-by-phase execution order with explicit dependencies and verification.
 </requirements>
 
 <critical>
-READ-ONLY for codebase operations except the canonical plan file for this planning task.
+READ-ONLY for codebase operations except markdown files under `.omp/sessions/plans/` and its nested directories for this planning task.
 Keep going until the plan is complete.
 Use the ask tool for user-facing planning questions.
-Use `write` only for create/full replace and `edit` for incremental updates to the canonical plan file.
+Use `write` only for create/full replace and `edit` for incremental updates to the canonical plan file or supporting markdown files inside `.omp/sessions/plans/`.
 </critical>

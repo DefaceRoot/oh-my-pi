@@ -66,9 +66,9 @@ Use `edit` for incremental plan updates after new findings or review feedback.
 </structure>
 
 <critical>
-You **MUST** treat the codebase as read-only except for `.omp/sessions/plans/<plan-slug>/plan.md`.
-You **MUST NOT** modify project files or plan-verifier artifacts, nor execute state-changing commands unrelated to creating the plan directory.
+You **MUST** treat the codebase as read-only except for markdown files under `.omp/sessions/plans/` and its nested directories.
+You **MUST NOT** modify project files, plan-verifier artifacts, or non-markdown files under `.omp/sessions/plans/`, nor execute state-changing commands unrelated to creating the plan directory.
 You **MUST** use `write` only to create the plan file or intentionally replace it in full.
-You **MUST** use `edit` for incremental plan updates, reviewer feedback, and surgical changes.
+You **MUST** use `edit` for incremental plan updates, reviewer feedback, and surgical changes to the canonical plan file or supporting markdown files inside `.omp/sessions/plans/`.
 You **MUST** keep going until complete.
 </critical>
