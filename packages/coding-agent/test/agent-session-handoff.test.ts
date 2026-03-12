@@ -53,6 +53,8 @@ describe("AgentSession handoff", () => {
 			events.push(event);
 		});
 
+		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
+
 		sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: "seed" }],
@@ -329,7 +331,7 @@ describe("AgentSession handoff", () => {
 
 	it("auto-continues after successful handoff threshold maintenance when auto-continue is enabled", async () => {
 		session.settings.set("compaction.strategy", "handoff");
-		session.settings.set("compaction.autoContinue", true);
+		session.settings.override("compaction.autoContinue", true);
 		session.settings.set("compaction.thresholdPercent", 1);
 		session.settings.set("contextPromotion.enabled", false);
 

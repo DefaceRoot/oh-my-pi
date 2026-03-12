@@ -317,4 +317,118 @@ describe("AgentSession plan reference injection", () => {
 		);
 		expect(planReferenceMessage).toBeUndefined();
 	});
+
+	it("keeps the rebound plan file after resume re-enters plan mode", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
+		const initialPlanFilePath = ".omp/sessions/plans/manual/plan.md";
+		const reboundPlanFilePath = ".omp/sessions/plans/existing-plan/plan.md";
+		await fs.mkdir(path.join(tempDir.path(), ".omp", "sessions", "plans", "manual"), { recursive: true });
+		await fs.mkdir(path.join(tempDir.path(), ".omp", "sessions", "plans", "existing-plan"), { recursive: true });
+		await fs.writeFile(path.join(tempDir.path(), initialPlanFilePath), "# Manual Plan\n", "utf8");
+		await fs.writeFile(path.join(tempDir.path(), reboundPlanFilePath), "# Existing Plan\n", "utf8");
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: "Test",
+				tools: [],
+				messages: [],
+			},
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+				});
+				return stream;
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+		session.setPlanModeState({ enabled: true, planFilePath: initialPlanFilePath });
+		sessionManager.appendModeChange("plan", { planFilePath: initialPlanFilePath });
+		sessionManager.appendCustomEntry("plan-mode/active-plan-file", {
+			planFilePath: reboundPlanFilePath,
+			reason: "user-input",
+		});
+		sessionManager.appendModeChange("plan", { planFilePath: initialPlanFilePath });
+
+		expect(session.getPlanModeState()?.planFilePath).toBe(reboundPlanFilePath);
+	});
+
+
+	it("uses the latest rebound plan file for plan-mode state and context", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
+		const initialPlanFilePath = ".omp/sessions/plans/manual/plan.md";
+		const reboundPlanFilePath = ".omp/sessions/plans/existing-plan/plan.md";
+		await fs.mkdir(path.join(tempDir.path(), ".omp", "sessions", "plans", "manual"), { recursive: true });
+		await fs.mkdir(path.join(tempDir.path(), ".omp", "sessions", "plans", "existing-plan"), { recursive: true });
+		await fs.writeFile(path.join(tempDir.path(), initialPlanFilePath), "# Manual Plan\n", "utf8");
+		await fs.writeFile(path.join(tempDir.path(), reboundPlanFilePath), "# Existing Plan\n", "utf8");
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: "Test",
+				tools: [],
+				messages: [],
+			},
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+				});
+				return stream;
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+		session.setPlanModeState({ enabled: true, planFilePath: initialPlanFilePath });
+		sessionManager.appendModeChange("plan", { planFilePath: initialPlanFilePath });
+		sessionManager.appendCustomEntry("plan-mode/active-plan-file", {
+			planFilePath: reboundPlanFilePath,
+			reason: "user-input",
+		});
+
+		expect(session.getPlanModeState()?.planFilePath).toBe(reboundPlanFilePath);
+
+		await session.prompt("continue");
+
+		const planModeContextMessage = session.messages.find(
+			message => message.role === "custom" && message.customType === "plan-mode-context",
+		);
+		expect(planModeContextMessage).toBeDefined();
+		if (!planModeContextMessage || planModeContextMessage.role !== "custom") {
+			throw new Error("Expected injected plan-mode-context message after plan-file rebound");
+		}
+
+		const content =
+			typeof planModeContextMessage.content === "string"
+				? planModeContextMessage.content
+				: planModeContextMessage.content
+						.filter(block => block.type === "text")
+						.map(block => block.text)
+						.join("\n");
+		expect(content).toContain(reboundPlanFilePath);
+		expect(content).not.toContain(initialPlanFilePath);
+	});
 });

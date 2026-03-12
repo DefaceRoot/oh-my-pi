@@ -87,6 +87,7 @@ import { resolveLocalUrlToPath } from "../internal-urls";
 import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
+import { getLatestPlanModeActivePlanFilePath } from "../plan-mode/active-plan-file";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffOverflowFocusPrompt from "../prompts/system/auto-handoff-overflow-focus.md" with { type: "text" };
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
@@ -875,6 +876,7 @@ export class AgentSession {
 				try {
 					await abortableSleep(delayMs, signal);
 				} catch {
+					options?.onSkip?.();
 					return;
 				}
 			}
@@ -916,6 +918,19 @@ export class AgentSession {
 				onSkip: options?.onSkip,
 			},
 		);
+	}
+
+	#scheduleQueuedAgentContinue(delayMs = 0, retriesRemaining = 4): void {
+		this.#scheduleAgentContinue({
+			delayMs,
+			generation: this.#promptGeneration,
+			shouldContinue: () => this.agent.hasQueuedMessages(),
+			onSkip: () => {
+				if (retriesRemaining <= 0) return;
+				const retryDelayMs = delayMs > 0 ? delayMs : 50;
+				this.#scheduleQueuedAgentContinue(retryDelayMs, retriesRemaining - 1);
+			},
+		});
 	}
 
 	#cancelPostPromptTasks(): void {
@@ -1793,7 +1808,20 @@ export class AgentSession {
 
 	/** Prompt templates */
 	getPlanModeState(): PlanModeState | undefined {
-		return this.#planModeState;
+		const state = this.#planModeState;
+		if (!state?.enabled) return state;
+		const reboundPlanFilePath = getLatestPlanModeActivePlanFilePath(
+			this.sessionManager.getEntries() as Array<Record<string, unknown>>,
+			{
+				cwd: this.sessionManager.getCwd(),
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			},
+		);
+		if (!reboundPlanFilePath || reboundPlanFilePath === state.planFilePath) {
+			return state;
+		}
+		return { ...state, planFilePath: reboundPlanFilePath };
 	}
 
 	setPlanModeState(state: PlanModeState | undefined): void {
@@ -1909,7 +1937,7 @@ export class AgentSession {
 	}
 
 	async #buildPlanModeMessage(): Promise<CustomMessage | null> {
-		const state = this.#planModeState;
+		const state = this.getPlanModeState();
 		if (!state?.enabled || state.suppressPlanModeMessage) return null;
 		const sessionPlanPath = ".omp/sessions/plans/manual/plan.md";
 		const resolvedPlanPath = this.#resolvePlanPath(state.planFilePath);
@@ -3450,7 +3478,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
 
-		const contextTokens = await this.#resolveCompactionContextTokens(assistantMessage);
+		const contextTokens = await this.#resolveCompactionContextTokens();
 		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = assistantMessage ? await this.#tryContextPromotion(assistantMessage) : false;
@@ -3468,15 +3496,8 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		return FALLBACK_CONTEXT_WINDOW;
 	}
 
-	async #resolveCompactionContextTokens(assistantMessage: AssistantMessage | undefined): Promise<number> {
-		const pruneResult = await this.#pruneToolOutputs();
-		if (assistantMessage && assistantMessage.stopReason !== "error" && assistantMessage.stopReason !== "aborted") {
-			let contextTokens = calculateContextTokens(assistantMessage.usage);
-			if (pruneResult) {
-				contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
-			}
-			return contextTokens;
-		}
+	async #resolveCompactionContextTokens(): Promise<number> {
+		await this.#pruneToolOutputs();
 		return this.#estimateContextTokens().tokens;
 	}
 	#enforceRewindBeforeYield(): boolean {
@@ -3847,6 +3868,18 @@ Be thorough - include exact file paths, function names, error messages, and tech
 						aborted: false,
 						willRetry: false,
 					});
+					if (!willRetry && compactionSettings.autoContinue !== false) {
+						await this.#promptWithMessage(
+							{
+								role: "developer",
+								content: [{ type: "text", text: "Continue if you have next steps." }],
+								attribution: "agent",
+								timestamp: Date.now(),
+							},
+							"Continue if you have next steps.",
+							{ skipPostPromptRecoveryWait: true },
+						);
+					}
 					return;
 				}
 			}
@@ -3889,12 +3922,8 @@ Be thorough - include exact file paths, function names, error messages, and tech
 					willRetry: false,
 					noOpReason: "nothing_to_compact",
 				});
-				if (!willRetry && this.agent.hasQueuedMessages()) {
-					this.#scheduleAgentContinue({
-						delayMs: 100,
-						generation,
-						shouldContinue: () => this.agent.hasQueuedMessages(),
-					});
+				if (!willRetry) {
+					this.#scheduleQueuedAgentContinue();
 				}
 				return;
 			}
@@ -4123,14 +4152,10 @@ Be thorough - include exact file paths, function names, error messages, and tech
 				}
 
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
-			} else if (this.agent.hasQueuedMessages()) {
-				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-				// Kick the loop so queued messages are actually delivered.
-				this.#scheduleAgentContinue({
-					delayMs: 100,
-					generation,
-					shouldContinue: () => this.agent.hasQueuedMessages(),
-				});
+			} else {
+				// Auto-compaction can finish while queued messages are being reconciled after generation changes.
+				// Always schedule a guarded continue so queued work is resumed as soon as it is visible.
+				this.#scheduleQueuedAgentContinue();
 			}
 		} catch (error) {
 			if (this.#autoCompactionAbortController?.signal.aborted) {
@@ -5123,36 +5148,36 @@ Be thorough - include exact file paths, function names, error messages, and tech
 	}
 
 	/**
-	 * Estimate context tokens from messages, using the last assistant usage when available.
+	 * Estimate context tokens from live messages.
+	 * Prefers assistant usage when available, but never reports less than the
+	 * accumulated message estimate for the current session.
 	 */
 	#estimateContextTokens(): {
 		tokens: number;
 	} {
 		const messages = this.messages;
+		let estimatedFromMessages = 0;
+		for (const message of messages) {
+			estimatedFromMessages += estimateTokens(message);
+		}
 
 		// Find last assistant message with usage
-		let lastUsageIndex: number | null = null;
+		let lastUsageIndex: number | undefined;
 		let lastUsage: Usage | undefined;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
-			if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.usage && assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "aborted") {
-					lastUsage = assistantMsg.usage;
-					lastUsageIndex = i;
-					break;
-				}
-			}
+			if (msg.role !== "assistant") continue;
+			const assistantMsg = msg as AssistantMessage;
+			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") continue;
+			if (!assistantMsg.usage) continue;
+			lastUsage = assistantMsg.usage;
+			lastUsageIndex = i;
+			break;
 		}
 
-		if (!lastUsage || lastUsageIndex === null) {
-			// No usage data - estimate all messages
-			let estimated = 0;
-			for (const message of messages) {
-				estimated += estimateTokens(message);
-			}
+		if (!lastUsage || lastUsageIndex === undefined) {
 			return {
-				tokens: estimated,
+				tokens: estimatedFromMessages,
 			};
 		}
 
@@ -5163,7 +5188,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		}
 
 		return {
-			tokens: usageTokens + trailingTokens,
+			tokens: Math.max(estimatedFromMessages, usageTokens + trailingTokens),
 		};
 	}
 
