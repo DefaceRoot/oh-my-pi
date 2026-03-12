@@ -1,9 +1,12 @@
 import { resolveLocalUrlToPath } from "../internal-urls";
+import { isPlanModeWritableMarkdownFile } from "../plan-mode/active-plan-file";
 import type { ToolSession } from ".";
 import { resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
 const LOCAL_URL_PREFIX = "local://";
+const PLAN_MODE_WRITE_SCOPE_ERROR =
+	"Plan mode: only markdown files under the active plans root may be modified, and plan-verifier artifacts remain blocked.";
 
 export function resolvePlanPath(session: ToolSession, targetPath: string): string {
 	if (targetPath.startsWith(LOCAL_URL_PREFIX)) {
@@ -35,7 +38,7 @@ export function enforcePlanModeWrite(
 		throw new ToolError("Plan mode: deleting files is not allowed.");
 	}
 
-	if (resolvedTarget !== resolvedPlan) {
-		throw new ToolError(`Plan mode: only the plan file may be modified (${state.planFilePath}).`);
+	if (!isPlanModeWritableMarkdownFile(resolvedTarget, resolvedPlan)) {
+		throw new ToolError(`${PLAN_MODE_WRITE_SCOPE_ERROR} Attempted path: ${targetPath}`);
 	}
 }
