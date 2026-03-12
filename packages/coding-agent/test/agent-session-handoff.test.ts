@@ -327,6 +327,57 @@ describe("AgentSession handoff", () => {
 		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", aborted: false, willRetry: false });
 	});
 
+	it("auto-continues after successful handoff threshold maintenance when auto-continue is enabled", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.autoContinue", true);
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		const agentPromptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await Bun.sleep(20);
+
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(agentPromptSpy).toHaveBeenCalledTimes(1);
+		const continuePromptMessages = agentPromptSpy.mock.calls[0]?.[0];
+		expect(continuePromptMessages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					role: "developer",
+					content: expect.arrayContaining([
+						expect.objectContaining({ type: "text", text: "Continue if you have next steps." }),
+					]),
+				}),
+			]),
+		);
+	});
+
 	it("falls back to context-full when handoff strategy returns no document", async () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("compaction.thresholdPercent", 1);
