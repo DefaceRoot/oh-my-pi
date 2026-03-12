@@ -2256,23 +2256,49 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	private extractPreloadedSkillNames(systemPrompt: unknown): string[] {
-		if (typeof systemPrompt !== "string") return [];
-		const names = new Set<string>();
-		for (const sectionMatch of systemPrompt.matchAll(/<preloaded_skills>([\s\S]*?)<\/preloaded_skills>/gi)) {
-			const section = sectionMatch[1] ?? "";
-			for (const skillMatch of section.matchAll(/<skill\s+name="([^"]+)"/g)) {
-				const name = skillMatch[1]?.trim();
+	private collectSkillNamesFromValue(value: unknown, names: Set<string>): void {
+		if (typeof value === "string") {
+			for (const match of value.matchAll(/skill:\/\/([^\/\s"'`?#]+)/g)) {
+				const name = match[1]?.trim();
 				if (name) names.add(name);
 			}
+			return;
 		}
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				this.collectSkillNamesFromValue(item, names);
+			}
+			return;
+		}
+		if (!value || typeof value !== "object") return;
+		for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+			this.collectSkillNamesFromValue(nestedValue, names);
+		}
+	}
+
+	private extractToolReferencedSkillNames(message: unknown): string[] {
+		if (!message || typeof message !== "object") return [];
+		const record = message as Record<string, unknown>;
+		const names = new Set<string>();
+		const content = record.content;
+		if (Array.isArray(content)) {
+			for (const block of content) {
+				if (!block || typeof block !== "object") continue;
+				const toolCall = block as Record<string, unknown>;
+				if (toolCall.type !== "toolCall") continue;
+				this.collectSkillNamesFromValue(toolCall.arguments, names);
+			}
+		}
+		this.collectSkillNamesFromValue(record.details, names);
 		return Array.from(names);
 	}
 
 	private extractSkillPromptName(message: unknown): string | undefined {
 		if (!message || typeof message !== "object") return undefined;
 		const record = message as Record<string, unknown>;
-		if (record.role !== "custom" || record.customType !== SKILL_PROMPT_MESSAGE_TYPE) {
+		const isSkillPrompt =
+			record.customType === SKILL_PROMPT_MESSAGE_TYPE && (record.role === "custom" || record.type === "custom_message");
+		if (!isSkillPrompt) {
 			return undefined;
 		}
 		const details = record.details;
@@ -2282,21 +2308,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private extractUsedSkillNamesFromEntries(entries: SessionEntry[]): string[] | undefined {
-		const names = new Set<string>();
+		const explicitNames = new Set<string>();
 		for (const entry of entries) {
-			if (entry.type === "session_init") {
-				for (const skill of this.extractPreloadedSkillNames(entry.systemPrompt)) {
-					names.add(skill);
-				}
-				continue;
+			const skillPromptName = this.extractSkillPromptName(entry);
+			if (skillPromptName) {
+				explicitNames.add(skillPromptName);
 			}
 			if (entry.type !== "message") continue;
-			const skillPromptName = this.extractSkillPromptName(entry.message);
-			if (skillPromptName) {
-				names.add(skillPromptName);
+			for (const skill of this.extractToolReferencedSkillNames(entry.message)) {
+				explicitNames.add(skill);
 			}
 		}
-		return names.size > 0 ? Array.from(names) : undefined;
+		return explicitNames.size > 0 ? Array.from(explicitNames) : undefined;
 	}
 
 	private extractSubagentOrdinal(id: string): string {
@@ -2359,7 +2382,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		let modeData: Record<string, unknown> | undefined;
 		let contextPreview: string | undefined;
 		let tokens = 0;
-		const skillsUsed = new Set<string>();
+		const skillsUsed = this.extractUsedSkillNamesFromEntries(entries as SessionEntry[]);
 
 		for (const entry of entries) {
 			if (entry.type === "model_change" && typeof entry.model === "string") {
@@ -2381,9 +2404,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 			if (entry.type === "session_init" && typeof entry.task === "string" && !contextPreview) {
 				contextPreview = extractTaskContextPreview(entry.task);
-				for (const skill of this.extractPreloadedSkillNames(entry.systemPrompt)) {
-					skillsUsed.add(skill);
-				}
 				continue;
 			}
 
@@ -2401,11 +2421,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				continue;
 			}
 
-			const skillPromptName = this.extractSkillPromptName(message);
-			if (skillPromptName) {
-				skillsUsed.add(skillPromptName);
-			}
-
 			messages.push(message as AgentMessage);
 			if (role === "assistant") {
 				const usage = (message as { usage?: unknown }).usage;
@@ -2421,7 +2436,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				model,
 				tokens: tokens > 0 ? tokens : undefined,
 				contextPreview,
-				skillsUsed: skillsUsed.size > 0 ? Array.from(skillsUsed) : undefined,
+				skillsUsed,
 			};
 		}
 
@@ -2439,7 +2454,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			model,
 			tokens: tokens > 0 ? tokens : undefined,
 			contextPreview,
-			skillsUsed: skillsUsed.size > 0 ? Array.from(skillsUsed) : undefined,
+			skillsUsed,
 		};
 	}
 

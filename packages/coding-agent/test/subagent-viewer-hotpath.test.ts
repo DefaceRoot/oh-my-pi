@@ -325,5 +325,122 @@ describe("InteractiveMode subagent token loading", () => {
 		expect(transcript?.contextPreview).not.toContain("Background");
 	});
 
+	test("loadSubagentTranscript extracts skills from tool calls that read skill URLs", async () => {
+		const sessionPath = path.join(tempDir, "session-skill-read.jsonl");
+		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
+
+		vi.spyOn(SessionManager, "open").mockResolvedValue({
+			getEntries: () => [
+				{ type: "session_init", task: "demo" },
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "toolCall",
+								id: "tool-1",
+								name: "read",
+								arguments: { path: "skill://validate-implementation-plan/references/artifact-output.md" },
+							},
+						],
+					},
+				},
+			],
+			buildSessionContext: () => ({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				thinkingLevel: "high",
+				models: {},
+				injectedTtsrRules: [],
+				mode: "none",
+				modeData: undefined,
+			}),
+		} as any);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "skill-reader", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.skillsUsed).toEqual(["validate-implementation-plan"]);
+	});
+
+	test("loadSubagentTranscript ignores skills listed only in the session prompt", async () => {
+		const sessionPath = path.join(tempDir, "session-prompt-skills.jsonl");
+		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
+
+		const systemPrompt = [
+			"# Skills",
+			"Specialized knowledge packs loaded for this session.",
+			"",
+			"You **MUST** use the following skills, to save you time, when working in their domain:",
+			"## validate-implementation-plan",
+			"Validate implementation plans before coding by checking requirement traceability, assumption risk, and execution readiness.",
+			"## systematic-debugging",
+			"Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes",
+			"",
+			"# Rules",
+		].join("\n");
+
+		vi.spyOn(SessionManager, "open").mockResolvedValue({
+			getEntries: () => [{ type: "session_init", task: "demo", systemPrompt }],
+			buildSessionContext: () => ({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				thinkingLevel: "high",
+				models: {},
+				injectedTtsrRules: [],
+				mode: "none",
+				modeData: undefined,
+			}),
+		} as any);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "prompt-skills", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.skillsUsed).toBeUndefined();
+	});
+
+	test("loadSubagentTranscript fallback parsing keeps explicit skill usage when session loading fails", async () => {
+		const sessionPath = path.join(tempDir, "session-fallback-skill-read.jsonl");
+		const systemPrompt = [
+			"# Skills",
+			"Specialized knowledge packs loaded for this session.",
+			"",
+			"You **MUST** use the following skills, to save you time, when working in their domain:",
+			"## systematic-debugging",
+			"Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes",
+			"## validate-implementation-plan",
+			"Validate implementation plans before coding by checking requirement traceability, assumption risk, and execution readiness.",
+			"",
+			"# Rules",
+		].join("\n");
+		await writeFile(
+			sessionPath,
+			[
+				JSON.stringify({ type: "session_init", task: "demo", systemPrompt }),
+				JSON.stringify({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "toolCall",
+								id: "tool-1",
+								name: "read",
+								arguments: { path: "skill://systematic-debugging" },
+							},
+						],
+					},
+				}),
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		vi.spyOn(SessionManager, "open").mockRejectedValue(new Error("boom"));
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "fallback-skill-reader", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.skillsUsed).toEqual(["systematic-debugging"]);
+	});
+
 
 });
