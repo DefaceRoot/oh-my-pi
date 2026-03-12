@@ -1,6 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import * as path from "node:path";
+import {
+	getLatestPlanModeActivePlanFilePath,
+	isCanonicalPlannedSessionPlanFile,
+	isPlanModeWritableMarkdownFile,
+	PLAN_MODE_ACTIVE_PLAN_FILE_ENTRY_TYPE,
+	resolveExplicitPlanModePlanFilePath,
+} from "../../../packages/coding-agent/src/plan-mode/active-plan-file";
+import { resolveToCwd } from "../../../packages/coding-agent/src/tools/path-utils";
+
+const PLAN_MODE_WRITE_SCOPE_REASON =
+	"Plan mode can modify only markdown files under `.omp/sessions/plans/` and its nested directories inside the active plans root, excluding plan-verifier artifacts.";
 
 function isPlanModeActive(ctx: ExtensionContext): boolean {
 	const entries = ctx.sessionManager.getEntries();
@@ -14,16 +25,14 @@ function isPlanModeActive(ctx: ExtensionContext): boolean {
 }
 
 function getActivePlanFilePath(ctx: ExtensionContext): string | undefined {
-	const entries = ctx.sessionManager.getEntries();
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i] as { type: string; mode?: string; data?: { planFilePath?: unknown } };
-		if (entry.type !== "mode_change" || entry.mode !== "plan") continue;
-		const planFilePath = entry.data?.planFilePath;
-		if (typeof planFilePath === "string" && planFilePath.trim().length > 0) {
-			return planFilePath.trim();
-		}
-	}
-	return undefined;
+	return getLatestPlanModeActivePlanFilePath(
+		ctx.sessionManager.getEntries() as Array<Record<string, unknown>>,
+		{
+			cwd: ctx.cwd,
+			getArtifactsDir: () => ctx.sessionManager.getArtifactsDir(),
+			getSessionId: () => ctx.sessionManager.getSessionId(),
+		},
+	);
 }
 
 function resolvePlanPath(filePath: string, ctx: ExtensionContext): string {
@@ -33,12 +42,13 @@ function resolvePlanPath(filePath: string, ctx: ExtensionContext): string {
 			getSessionId: () => ctx.sessionManager.getSessionId(),
 		});
 	}
-	return path.normalize(path.isAbsolute(filePath) ? filePath : path.resolve(ctx.cwd, filePath));
+	return path.normalize(resolveToCwd(filePath, ctx.cwd));
 }
 
 function buildPlanPrompt(planRoot: string, activePlanFilePath?: string): string {
 	const activePlanLine = activePlanFilePath
-		? `- Active plan file for this session: \`${activePlanFilePath}\`\n`		: "";
+		? `- Active plan file for this session: \`${activePlanFilePath}\`\n`
+		: "";
 
 	return `
 
@@ -57,11 +67,12 @@ Canonical persisted layout:
 - Plan file: \`.omp/sessions/plans/<plan-slug>/plan.md\`
 - Plan-verifier artifacts: \`.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/\`
 - Only the plan agent updates \`plan.md\`; plan-verifier agents write artifacts only.
-${activePlanLine}
-## Constraints
+${activePlanLine}## Constraints
 
 - READ-ONLY access to the codebase. You MUST NOT modify project files.
-- Use the write and edit tools ONLY on the active plan file for this session.
+- Use the write and edit tools only for markdown files under \`.omp/sessions/plans/\` and its nested directories.
+- Treat the active plan file as the primary deliverable for this session, even when you create supporting markdown files nearby.
+- If the user explicitly points you at an existing \`.omp/sessions/plans/.../plan.md\`, treat that file as the active plan file for this session.
 - NEVER write plan-verifier artifacts yourself.
 - Do not assume planning catalogs are reloaded during implementation; encode required execution context directly in the plan.
 
@@ -110,6 +121,32 @@ export default function planModeExtension(pi: ExtensionAPI) {
 
 	let planModeThisTurn = false;
 
+	pi.on("input", async (event, ctx) => {
+		if (!isPlanModeActive(ctx)) return;
+		const reboundPlanFilePath = resolveExplicitPlanModePlanFilePath(event.text, {
+			cwd: ctx.cwd,
+			getArtifactsDir: () => ctx.sessionManager.getArtifactsDir(),
+			getSessionId: () => ctx.sessionManager.getSessionId(),
+		});
+		if (!reboundPlanFilePath) return;
+
+		const activePlanFilePath = getActivePlanFilePath(ctx);
+		if (
+			activePlanFilePath &&
+			resolvePlanPath(activePlanFilePath, ctx) === resolvePlanPath(reboundPlanFilePath, ctx)
+		) {
+			return;
+		}
+
+		pi.appendEntry(PLAN_MODE_ACTIVE_PLAN_FILE_ENTRY_TYPE, {
+			planFilePath: reboundPlanFilePath,
+			reason: "user-input",
+		});
+		pi.logger.debug("plan-mode: rebound active plan file from user input", {
+			reboundPlanFilePath,
+		});
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		planModeThisTurn = isPlanModeActive(ctx);
 		if (!planModeThisTurn) return;
@@ -136,21 +173,39 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		if (event.toolName !== "edit" && event.toolName !== "write") return;
 
 		const rawPath = (event.input as Record<string, unknown>)?.path;
-		const activePlanFilePath = getActivePlanFilePath(ctx);
-		if (typeof rawPath !== "string" || rawPath.trim().length === 0 || !activePlanFilePath) {
+		if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
 			return {
 				block: true,
-				reason: "Plan mode can modify only the active plan file inside the active plan workspace.",
+				reason: PLAN_MODE_WRITE_SCOPE_REASON,
 			};
 		}
 
-		const resolvedTargetPath = resolvePlanPath(rawPath.trim(), ctx);
+		const trimmedPath = rawPath.trim();
+		const resolvedTargetPath = resolvePlanPath(trimmedPath, ctx);
+		let activePlanFilePath = getActivePlanFilePath(ctx);
+		if (!activePlanFilePath) {
+			if (!isCanonicalPlannedSessionPlanFile(resolvedTargetPath)) {
+				return {
+					block: true,
+					reason: PLAN_MODE_WRITE_SCOPE_REASON,
+				};
+			}
+			pi.appendEntry(PLAN_MODE_ACTIVE_PLAN_FILE_ENTRY_TYPE, {
+				planFilePath: trimmedPath,
+				reason: "tool-path",
+			});
+			activePlanFilePath = getActivePlanFilePath(ctx) ?? trimmedPath;
+			pi.logger.debug("plan-mode: rebound active plan file from tool path", {
+				activePlanFilePath,
+			});
+		}
+
 		const resolvedActivePlanPath = resolvePlanPath(activePlanFilePath, ctx);
 
-		if (resolvedTargetPath !== resolvedActivePlanPath) {
+		if (!isPlanModeWritableMarkdownFile(resolvedTargetPath, resolvedActivePlanPath)) {
 			return {
 				block: true,
-				reason: `Plan mode can modify only the active plan file inside the active plan workspace. Attempted path: ${rawPath}`,
+				reason: `${PLAN_MODE_WRITE_SCOPE_REASON} Attempted path: ${rawPath}`,
 			};
 		}
 	});
