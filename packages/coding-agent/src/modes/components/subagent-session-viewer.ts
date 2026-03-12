@@ -252,11 +252,8 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 
 		const stats: string[] = [];
-		const tokenStr = formatTokenCount(meta.tokens);
-		if (meta.tokenCapacity != null) {
-			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", `${tokenStr}/${formatTokenCount(meta.tokenCapacity)}`)}`);
-		} else if (meta.tokens != null) {
-			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", tokenStr)}`);
+		if (meta.tokens != null) {
+			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", formatTokenCount(meta.tokens))}`);
 		}
 		if (meta.thinkingLevel) {
 			stats.push(`${theme.fg("dim", "Thinking")} ${theme.fg("text", meta.thinkingLevel)}`);
