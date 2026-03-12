@@ -61,11 +61,30 @@ export interface ImplementationTaskScopeMetadata {
 		editedFiles: string[];
 	};
 }
-
 const EDITED_FILE_SCOPE_BLOCK_RE =
 	/\n?<edited_file_scope_metadata>[\s\S]*?<\/edited_file_scope_metadata>\n?/g;
 const FILE_PATH_HINT_SOURCE_RE =
 	/(?:`([^`\n]+)`)|((?:\.{1,2}\/|\/)?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?:\.[A-Za-z0-9._-]+)?)/g;
+type CodeRabbitSelectorFlag = "--base-commit" | "--base" | "--type";
+type CodeRabbitSelector = {
+flag: CodeRabbitSelectorFlag;
+value: string;
+};
+const CODE_RABBIT_SELECTOR_PATTERNS: ReadonlyArray<{
+flag: CodeRabbitSelectorFlag;
+re: RegExp;
+}> = [
+{ flag: "--base-commit", re: /--base-commit(?:=|\s+)(`?)([^\s`]+)\1/i },
+{ flag: "--base", re: /--base(?!-commit)(?:=|\s+)(`?)([^\s`]+)\1/i },
+{ flag: "--type", re: /--type(?:=|\s+)(`?)(all|committed|uncommitted)\1/i },
+];
+const CODE_RABBIT_WORKTREE_PATTERNS: ReadonlyArray<RegExp> = [
+/--cwd(?:=|\s+)(`?)([^\s`]+)\1/i,
+/(?:Repository(?:\/worktree)? path|Repository|Worktree path|Worktree|cwd):\s*`([^`]+)`/i,
+/(?:Repository(?:\/worktree)? path|Repository|Worktree path|Worktree|cwd):\s*"([^"]+)"/i,
+/(?:Repository(?:\/worktree)? path|Repository|Worktree path|Worktree|cwd):\s*'([^']+)'/i,
+];
+
 
 function normalizeTrackedPath(rawPath: string): string {
 	const normalized = rawPath
@@ -78,10 +97,12 @@ function normalizeTrackedPath(rawPath: string): string {
 	return normalized.startsWith("./") ? normalized.slice(2) : normalized;
 }
 
+
 function asRecord(value: unknown): Record<string, unknown> | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	return value as Record<string, unknown>;
 }
+
 
 function isPathHintCandidate(value: string): boolean {
 	if (!value) return false;
@@ -91,21 +112,26 @@ function isPathHintCandidate(value: string): boolean {
 	return value.includes("/") || /\.[A-Za-z0-9_-]+$/.test(value);
 }
 
+
 function toSortedPaths(files: Iterable<string>): string[] {
 	return [...files].map(normalizeTrackedPath).filter(Boolean).sort();
 }
+
 
 function parseFileHintsFromText(text: string): Set<string> {
 	const hints = new Set<string>();
 	if (!text.trim()) return hints;
 
+
 	for (const match of text.matchAll(FILE_PATH_HINT_SOURCE_RE)) {
 		const rawToken = (match[1] ?? match[2] ?? "").trim();
 		if (!rawToken) continue;
 
+
 		const moveParts = rawToken.includes(" -> ")
 			? rawToken.split(" -> ").map(part => part.trim())
 			: [rawToken];
+
 
 		for (const part of moveParts) {
 			const candidate = normalizeTrackedPath(part);
@@ -114,7 +140,52 @@ function parseFileHintsFromText(text: string): Set<string> {
 		}
 	}
 
+
 	return hints;
+}
+
+
+function normalizeCodeRabbitSelector(
+	selector: CodeRabbitSelector | undefined,
+): CodeRabbitSelector | undefined {
+	if (!selector) return undefined;
+	const normalizedValue =
+		selector.flag === "--type"
+			? selector.value.trim().toLowerCase()
+			: selector.value.trim();
+	if (!normalizedValue) return undefined;
+	if (selector.flag === "--type" && !["all", "committed", "uncommitted"].includes(normalizedValue)) {
+		return undefined;
+	}
+	return { flag: selector.flag, value: normalizedValue };
+}
+
+
+function extractCodeRabbitSelector(text: string): CodeRabbitSelector | undefined {
+	for (const pattern of CODE_RABBIT_SELECTOR_PATTERNS) {
+		const match = text.match(pattern.re);
+		const value = match?.[2]?.trim();
+		if (!value) continue;
+		return normalizeCodeRabbitSelector({ flag: pattern.flag, value });
+	}
+	return undefined;
+}
+
+
+function extractCodeRabbitWorktreePath(text: string): string | undefined {
+	for (const pattern of CODE_RABBIT_WORKTREE_PATTERNS) {
+		const match = text.match(pattern);
+		const rawPath = (match?.[2] ?? match?.[1] ?? "").trim();
+		if (!rawPath) continue;
+		const normalized = normalizeTrackedPath(rawPath);
+		if (normalized) return normalized;
+	}
+	return undefined;
+}
+
+
+function formatCodeRabbitSelector(selector: CodeRabbitSelector): string {
+	return `${selector.flag} ${selector.value}`;
 }
 
 function basename(filePath: string): string {
@@ -325,9 +396,11 @@ export function applyScopedFileMetadataToTaskInput(args: {
 	const rawTasks = inputRecord.tasks;
 	if (!Array.isArray(rawTasks) || rawTasks.length === 0) return false;
 
+
 	const normalizedFallbackScope = new Set(toSortedPaths(args.fallbackScope ?? new Set<string>()));
 	const allowFallbackScope = rawTasks.length === 1 && normalizedFallbackScope.size > 0;
 	let didMutate = false;
+
 
 	for (const rawTask of rawTasks) {
 		const task = asRecord(rawTask);
@@ -344,6 +417,7 @@ export function applyScopedFileMetadataToTaskInput(args: {
 					: undefined;
 		if (!scope || scope.size === 0) continue;
 
+
 		const existingAssignment = assignment.replace(EDITED_FILE_SCOPE_BLOCK_RE, "").trimEnd();
 		const withScope = [existingAssignment, buildEditedFileScopeBlock(unitId, scope)]
 			.filter(Boolean)
@@ -354,8 +428,161 @@ export function applyScopedFileMetadataToTaskInput(args: {
 		}
 	}
 
+
 	return didMutate;
 }
+
+
+function buildCodeRabbitContext(args: {
+	worktreePath?: string;
+	selector?: CodeRabbitSelector;
+	blockedReason?: string;
+}): string {
+	const selectorText = args.selector ? `\`${formatCodeRabbitSelector(args.selector)}\`` : "MISSING";
+	return [
+		"## Goal",
+		args.blockedReason
+			? "Parent handoff is incomplete. Report the blocker instead of improvising."
+			: "Run CodeRabbit CLI only for the delegated review scope.",
+		"",
+		"## Constraints",
+		args.worktreePath
+			? `- Repository/worktree path: \`${args.worktreePath}\`.`
+			: "- Repository/worktree path: MISSING.",
+		args.selector ? `- Diff selector: ${selectorText}.` : "- Diff selector: MISSING.",
+		"- Do NOT perform manual code review, plan validation, repository inspection, or test execution.",
+		"- Do NOT inspect repository files manually when CodeRabbit scope or tooling is missing.",
+		args.blockedReason
+			? `- Required blocker: ${args.blockedReason}`
+			: "- If CodeRabbit CLI or auth is unavailable, return blocked with the exact blocker.",
+		"- Return only CodeRabbit Critical, Severe, and Major findings. Ignore lower-severity output.",
+	].join("\n");
+}
+
+
+function buildCodeRabbitAssignment(args: {
+	worktreePath?: string;
+	selector?: CodeRabbitSelector;
+	files: string[];
+	blockedReason?: string;
+}): string {
+	const selectorText = args.selector ? formatCodeRabbitSelector(args.selector) : "(missing diff selector)";
+	const reviewCommand = args.worktreePath && args.selector
+		? `review --plain --no-color ${selectorText} --cwd ${args.worktreePath}`
+		: "(not executed)";
+	return [
+		"## Target",
+		args.blockedReason
+			? "Parent handoff is incomplete. Do not attempt manual review."
+			: "Run CodeRabbit CLI only for this delegated review scope.",
+		"",
+		"## Required Scope",
+		args.worktreePath
+			? `- Use explicit cwd: \`${args.worktreePath}\`.`
+			: "- Repository/worktree path was not provided by the parent handoff.",
+		args.selector
+			? `- Use diff selector: \`${selectorText}\`.`
+			: "- Diff selector was not provided by the parent handoff.",
+		args.files.length > 0
+			? "- Edited files handed off for this delegated review scope:"
+			: "- Edited files handed off for this delegated review scope: none provided.",
+		...args.files.map((file) => `  - \`${file}\``),
+		"",
+		"## Check",
+		args.blockedReason
+			? '1. Return `verdict: "no_go"` with `gate_status: "blocked"` and include the missing handoff metadata in `issues`.'
+			: "1. Resolve the CodeRabbit CLI path and verify auth status.",
+		args.blockedReason
+			? '2. Set `command` to `(not executed)` and do not run repository inspection or test commands.'
+			: `2. Run exactly one CodeRabbit review command using \`${reviewCommand}\`.`,
+		args.blockedReason
+			? "3. Do not inspect repository files manually or run tests as a fallback."
+			: '3. Retry once only if CodeRabbit reports rate limiting; otherwise return the exact blocker.',
+		args.blockedReason ? undefined : "4. Return only CodeRabbit Critical/Severe/Major findings.",
+		"",
+		"## Acceptance",
+		args.blockedReason
+			? "Do not inspect repository files manually or perform plan verification. Report the blocker only."
+			: "Do not perform manual review. Return CodeRabbit CLI results only.",
+	].filter(Boolean).join("\n");
+}
+
+
+export function rewriteCodeRabbitTaskInput(args: {
+	input: unknown;
+	scopeByUnitId: Map<string, Set<string>>;
+	fallbackScope?: Set<string>;
+	baseBranch?: string;
+	worktreePath?: string;
+}): boolean {
+	const inputRecord = asRecord(args.input);
+	if (!inputRecord) return false;
+	const rawTasks = inputRecord.tasks;
+	if (!Array.isArray(rawTasks) || rawTasks.length === 0) return false;
+
+
+	const normalizedFallbackScope = new Set(toSortedPaths(args.fallbackScope ?? new Set<string>()));
+	const allowFallbackScope = rawTasks.length === 1 && normalizedFallbackScope.size > 0;
+	const contextText = typeof inputRecord.context === "string" ? inputRecord.context : "";
+	const defaultSelector = normalizeCodeRabbitSelector(
+		args.baseBranch?.trim() ? { flag: "--base", value: args.baseBranch.trim() } : undefined,
+	);
+	const defaultWorktreePath = args.worktreePath?.trim()
+		? normalizeTrackedPath(args.worktreePath.trim())
+		: undefined;
+	let didMutate = false;
+	let nextContext: string | undefined;
+
+
+	for (const rawTask of rawTasks) {
+		const task = asRecord(rawTask);
+		if (!task) continue;
+		const unitId = typeof task.id === "string" ? task.id.trim() : "";
+		const assignment = typeof task.assignment === "string" ? task.assignment : "";
+		const explicitScope = unitId ? args.scopeByUnitId.get(unitId) : undefined;
+		const scope =
+			explicitScope && explicitScope.size > 0
+				? explicitScope
+				: allowFallbackScope
+					? normalizedFallbackScope
+					: undefined;
+		const assignmentHints = parseFileHintsFromText(assignment);
+		const files = scope ? toSortedPaths(scope) : toSortedPaths(assignmentHints);
+		const combinedText = `${contextText}\n${assignment}`;
+		const selector = extractCodeRabbitSelector(combinedText) ?? defaultSelector;
+		const worktreePath = extractCodeRabbitWorktreePath(combinedText) ?? defaultWorktreePath;
+		const missingParts: string[] = [];
+		if (!worktreePath) missingParts.push("repository/worktree path");
+		if (!selector) missingParts.push("diff selector");
+		const blockedReason =
+			missingParts.length > 0
+				? `Required parent handoff metadata missing: ${missingParts.join(" and ")}.`
+				: undefined;
+		const rewrittenAssignment = buildCodeRabbitAssignment({
+			worktreePath,
+			selector,
+			files,
+			blockedReason,
+		});
+		if (rewrittenAssignment !== assignment) {
+			task.assignment = rewrittenAssignment;
+			didMutate = true;
+		}
+		if (!nextContext) {
+			nextContext = buildCodeRabbitContext({ worktreePath, selector, blockedReason });
+		}
+	}
+
+
+	if (nextContext && inputRecord.context !== nextContext) {
+		inputRecord.context = nextContext;
+		didMutate = true;
+	}
+
+
+	return didMutate;
+}
+
 
 export const IMPLEMENTATION_WORKER_GATE_SEQUENCE = [
 	"lint",

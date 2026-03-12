@@ -11,6 +11,7 @@ import {
 	isImplementationWorkerPrompt,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
+	rewriteCodeRabbitTaskInput,
 } from "./task-file-tracker";
 
 describe("parseGitStatusSnapshot", () => {
@@ -180,16 +181,89 @@ describe("task unit scope metadata", () => {
 			],
 		};
 
+
 		const didMutate = applyScopedFileMetadataToTaskInput({
 			input,
 			scopeByUnitId: new Map(),
 			fallbackScope: new Set(["src/unrelated.ts"]),
 		});
 
+
 		expect(didMutate).toBe(false);
 		expect(input.tasks[0]?.assignment).not.toContain("<edited_file_scope_metadata>");
 		expect(input.tasks[1]?.assignment).not.toContain("<edited_file_scope_metadata>");
 	});
+
+
+	test("rewrites coderabbit tasks to CLI-only handoff with authoritative scope", () => {
+		const input = {
+			agent: "coderabbit",
+			context: [
+				"## Goal",	
+				"Independent phase-end review for a completed implementation slice.",
+				"## Constraints",	
+				"- Repository: `/tmp/worktree`.",
+				"- Review the implemented slices for correctness, regressions, and plan adherence.",
+			].join("\n"),
+			tasks: [
+				{
+					id: "CodeRabbitMonocleOverhaul",
+					assignment: [
+						"## Target",
+						"Review the files changed for this implementation slice.",
+						"",
+						"## Check",
+						"1. Review the completed implementation against the approved plan.",
+						"2. Identify any correctness issues, regressions, or missing required updates.",
+					].join("\n"),
+				},
+			],
+		};
+
+
+		const didMutate = rewriteCodeRabbitTaskInput({
+			input,
+			scopeByUnitId: new Map(),
+			fallbackScope: new Set([
+				"dashboards/monocle-monitor.json",
+				"tests/test_monitor_dashboard.py",
+			]),
+			baseBranch: "main",
+			worktreePath: "/tmp/worktree",
+		});
+
+
+		expect(didMutate).toBe(true);
+		expect(input.context).toContain("Run CodeRabbit CLI only");
+		expect(input.context).toContain("`/tmp/worktree`");
+		expect(input.context).toContain("`--base main`");
+		expect(input.tasks[0]?.assignment).toContain("Do not perform manual review");
+		expect(input.tasks[0]?.assignment).toContain("`dashboards/monocle-monitor.json`");
+		expect(input.tasks[0]?.assignment).not.toContain("Review the completed implementation against the approved plan");
+	});
+
+
+	test("rewrites coderabbit tasks to report blocked handoff when required scope metadata is missing", () => {
+		const input = {
+			agent: "coderabbit",
+			tasks: [
+				{ id: "CodeRabbitBlocked", assignment: "Review the implementation and report findings." },
+			],
+		};
+
+
+		const didMutate = rewriteCodeRabbitTaskInput({
+			input,
+			scopeByUnitId: new Map(),
+		});
+
+
+		expect(didMutate).toBe(true);
+		expect(input.context).toContain("Parent handoff is incomplete");
+		expect(input.tasks[0]?.assignment).toContain("Return `verdict: \"no_go\"`");
+		expect(input.tasks[0]?.assignment).toContain("Do not inspect repository files manually");
+	});
+
 
 	test("creates phase-end metadata with per-unit scopes and coderrabbit context", () => {
 		const metadata = createImplementationTaskScopeMetadata({
