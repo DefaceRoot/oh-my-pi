@@ -33,6 +33,7 @@ import {
 	isImplementationWorkerPrompt,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
+	rewriteCodeRabbitTaskInput,
 } from "./task-file-tracker.ts";
 import {
 	bestEffortAuggieIndex,
@@ -4635,6 +4636,7 @@ const notifyWorktreeProgress = (
 					});
 				}
 
+
 				// Sanitize oversized context that embeds full plan documents
 				const rawCtx = typeof taskInput.context === "string" ? taskInput.context : "";
 				const contextLooksLikeFullPlan =
@@ -4665,19 +4667,38 @@ const notifyWorktreeProgress = (
 					}
 				}
 			}
-			if (taskAgent === "code-reviewer" || taskAgent === "verifier") {
+			if (taskAgent === "code-reviewer" || taskAgent === "verifier" || taskAgent === "coderabbit") {
 				const ownedFiles = await captureImplementationWorkerOwnedFiles();
-				const didApplyScopeMetadata = applyScopedFileMetadataToTaskInput({
-					input: taskInput,
-					scopeByUnitId: implementationUnitScopeById,
-					fallbackScope: ownedFiles,
-				});
-				if (didApplyScopeMetadata) {
-					pi.logger.debug("implementation-engine: injected authoritative edited-file scope metadata", {
-						agent: taskAgent,
-						units: implementationUnitScopeById.size,
-						fallbackScopeSize: ownedFiles.size,
+				if (taskAgent === "code-reviewer" || taskAgent === "verifier") {
+					const didApplyScopeMetadata = applyScopedFileMetadataToTaskInput({
+						input: taskInput,
+						scopeByUnitId: implementationUnitScopeById,
+						fallbackScope: ownedFiles,
 					});
+					if (didApplyScopeMetadata) {
+						pi.logger.debug("implementation-engine: injected authoritative edited-file scope metadata", {
+							agent: taskAgent,
+							units: implementationUnitScopeById.size,
+							fallbackScopeSize: ownedFiles.size,
+						});
+					}
+				}
+				if (taskAgent === "coderabbit") {
+					const didRewriteCodeRabbitTask = rewriteCodeRabbitTaskInput({
+						input: taskInput,
+						scopeByUnitId: implementationUnitScopeById,
+						fallbackScope: ownedFiles,
+						baseBranch: last.baseBranch,
+						worktreePath: last.worktreePath,
+					});
+					if (didRewriteCodeRabbitTask) {
+						pi.logger.debug("implementation-engine: canonicalized coderabbit task handoff", {
+							units: implementationUnitScopeById.size,
+							fallbackScopeSize: ownedFiles.size,
+							baseBranch: last.baseBranch,
+							worktreePath: last.worktreePath,
+						});
+					}
 				}
 			}
 			readBudget.resetForNextDelegation();
@@ -6069,15 +6090,17 @@ function buildReviewCompleteKickoffPrompt(input: {
 		"   - completionPercent = (sum(itemScores) / totalItems) * 100",
 		"8. Convert completionPercent to a rating:",
 		"   - A: >= 95, B: >= 85, C: >= 70, D: >= 50, F: < 50",
-		"9. As the LAST review task before final report, spawn exactly one Task subagent dedicated to CodeRabbit CLI execution over the full plan diff.",
-		"   - Run in the worktree root (no edits/commits).",
-		`   - Run: /home/colin/.local/bin/coderabbit review --prompt-only --base ${coderrabbitBaseBranch} --cwd ${coderrabbitWorktreePath}`,
-		"   - Execute via bash with explicit `cwd` set to the worktree path above (required by guard) and `timeout: 600` (CodeRabbit can be slow on large diffs).",
-		"   - If base branch is uncertain, detect it first and document the resolved base branch used.",
-		'   - If rate-limited ("Rate limit exceeded"), parse the wait duration from the error message, sleep that many seconds plus 10, then retry once.',
-		"   - If CodeRabbit CLI is missing, binary not found, or auth is rejected (not rate limit), STOP and report the blocker with command output.",
-		"10. Parse CodeRabbit output and normalize severities to: Critical / Severe / Major / Minor / Nitpick.",
-		"11. Ignore nitpicks for gating, but include every Critical/Severe/Major CodeRabbit finding in the final discrepancy list and an explicit remediation backlog section.",
+		"9. As the LAST review task before final report, spawn exactly one Task call with `agent: \"coderabbit\"`.",
+		"   - Parent must hand the coderabbit subagent the exact review scope: explicit `cwd`, one diff selector, and the modified file list or commit range when known.",
+		"   - Do NOT ask the coderabbit subagent to perform manual review, plan validation, repository inspection, or test execution.",
+		`   - Default review scope for this run: \`--base ${coderrabbitBaseBranch}\` in \`${coderrabbitWorktreePath}\`.`,
+		"   - If base branch is uncertain, detect it first and hand the resolved selector to coderabbit.",
+		'   - If rate-limited ("Rate limit exceeded"), coderabbit retries once after waiting the reported duration plus 10 seconds.',
+		"   - If CodeRabbit CLI, auth, or required scope metadata is unavailable, the coderabbit subagent must return blocked with the exact blocker.",
+		"10. CodeRabbit output handling:",
+		"   - Return only Critical / Severe / Major findings.",
+		"   - Ignore Nitpick / Minor / Warning / Info noise.",
+		"11. Include every Critical/Severe/Major CodeRabbit finding in the final discrepancy list and an explicit remediation backlog section.",
 		"12. Return one final synthesized report for the user.",
 		"",
 		"## Final Response Requirements",
@@ -6253,11 +6276,12 @@ function buildFixIssuesKickoffPrompt(input: {
 		"   - For explore children, require the native explore output schema (`query`, `files`, `code`, `architecture`, `start_here`). For per-file PASS/FAIL assignments, include optional top-level `verdict` and `reason`.",
 		"   - Transform child outputs into verification summaries in the parent verification Task subagent after results return, preserving each file verdict and rationale.",
 		"   - If any explore child is cancelled/aborted or shows submit_result validation/missing-submit_result warnings, immediately re-run that same file as a read-only `implement` child and require the same output shape (including `verdict`/`reason` when requested).",
-		"9. As the LAST verification step, that verification Task subagent must run CodeRabbit CLI against the full branch diff:",
-		`\t   - Run: /home/colin/.local/bin/coderabbit review --prompt-only --base ${coderrabbitBaseBranch} --cwd ${coderrabbitWorktreePath}`,
-		"   - Execute via bash with explicit `cwd` set to the worktree path above (required by guard) and `timeout: 600` (CodeRabbit can be slow on large diffs).",
-		"   - Ignore Nitpick/Minor findings.",
-		"   - Treat any remaining Critical/Severe/Major finding as a blocking failure.",
+		"9. As the LAST verification step, that verification Task subagent must spawn exactly one Task call with `agent: \"coderabbit\"`.",
+		"   - Parent must hand the coderabbit subagent the exact review scope: explicit `cwd`, one diff selector, and the deduplicated edited file list or commit range when known.",
+		"   - Do NOT ask the coderabbit subagent to perform manual review, plan validation, repository inspection, or test execution.",
+		`   - Default review scope for this run: \`--base ${coderrabbitBaseBranch}\` in \`${coderrabbitWorktreePath}\`.`,
+		"   - Ignore Nitpick / Minor / Warning / Info noise; treat any remaining Critical/Severe/Major finding as a blocking failure.",
+		"   - If CodeRabbit CLI, auth, or required scope metadata is unavailable, coderabbit must return blocked with the exact blocker.",
 		"10. If final CodeRabbit review reports blocking findings, return those findings to the parent orchestrator; parent must create/update todos and run dedicated fix Task subagents sequentially, then repeat final verification.",
 		"11. If final CodeRabbit verification is clean for Critical/Severe/Major, mark the final todo item completed.",
 		"",

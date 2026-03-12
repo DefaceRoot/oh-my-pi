@@ -27,6 +27,7 @@ describe("implementation worker scope wiring", () => {
 		const source = await readExtensionSource();
 		const toolCallBlock = extractToolCallBlock(source);
 
+
 		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"code-reviewer"/);
 		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"verifier"/);
 		expect(toolCallBlock).toMatch(/captureImplementationWorkerOwnedFiles\(\)/);
@@ -35,9 +36,33 @@ describe("implementation worker scope wiring", () => {
 		expect(toolCallBlock).toMatch(/fallbackScope:\s*ownedFiles/);
 	});
 
+
+	test("task tool canonicalizes coderabbit assignments before execution", async () => {
+		const source = await readExtensionSource();
+		const toolCallBlock = extractToolCallBlock(source);
+
+
+		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"coderabbit"/);
+		expect(toolCallBlock).toMatch(/rewriteCodeRabbitTaskInput\(/);
+		expect(toolCallBlock).toMatch(/baseBranch:\s*last\.baseBranch/);
+		expect(toolCallBlock).toMatch(/worktreePath:\s*last\.worktreePath/);
+	});
+
+
+	test("review and remediation prompts require explicit coderabbit-agent handoff", async () => {
+		const source = await readExtensionSource();
+
+
+		expect(source).toContain("spawn exactly one Task call with `agent:");
+		expect(source).toContain("Parent must hand the coderabbit subagent the exact review scope");
+		expect(source).toContain("Do NOT ask the coderabbit subagent to perform manual review");
+	});
+
+
 	test("task results emit per-unit scope metadata for later verifier fan-out and coderrabbit context", async () => {
 		const source = await readExtensionSource();
 		const toolResultBlock = extractToolResultBlock(source);
+
 
 		expect(toolResultBlock).toMatch(/collectTaskUnitsFromTaskInput\(taskInput\)/);
 		expect(toolResultBlock).toMatch(/collectTaskUnitsFromTaskResultDetails\(event\.details\)/);
