@@ -198,6 +198,57 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 
 
+	it("resumes queued work when prompt generation changes around auto-compaction completion", async () => {
+		session.agent.followUp({
+			role: "custom",
+			customType: "test",
+			content: [{ type: "text", text: "Queued custom" }],
+			display: false,
+			timestamp: Date.now(),
+		});
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const { promise: abortDone, resolve: onAbortDone } = Promise.withResolvers<void>();
+		let generationAdvanced = false;
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end" && !generationAdvanced) {
+				generationAdvanced = true;
+				void session.abort().then(() => onAbortDone());
+			}
+		});
+
+		const assistantMsg = {
+			role: "assistant" as const,
+			content: [],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 190000,
+				output: 1000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await withTimeout(abortDone, 1000, "Prompt generation bump timed out");
+		await Promise.resolve();
+
+		expect(generationAdvanced).toBe(true);
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+		vi.advanceTimersByTime(200);
+		await Promise.resolve();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("forwards todo reminder lifecycle signals to extensions", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 

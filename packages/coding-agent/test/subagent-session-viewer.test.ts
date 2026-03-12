@@ -170,7 +170,8 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("Status ● RUNNING");
 		expect(text).toContain("Role explorer");
 		expect(text).toContain("Model claude-sonnet-4-20250514");
-		expect(text).toContain("Tokens 12.4k/200.0k");
+		expect(text).toContain("Tokens 12.4k");
+		expect(text).not.toContain("12.4k/200.0k");
 		expect(text).toContain("Thinking medium");
 		expect(text).toContain("session header");
 	});

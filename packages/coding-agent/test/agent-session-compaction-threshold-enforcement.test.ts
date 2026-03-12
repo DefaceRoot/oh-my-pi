@@ -123,6 +123,50 @@ describe("AgentSession compaction threshold enforcement", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 	});
 
+	it("enforces threshold from accumulated multi-turn history, not only the latest assistant usage", async () => {
+		session.settings.set("compaction.thresholdPercent", 50);
+		setContextWindow(4_000);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const baseTimestamp = Date.now() - 10_000;
+		for (let turn = 0; turn < 8; turn++) {
+			session.agent.appendMessage({
+				role: "user",
+				content: [{ type: "text", text: `turn-${turn} ${"x".repeat(5_000)}` }],
+				attribution: "user",
+				timestamp: baseTimestamp + turn * 2,
+			});
+			const assistantTurn: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: `ack-${turn}` }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+				usage: {
+					input: 80,
+					output: 20,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 100,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: baseTimestamp + turn * 2 + 1,
+			};
+			session.agent.appendMessage(assistantTurn);
+		}
+
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff doc" });
+		await session.prompt("trigger accumulated-history pre-send check");
+
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
+	});
+
 	it("enforces threshold before send after an error turn", async () => {
 		session.settings.set("compaction.thresholdPercent", 50);
 		setContextWindow(4_000);
