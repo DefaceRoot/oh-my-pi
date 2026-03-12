@@ -175,7 +175,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
-	task: TaskTool.create,
+	task: s => TaskTool.create(s),
 	cancel_job: CancelJobTool.createIf,
 	await: AwaitTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
