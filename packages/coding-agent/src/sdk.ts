@@ -911,6 +911,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		getPlanModeState: () => session.getPlanModeState(),
 		getCompactContext: () => session.formatCompactContext(),
+		getSessionEntries: () => sessionManager.getEntries() as Array<Record<string, unknown>>,
 		getTodoPhases: () => session.getTodoPhases(),
 		setTodoPhases: phases => session.setTodoPhases(phases),
 		getCheckpointState: () => session.getCheckpointState(),

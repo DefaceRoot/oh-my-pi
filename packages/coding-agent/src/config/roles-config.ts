@@ -42,7 +42,12 @@ export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
 		"using-git-worktrees",
 		"using-tmux-for-interactive-commands",
 	],
-	planning: ["brainstorming", "writing-plans", "validate-implementation-plan"],
+	planning: [
+		"brainstorming",
+		"generate-creative-ideas",
+		"writing-plans",
+		"validate-implementation-plan",
+	],
 	implementation: [
 		"test-driven-development",
 		"error-handling-patterns",

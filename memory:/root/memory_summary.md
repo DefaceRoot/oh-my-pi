@@ -1,0 +1,8 @@
+- **OMP Refresh**: Restart `omp` after repo changes; run `bun install` first only when dependencies change. Verify with `command -v omp` and `omp --version`. No hot-reload.
+- **Known Delegation Gap**: `delegation-context.ts` exists but is NOT wired to `task/index.ts` `renderTemplate()`; subagents miss plan/repo metadata until fixed. Construct TOON manually for rich handoffs.
+- **TOON Rules**: Internal-only, 2-space indent, fenced `toon`, single root, no comments, include plan path + completed summaries + constraints.
+- **TUI Crashes**: Check `agent/omp-crash.log` first. Small overflow (+1-2 cols) with Unicode/emoji/mojibake indicates `visibleWidth()` mismatch in truncation logic.
+- **CISEN Wizard**: Inventory requires C2 in `[c2]` and `[vpn_nodes]`, uses `__SSH_KEY_PENDING__`, wraps existing scripts (no reimplementation). Commit `package-lock.json` if BATS runner kept.
+- **Orchestrator Discipline**: Parent never edits files; TDD slices (RED→GREEN); sequential default; verifier gates mandatory; CodeRabbit may fail on external auth (waivable).
+- **tmux/OOM**: Add `xterm-kitty:sync,xterm-ghostty:sync` to terminal-features for TUI stability; use `systemd-run --scope --user` for OOM protection on Fedora.
+- **Git Safety**: Ignore `.ssh.json` and `.omp/sessions/`; use `--no-verify` push only when git-lfs missing and no LFS files involved.

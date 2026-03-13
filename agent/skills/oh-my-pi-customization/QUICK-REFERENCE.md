@@ -33,13 +33,11 @@ From `<fork-root>`:
 2. `bun install` (when dependencies changed)
 3. restart `omp`
 
-## Legacy Global Reinstall (Compatibility Only)
+## Launcher Checks
 
-- `bun --cwd=<fork-root> run reinstall:fork`
-- `bun run reinstall:fork` repacks workspace packages into tarballs and reinstalls them globally.
-- Use this only when you intentionally need the legacy global-install behavior.
-
-See `UPDATING.md` for the full workflow, PATH checks, and smoke verification steps.
+- `command -v omp` should resolve to `~/.local/bin/omp` or `<fork-root>/omp`
+- `~/.omp/agent` should point to `<fork-root>/agent`
+- `UPDATING.md` has the full workflow and smoke verification steps
 
 ## Extension Skeleton
 

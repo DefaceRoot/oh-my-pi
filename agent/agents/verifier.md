@@ -4,6 +4,7 @@ description: Independent phase-end verifier for intent and functionality confirm
 tools: read, grep, find, bash, lsp, submit_result
 model: pi/verifier, pi/lint, haiku-4.5, gemini-3-flash, flash, mini
 thinking-level: minimal
+success-requires-tools: read, grep, find, bash, lsp
 output:
   properties:
     verdict:

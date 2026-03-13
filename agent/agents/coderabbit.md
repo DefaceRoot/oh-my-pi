@@ -4,6 +4,7 @@ description: Dedicated CodeRabbit CLI verifier for asynchronous review gating
 tools: bash, read, submit_result
 model: pi/coderabbit, anthropic/claude-sonnet-4-6
 thinking-level: minimal
+success-requires-tools: bash
 output:
   properties:
     verdict:

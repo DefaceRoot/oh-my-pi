@@ -33,6 +33,14 @@ function createAssistantStopMessage(text: string): AssistantMessage {
 	};
 }
 
+function createAssistantErrorMessage(errorMessage: string, text = ""): AssistantMessage {
+	return {
+		...createAssistantStopMessage(text),
+		stopReason: "error",
+		errorMessage,
+	};
+}
+
 function createMockSession(
 	onPrompt: (params: {
 		text: string;
@@ -423,6 +431,32 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
 		expect(createAgentSessionMock.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
 	});
+	it("does not enter submit-only reminder mode after assistant error and instead returns the provider error", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			if (promptIndex !== 1) return;
+			const assistant = createAssistantErrorMessage("Internal Network Failure", "tool completed before provider failure");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-assistant-error" });
+
+		expect(prompts).toHaveLength(1);
+		expect(result.exitCode).toBe(1);
+		expect(result.aborted).toBe(false);
+		expect(result.stderr).toBe("Internal Network Failure");
+		expect(result.output).not.toContain("You stopped without calling submit_result");
+		expect(result.output).not.toContain("Result submitted.");
+	});
+
 	it("aborts after 3 reminders when submit_result is never called", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {

@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 AGENT_SOURCE="$REPO_ROOT/agent"
 AGENT_LINK="$HOME/.omp/agent"
+LAUNCHER_SOURCE="$REPO_ROOT/omp"
+LAUNCHER_LINK="$HOME/.local/bin/omp"
 BACKUP_PATH=""
 
 info()  { echo "[INFO]  $*"; }
@@ -38,6 +40,13 @@ ensure_bun() {
   bun --version | head -1
 }
 
+install_repo_dependencies() {
+  hr
+  info "Installing repo dependencies..."
+  bun --cwd="$REPO_ROOT" install
+  ok "Dependencies installed"
+}
+
 sync_agent_symlink() {
   hr
   info "Ensuring ~/.omp/agent points at this fork..."
@@ -69,15 +78,34 @@ sync_agent_symlink() {
   ok "Created ~/.omp/agent -> $AGENT_SOURCE"
 }
 
-reinstall_fork() {
+install_launcher_symlink() {
   hr
-  info "Installing repo dependencies..."
-  bun --cwd="$REPO_ROOT" install
+  info "Ensuring omp points at this fork launcher..."
 
-  hr
-  info "Reinstalling omp globally from this fork..."
-  bun --cwd="$REPO_ROOT" run reinstall:fork
-  ok "Fork reinstall complete"
+  mkdir -p "$(dirname "$LAUNCHER_LINK")"
+
+  if [[ -L "$LAUNCHER_LINK" ]]; then
+    local current_target
+    current_target="$(readlink "$LAUNCHER_LINK")"
+    if [[ "$current_target" == "$LAUNCHER_SOURCE" ]]; then
+      ok "$LAUNCHER_LINK already points to $LAUNCHER_SOURCE"
+      return
+    fi
+
+    warn "Replacing launcher symlink target $current_target"
+    rm "$LAUNCHER_LINK"
+    ln -s "$LAUNCHER_SOURCE" "$LAUNCHER_LINK"
+    ok "Updated omp launcher symlink"
+    return
+  fi
+
+  if [[ -e "$LAUNCHER_LINK" ]]; then
+    error "$LAUNCHER_LINK already exists and is not a symlink. Move it aside and rerun setup."
+    exit 1
+  fi
+
+  ln -s "$LAUNCHER_SOURCE" "$LAUNCHER_LINK"
+  ok "Created $LAUNCHER_LINK -> $LAUNCHER_SOURCE"
 }
 
 print_summary() {
@@ -87,13 +115,14 @@ print_summary() {
   echo "Repo root: $REPO_ROOT"
   echo "Agent source: $AGENT_SOURCE"
   echo "Live agent path: $AGENT_LINK"
+  echo "Launcher path: $LAUNCHER_LINK"
   if [[ -n "$BACKUP_PATH" ]]; then
     echo "Backup created: $BACKUP_PATH"
   fi
   echo ""
   echo "Next steps:"
-  echo "  1. Launch omp"
-  echo "  2. Verify command -v omp prints ~/.bun/bin/omp"
+  echo "  1. Verify command -v omp prints ~/.local/bin/omp or $REPO_ROOT/omp"
+  echo "  2. Restart any running omp session"
   echo "  3. Follow $REPO_ROOT/UPDATING.md for future updates"
 }
 
@@ -102,7 +131,13 @@ if [[ ! -d "$AGENT_SOURCE" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$LAUNCHER_SOURCE" ]]; then
+  error "Expected executable fork launcher at $LAUNCHER_SOURCE"
+  exit 1
+fi
+
 ensure_bun
+install_repo_dependencies
 sync_agent_symlink
-reinstall_fork
+install_launcher_symlink
 print_summary

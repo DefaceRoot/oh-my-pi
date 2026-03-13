@@ -28,6 +28,16 @@ describe("implementation quality-loop delegation", () => {
 		expect(toolCallBlock).toMatch(/quality-loop subagents must reuse the current workspace/i);
 	});
 
+	test("worker gate derives lint requirement from owned files for submit and task-result checks", async () => {
+		const source = await readFile(implementationEnginePath);
+		const toolCallBlock = extractToolCallBlock(source);
+
+		expect(source).toMatch(/const getImplementationWorkerGateOptions = \(changedFiles: Iterable<string>\) => \([\s\S]*isImplementationWorkerLintRequired\(changedFiles\)/);
+		expect(toolCallBlock).toMatch(/captureImplementationWorkerOwnedFiles\(\)[\s\S]*getImplementationWorkerSubmitDecision\([\s\S]*getImplementationWorkerGateOptions\(ownedFiles\)/);
+		expect(source).toMatch(/computeFilesDelta\([\s\S]*implementationWorkerBaselineSnapshot[\s\S]*postTaskSnapshot[\s\S]*recordImplementationWorkerGateOutcome\([\s\S]*getImplementationWorkerGateOptions\(workerOwnedFiles\)/);
+	});
+
+
 	test("implementation agent prompt requires dedicated lint, review, and commit agents", async () => {
 		const content = await readFile(implementAgentPath);
 

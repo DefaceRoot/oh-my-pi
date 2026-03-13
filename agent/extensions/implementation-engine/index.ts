@@ -30,6 +30,7 @@ import {
 	evaluateImplementationWorkerGateTaskResult,
 	getImplementationWorkerSubmitDecision,
 	isImplementationWorkerGateAgent,
+	isImplementationWorkerLintRequired,
 	isImplementationWorkerPrompt,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
@@ -351,6 +352,9 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		const currentSnapshot = await captureGitStatusSnapshot(snapshotCwd);
 		return computeFilesDelta(implementationWorkerBaselineSnapshot, currentSnapshot);
 	};
+	const getImplementationWorkerGateOptions = (changedFiles: Iterable<string>) => ({
+		lintRequired: isImplementationWorkerLintRequired(changedFiles),
+	});
 
 
 	const getSettingsRoleMutator = async () => {
@@ -4587,8 +4591,10 @@ const notifyWorktreeProgress = (
 		}
 
 		if (activeImplementationWorkerGate && event.toolName === "submit_result") {
+			const ownedFiles = await captureImplementationWorkerOwnedFiles();
 			const submitDecision = getImplementationWorkerSubmitDecision(
 				implementationWorkerGateState,
+				getImplementationWorkerGateOptions(ownedFiles),
 			);
 			if (!submitDecision.allowed) {
 				pi.logger.warn("implementation-engine: blocked implementation worker submit_result", {
@@ -4940,10 +4946,15 @@ const notifyWorktreeProgress = (
 						},
 						spawnedAgent,
 					);
+			const workerOwnedFiles = computeFilesDelta(
+				implementationWorkerBaselineSnapshot,
+				postTaskSnapshot,
+			);
 			implementationWorkerGateState = recordImplementationWorkerGateOutcome(
 				implementationWorkerGateState,
 				spawnedAgent,
 				gateOutcome,
+				getImplementationWorkerGateOptions(workerOwnedFiles),
 			);
 			if (!gateOutcome.success) {
 				pi.logger.warn("implementation-engine: worker gate stage failed", {

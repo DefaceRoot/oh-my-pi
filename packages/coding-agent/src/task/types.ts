@@ -124,6 +124,7 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
+	successRequiresTools?: string[];
 	source: AgentSource;
 	filePath?: string;
 }

@@ -8,6 +8,7 @@ import {
 	createImplementationWorkerGateState,
 	evaluateImplementationWorkerGateTaskResult,
 	getImplementationWorkerSubmitDecision,
+	isImplementationWorkerLintRequired,
 	isImplementationWorkerPrompt,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
@@ -70,6 +71,29 @@ describe("computeFilesDelta", () => {
 		expect(computeFilesDelta(before, new Set())).toEqual(new Set());
 	});
 });
+
+describe("isImplementationWorkerLintRequired", () => {
+	test("returns false for documentation and configuration-only changes including dotfiles", () => {
+		expect(
+			isImplementationWorkerLintRequired([
+				".gitignore",
+				"docs/usage.md",
+				"docs/contracts/worker.json",
+			]),
+		).toBe(false);
+	});
+
+	test("returns true when implementation files are present or no files were captured", () => {
+		expect(
+			isImplementationWorkerLintRequired([
+				"docs/usage.md",
+				"agent/extensions/implementation-engine/task-file-tracker.ts",
+			]),
+		).toBe(true);
+		expect(isImplementationWorkerLintRequired([])).toBe(true);
+	});
+});
+
 
 describe("task unit scope metadata", () => {
 	test("collects task units from task input payload", () => {
@@ -431,6 +455,31 @@ describe("evaluateImplementationWorkerGateTaskResult", () => {
 });
 
 describe("implementation worker submit gate", () => {
+	test("allows documentation-only workflows to skip lint once review and commit succeed", () => {
+		let state = createImplementationWorkerGateState();
+
+		state = recordImplementationWorkerGateOutcome(
+			state,
+			"code-reviewer",
+			{ success: true },
+			{ lintRequired: false },
+		);
+
+		expect(getImplementationWorkerSubmitDecision(state, { lintRequired: false })).toEqual({
+			allowed: false,
+			reason: "Implementation workflow gate: submit_result blocked until a successful commit task after code-reviewer.",
+		});
+
+		state = recordImplementationWorkerGateOutcome(
+			state,
+			"commit",
+			{ success: true },
+			{ lintRequired: false },
+		);
+
+		expect(getImplementationWorkerSubmitDecision(state, { lintRequired: false }).allowed).toBe(true);
+	});
+
 	test("blocks submit_result until lint, review, and commit succeed in order", () => {
 		let state = createImplementationWorkerGateState();
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(false);
@@ -469,6 +518,29 @@ describe("implementation worker submit gate", () => {
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(false);
 
 		state = recordImplementationWorkerGateOutcome(state, "commit", { success: true });
+		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);
+	});
+
+	test("keeps commit gate satisfied across repeated successful lint and review runs", () => {
+		let state = createImplementationWorkerGateState();
+
+		state = recordImplementationWorkerGateOutcome(state, "lint", { success: true });
+		state = recordImplementationWorkerGateOutcome(state, "code-reviewer", {
+			success: true,
+		});
+		state = recordImplementationWorkerGateOutcome(state, "lint", { success: true });
+
+		expect(getImplementationWorkerSubmitDecision(state)).toEqual({
+			allowed: false,
+			reason: "Implementation workflow gate: submit_result blocked until a successful commit task after code-reviewer.",
+		});
+
+		state = recordImplementationWorkerGateOutcome(state, "commit", { success: true });
+		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);
+
+		state = recordImplementationWorkerGateOutcome(state, "code-reviewer", {
+			success: true,
+		});
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);
 	});
 });

@@ -9,14 +9,14 @@ set -e
 #   --binary       Always install prebuilt binary
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
-#   --verify-path-precedence  Verify omp resolves inside Bun global bin
+#   --verify-path-precedence  Verify omp resolves from the expected install location
 
 REPO="can1357/oh-my-pi"
 PACKAGE="@oh-my-pi/pi-coding-agent"
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
+SOURCE_INSTALL_ROOT="${PI_SOURCE_INSTALL_ROOT:-$HOME/.local/share/oh-my-pi/source}"
 MIN_BUN_VERSION="1.3.7"
 FORK_REPO_ROOT="/home/colin/devpod-repos/DefaceRoot/oh-my-pi"
-FORK_REINSTALL_SCRIPT="$FORK_REPO_ROOT/scripts/reinstall-fork-global.sh"
 
 # Parse arguments
 MODE=""
@@ -146,85 +146,102 @@ has_git_lfs() {
     command -v git-lfs >/dev/null 2>&1
 }
 
-run_fork_reinstall() {
+sanitize_ref() {
+    printf '%s' "$1" | tr '/:@' '---' | tr -cd '[:alnum:]._-'
+}
+
+install_repo_launcher() {
     repo_root="$1"
-    reinstall_script="$repo_root/scripts/reinstall-fork-global.sh"
 
-    if [ ! -f "$reinstall_script" ]; then
-        echo "Expected reinstall script at $reinstall_script"
+    if [ ! -x "$repo_root/omp" ]; then
+        echo "Expected fork launcher at $repo_root/omp"
         exit 1
     fi
 
-    if ! command -v bash >/dev/null 2>&1; then
-        echo "bash is required for local fork reinstall"
+    if [ ! -d "$repo_root/packages/coding-agent" ]; then
+        echo "Expected package at $repo_root/packages/coding-agent"
         exit 1
     fi
 
+    echo "Installing repo dependencies from $repo_root..."
     (cd "$repo_root" && bun install)
-    bash "$reinstall_script" || {
-        echo "Failed to reinstall fork from $repo_root"
+
+    mkdir -p "$INSTALL_DIR"
+    rm -f "$INSTALL_DIR/omp"
+    ln -s "$repo_root/omp" "$INSTALL_DIR/omp"
+
+    echo "✓ Installed fork launcher to ${INSTALL_DIR}/omp"
+}
+
+prepare_source_checkout() {
+    ref_name="$1"
+
+    if ! has_git; then
+        echo "git is required for --ref when installing from source"
         exit 1
-    }
+    fi
+
+    sanitized_ref=$(sanitize_ref "$ref_name")
+    if [ -z "$sanitized_ref" ]; then
+        sanitized_ref="source"
+    fi
+
+    target_dir="$SOURCE_INSTALL_ROOT/$sanitized_ref"
+    rm -rf "$target_dir"
+    mkdir -p "$SOURCE_INSTALL_ROOT"
+
+    if git clone --depth 1 --branch "$ref_name" "https://github.com/${REPO}.git" "$target_dir" >/dev/null 2>&1; then
+        :
+    else
+        git clone "https://github.com/${REPO}.git" "$target_dir"
+        (cd "$target_dir" && git checkout "$ref_name")
+    fi
+
+    if has_git_lfs; then
+        (cd "$target_dir" && git lfs pull)
+    fi
+
+    printf '%s\n' "$target_dir"
 }
 
 verify_path_precedence() {
-    bun_bin_dir=$(bun pm bin -g 2>/dev/null || true)
-    if [ -z "$bun_bin_dir" ]; then
-        echo "Warning: could not resolve Bun global bin via 'bun pm bin -g'"
-        echo "Verify PATH precedence manually: command -v omp && bun pm bin -g"
-        return
-    fi
-
     resolved_omp=$(command -v omp 2>/dev/null || true)
     if [ -z "$resolved_omp" ]; then
         echo "Warning: omp is not on PATH after install"
-        echo "Verify PATH precedence manually: command -v omp && bun pm bin -g"
+        echo "Verify PATH precedence manually: command -v omp"
         return
     fi
 
     case "$resolved_omp" in
-        "$bun_bin_dir"/*)
+        "$INSTALL_DIR"/omp)
             echo "✓ PATH precedence verified: ${resolved_omp}"
-            ;;
-        *)
-            echo "Warning: omp resolves to ${resolved_omp}, outside Bun global bin ${bun_bin_dir}"
-            echo "Move ${bun_bin_dir} earlier in PATH, then run: command -v omp && bun pm bin -g"
+            return
             ;;
     esac
+
+    bun_bin_dir=$(bun pm bin -g 2>/dev/null || true)
+    if [ -n "$bun_bin_dir" ]; then
+        case "$resolved_omp" in
+            "$bun_bin_dir"/*)
+                echo "✓ PATH precedence verified: ${resolved_omp}"
+                return
+                ;;
+        esac
+    fi
+
+    echo "Warning: omp resolves to ${resolved_omp}, not ${INSTALL_DIR}/omp"
+    echo "Move ${INSTALL_DIR} earlier in PATH, then run: command -v omp"
 }
 
 # Install via bun
 install_via_bun() {
     echo "Installing via bun..."
     if [ -n "$REF" ]; then
-        if ! has_git; then
-            echo "git is required for --ref when installing from source"
-            exit 1
-        fi
-
-        TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$TMP_DIR"' EXIT
-
-        if git clone --depth 1 --branch "$REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
-            :
-        else
-            git clone "https://github.com/${REPO}.git" "$TMP_DIR"
-            (cd "$TMP_DIR" && git checkout "$REF")
-        fi
-
-        # Pull LFS files
-        if has_git_lfs; then
-            (cd "$TMP_DIR" && git lfs pull)
-        fi
-
-        if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
-            echo "Expected package at ${TMP_DIR}/packages/coding-agent"
-            exit 1
-        fi
-
-        run_fork_reinstall "$TMP_DIR"
+        checkout_dir=$(prepare_source_checkout "$REF")
+        install_repo_launcher "$checkout_dir"
+        echo "✓ Stored source checkout at ${checkout_dir}"
     elif [ -d "$FORK_REPO_ROOT" ]; then
-        run_fork_reinstall "$FORK_REPO_ROOT"
+        install_repo_launcher "$FORK_REPO_ROOT"
     else
         bun install -g "$PACKAGE" || {
             echo "Failed to install $PACKAGE"

@@ -4,6 +4,7 @@ description: Project-aware quality checker that discovers and runs all available
 tools: bash, read, find
 model: pi/lint, haiku-4.5, gemini-3-flash, flash, mini
 thinking-level: minimal
+success-requires-tools: bash
 output:
   properties:
     passed:

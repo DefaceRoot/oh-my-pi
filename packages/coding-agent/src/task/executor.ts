@@ -30,6 +30,7 @@ import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getDirectUsageTokens } from "../utils/usage-tokens";
+import { validateSuccessToolRequirements } from "./success-evidence";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -471,6 +472,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		durationMs: 0,
 		modelOverride,
 	};
+	const executedToolNames = new Set<string>();
 
 	// Check if already aborted
 	if (signal?.aborted) {
@@ -748,6 +750,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				break;
 
 			case "tool_execution_start": {
+				executedToolNames.add(event.toolName);
 				progress.toolCount++;
 				progress.currentTool = event.toolName;
 				progress.currentToolArgs = extractToolArgsPreview(
@@ -1121,10 +1124,18 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
 
+			const initialAssistant = session.getLastAssistantMessage();
+			const shouldForceSubmitResultReminder = initialAssistant?.stopReason !== "error";
+
 			let retryCount = 0;
 			let previousTools: string[] | null = null;
 			try {
-				while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
+				while (
+					shouldForceSubmitResultReminder &&
+					!submitResultCalled &&
+					retryCount < MAX_SUBMIT_RESULT_RETRIES &&
+					!abortSignal.aborted
+				) {
 					retryCount++;
 					if (!previousTools) {
 						previousTools = session.getActiveToolNames();
@@ -1170,7 +1181,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					await session.setActiveToolsByName(previousTools);
 				}
 			}
-			if (!submitResultCalled && !abortSignal.aborted) {
+			if (!submitResultCalled && !abortSignal.aborted && shouldForceSubmitResultReminder) {
 				aborted = true;
 				exitCode = 1;
 				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
@@ -1289,6 +1300,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const submitResultAbortReason =
 		lastSubmitResult?.status === "aborted" ? lastSubmitResult.error || "Subagent aborted task" : undefined;
 	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
+	const successEvidenceFailure =
+		exitCode === 0 && !abortedViaSubmitResult
+			? validateSuccessToolRequirements(agent, executedToolNames)
+			: null;
+	if (successEvidenceFailure) {
+		const warning = `SYSTEM WARNING: ${successEvidenceFailure}`;
+		rawOutput = rawOutput ? `${warning}\n\n${rawOutput}` : warning;
+		stderr = warning;
+		exitCode = 1;
+	}
 	const { content: truncatedOutput, truncated } = truncateTail(rawOutput, {
 		maxBytes: MAX_OUTPUT_BYTES,
 		maxLines: MAX_OUTPUT_LINES,

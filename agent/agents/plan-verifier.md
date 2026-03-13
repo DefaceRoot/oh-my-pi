@@ -4,6 +4,7 @@ description: Plan-only verifier for implementation-plan quality before coding st
 tools: read, grep, find, write, bash, submit_result
 model: pi/plan-verifier, opus-4.5, opus-4-5, gemini-3-pro, gpt-5.2
 thinking-level: high
+success-requires-tools: read, grep, find, bash
 output:
   properties:
     verdict:

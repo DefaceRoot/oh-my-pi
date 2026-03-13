@@ -587,8 +587,9 @@ This prevents restarts/session loss from blocking implementation.
 For this fork, do not patch files inside the global Bun install. Edit repo files under `<fork-root>` and `<fork-root>/agent`, then follow `UPDATING.md`:
 - run `bun install` only when dependencies changed
 - restart `omp` so the launcher picks up repo changes
+- use `command -v omp` to confirm the launcher path when behavior looks stale
 
-`bun run reinstall:fork` remains available only for legacy global-install compatibility checks; it is not part of the normal edit loop. Commit and push are for source control only and do not refresh the live local `omp` process.
+Commit and push are for source control only and do not refresh the live local `omp` process.
 
 ### 22. Use `effectiveAgent` when spawning subagents
 If Task tool mutates an agent for runtime mode behavior (e.g., plan-mode system prompt/tool restrictions), pass that **effective** agent object into `runSubprocess`. Passing the original agent can silently ignore mode-specific behavior and confuse debugging.

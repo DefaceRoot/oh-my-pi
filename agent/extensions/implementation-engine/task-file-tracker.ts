@@ -603,6 +603,30 @@ const IMPLEMENTATION_WORKER_MARKER_RE =
 	/Implementation subagent for delegated coding work/i;
 const IMPLEMENTATION_WORKER_DELIVERY_LOOP_RE =
 	/<delivery_loop>[\s\S]*?spawn a `lint` subagent[\s\S]*?code-reviewer[\s\S]*?commit/i;
+const IMPLEMENTATION_WORKER_DOC_EXTENSIONS = new Set([
+	".md",
+	".mdc",
+	".mdx",
+	".txt",
+	".rst",
+	".adoc",
+]);
+const IMPLEMENTATION_WORKER_CONFIG_EXTENSIONS = new Set([
+	".json",
+	".json5",
+	".jsonc",
+	".yaml",
+	".yml",
+	".toml",
+	".xml",
+	".ini",
+	".cfg",
+]);
+const IMPLEMENTATION_WORKER_CONFIG_FILENAMES = new Set([
+	".editorconfig",
+	".gitattributes",
+	".gitignore",
+]);
 
 export interface ImplementationWorkerGateStageStats {
 	attempts: number;
@@ -624,9 +648,46 @@ export interface ImplementationWorkerGateOutcome {
 	reason?: string;
 }
 
+export interface ImplementationWorkerGateOptions {
+	lintRequired?: boolean;
+}
+
 export interface ImplementationWorkerSubmitDecision {
 	allowed: boolean;
 	reason?: string;
+}
+
+function resolveImplementationWorkerGateOptions(
+	options: ImplementationWorkerGateOptions | undefined,
+): { lintRequired: boolean } {
+	return {
+		lintRequired: options?.lintRequired ?? true,
+	};
+}
+
+function isDocumentationOrConfigurationPath(file: string): boolean {
+	const normalized = normalizeTrackedPath(file).toLowerCase();
+	if (!normalized) return false;
+
+	const basename = normalized.split("/").at(-1) ?? normalized;
+	if (IMPLEMENTATION_WORKER_CONFIG_FILENAMES.has(basename)) {
+		return true;
+	}
+
+	const extensionIndex = basename.lastIndexOf(".");
+	const extension = extensionIndex >= 0 ? basename.slice(extensionIndex) : "";
+	return (
+		IMPLEMENTATION_WORKER_DOC_EXTENSIONS.has(extension) ||
+		IMPLEMENTATION_WORKER_CONFIG_EXTENSIONS.has(extension)
+	);
+}
+
+export function isImplementationWorkerLintRequired(
+	changedFiles: Iterable<string>,
+): boolean {
+	const files = toSortedPaths(changedFiles);
+	if (files.length === 0) return true;
+	return files.some(file => !isDocumentationOrConfigurationPath(file));
 }
 
 export function isImplementationWorkerPrompt(
@@ -662,13 +723,23 @@ function evaluateNextStageIndex(
 	previousStageIndex: WorkerGateStageIndex,
 	agent: ImplementationWorkerGateAgent,
 	outcome: ImplementationWorkerGateOutcome,
+	options?: ImplementationWorkerGateOptions,
 ): WorkerGateStageIndex {
+	const { lintRequired } = resolveImplementationWorkerGateOptions(options);
+
 	if (outcome.success) {
 		switch (agent) {
 			case "lint":
-				return 1;
+				return lintRequired
+					? (Math.max(previousStageIndex, 1) as WorkerGateStageIndex)
+					: previousStageIndex;
 			case "code-reviewer":
-				return previousStageIndex >= 1 ? 2 : previousStageIndex;
+				if (!lintRequired) {
+					return Math.max(previousStageIndex, 2) as WorkerGateStageIndex;
+				}
+				return previousStageIndex >= 1
+					? (Math.max(previousStageIndex, 2) as WorkerGateStageIndex)
+					: previousStageIndex;
 			case "commit":
 				return previousStageIndex >= 2 ? 3 : previousStageIndex;
 			default:
@@ -678,9 +749,11 @@ function evaluateNextStageIndex(
 
 	switch (agent) {
 		case "lint":
-			return 0;
+			return lintRequired ? 0 : previousStageIndex;
 		case "code-reviewer":
-			return Math.min(previousStageIndex, 1) as WorkerGateStageIndex;
+			return lintRequired
+				? (Math.min(previousStageIndex, 1) as WorkerGateStageIndex)
+				: 0;
 		case "commit":
 			return Math.min(previousStageIndex, 2) as WorkerGateStageIndex;
 		default:
@@ -692,6 +765,7 @@ export function recordImplementationWorkerGateOutcome(
 	state: ImplementationWorkerGateState,
 	agent: ImplementationWorkerGateAgent,
 	outcome: ImplementationWorkerGateOutcome,
+	options?: ImplementationWorkerGateOptions,
 ): ImplementationWorkerGateState {
 	const previousStage = state.stages[agent];
 	const nextStage: ImplementationWorkerGateStageStats = {
@@ -703,7 +777,7 @@ export function recordImplementationWorkerGateOutcome(
 	};
 
 	return {
-		stageIndex: evaluateNextStageIndex(state.stageIndex, agent, outcome),
+		stageIndex: evaluateNextStageIndex(state.stageIndex, agent, outcome, options),
 		stages: {
 			...state.stages,
 			[agent]: nextStage,
@@ -713,17 +787,22 @@ export function recordImplementationWorkerGateOutcome(
 
 export function getImplementationWorkerSubmitDecision(
 	state: ImplementationWorkerGateState,
+	options?: ImplementationWorkerGateOptions,
 ): ImplementationWorkerSubmitDecision {
+	const { lintRequired } = resolveImplementationWorkerGateOptions(options);
 	if (state.stageIndex === 3) {
 		return { allowed: true };
 	}
 
-	const missingStep =
-		state.stageIndex < 1
+	const missingStep = lintRequired
+		? state.stageIndex < 1
 			? "a successful lint task"
 			: state.stageIndex < 2
 				? "a successful code-reviewer task after lint"
-				: "a successful commit task after code-reviewer";
+				: "a successful commit task after code-reviewer"
+		: state.stageIndex < 2
+			? "a successful code-reviewer task"
+			: "a successful commit task after code-reviewer";
 
 	const stageFailureReasons = [
 		state.stages.lint.lastFailureReason,

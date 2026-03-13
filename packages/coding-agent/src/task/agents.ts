@@ -25,6 +25,7 @@ interface AgentFrontmatter {
 	spawns?: string;
 	model?: string | string[];
 	thinkingLevel?: string;
+	successRequiresTools?: string[];
 }
 
 interface EmbeddedAgentDef {

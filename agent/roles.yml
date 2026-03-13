@@ -25,7 +25,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - chrome-devtools
     skills: all
   orchestrator: 
     tools: 
@@ -108,6 +107,7 @@ roles:
       - resolve
     mcp: 
       - augment
+      - better-context
     skills: all
   implement: 
     tools: 
@@ -135,7 +135,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - better-context
     skills: all
   code-reviewer: 
     tools: 
@@ -276,6 +275,33 @@ roles:
     mcp: 
       - augment
       - chrome-devtools
+    skills: all
+  coderabbit: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
     skills: all
 subagents: 
   designer: 

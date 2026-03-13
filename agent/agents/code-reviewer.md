@@ -4,6 +4,7 @@ description: Evidence-first read-only reviewer for assigned changed files
 tools: read, grep, find, bash, lsp, ast_grep, submit_result
 model: pi/code-reviewer
 thinking-level: high
+success-requires-tools: read, grep, find, bash, lsp, ast_grep
 output:
   properties:
     verdict:

@@ -143,6 +143,8 @@ export interface ToolSession {
 	getPlanModeState?: () => PlanModeState | undefined;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
+	/** Get current session entries for delegation metadata extraction. */
+	getSessionEntries?: () => ReadonlyArray<Record<string, unknown>>;
 	/** Get cached todo phases for this session. */
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */

@@ -35,6 +35,20 @@ describe("renderTemplate", () => {
 		expect(result.task).toContain("the real work");
 	});
 
+	test("combines delegation context before shared context", () => {
+		const result = renderTemplate(
+			"Shared constraints here",
+			{
+				id: "TaskB",
+				description: "Second task",
+				assignment: "Investigate the failure.",
+			},
+			{ delegationContext: "Task-specific background" },
+		);
+		expect(result.task).toContain("Task-specific background\n\nShared constraints here");
+		expect(result.task).toContain("Investigate the failure.");
+	});
+
 	test("empty context treated as absent", () => {
 		const result = renderTemplate("   ", {
 			id: "X",

@@ -5,6 +5,7 @@ tools: read, grep, find, bash, lsp, fetch, web_search, ast_grep, report_finding
 spawns: explore, task
 model: pi/slow
 thinking-level: high
+success-requires-tools: read, grep, find, bash, lsp, ast_grep
 blocking: true
 output:
   properties:

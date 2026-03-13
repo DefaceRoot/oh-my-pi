@@ -1,6 +1,6 @@
 # Updating This OMP Fork
 
-This fork uses a direct launcher that runs `omp` straight from the repository source. No global package reinstall is needed for day-to-day use.
+This fork uses a direct launcher that runs `omp` straight from the repository source. No package reinstall step is needed for day-to-day use.
 
 Definitions:
 - `<fork-root>` = the local clone of your custom OMP fork
@@ -15,12 +15,13 @@ PI_CODING_AGENT_DIR=<fork-root>/agent \
   bun <fork-root>/packages/coding-agent/src/cli.ts
 ```
 
-Because the launcher does not pass `--cwd`, `omp` inherits the caller's current working directory for session runtime state. Changes to fork source still take effect on the next `omp` restart (next launch).
+Because the launcher does not pass `--cwd`, `omp` inherits the caller's current working directory for session runtime state. Changes to fork source take effect on the next `omp` restart.
 
 ## What Updates Mean Now
 
-- Changes under `<fork-root>/packages/` take effect on the next `omp` restart (no reinstall needed)
+- Changes under `<fork-root>/packages/` take effect on the next `omp` restart
 - Changes under `<fork-root>/agent/` take effect on the next `omp` restart
+- If dependencies changed, run `bun install` in `<fork-root>` before restarting `omp`
 - The refresh button in the UI runs `bun install` to update dependencies, then restarts `omp`
 
 ## Upstream Sync
@@ -34,10 +35,6 @@ bun install
 ```
 
 Then restart `omp` normally. The launcher runs the updated source immediately.
-
-## Legacy Global Install
-
-`bun run reinstall:fork` still exists for backward compatibility but is no longer the recommended workflow. It performs a full global package reinstall from packed tarballs. Use only if you specifically need the legacy global install behavior.
 
 ## Expected Machine State
 
