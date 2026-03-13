@@ -9,6 +9,7 @@ Subagents do not inherit your chat history. Put all required constraints, file p
   - `id`: CamelCase, <= 48 chars
   - `description`: short UI-only summary
   - `assignment`: complete, self-contained instructions for that task
+- `timeout`: optional, seconds. When set, waits up to this duration then returns current status. Tasks keep running in the background and can be polled with `await`. Use for long-running tasks where you need periodic control to assess progress or handle errors.
 </parameters>
 
 <critical>

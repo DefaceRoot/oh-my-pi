@@ -1,0 +1,237 @@
+[
+  {
+    "path": "core-concepts",
+    "title": "Core Concepts",
+    "parent": null
+  },
+  {
+    "path": "core-concepts/agent-sessions",
+    "title": "Agent Sessions: The Central Abstraction",
+    "parent": "Core Concepts"
+  },
+  {
+    "path": "core-concepts/context-management",
+    "title": "Context Management: Token Tracking and Compaction",
+    "parent": "Core Concepts"
+  },
+  {
+    "path": "core-concepts/system-prompts",
+    "title": "System Prompts: Instruction Construction",
+    "parent": "Core Concepts"
+  },
+  {
+    "path": "core-concepts/task-delegation",
+    "title": "Task Delegation: Hierarchical Work Decomposition",
+    "parent": "Core Concepts"
+  },
+  {
+    "path": "readme",
+    "title": "README",
+    "parent": null
+  },
+  {
+    "path": "readme/first-15-minutes",
+    "title": "First 15 Minutes (Recommended)",
+    "parent": "README"
+  },
+  {
+    "path": "readme/usage",
+    "title": "Usage",
+    "parent": "README"
+  },
+  {
+    "path": "readme/usage/slash-commands",
+    "title": "Slash Commands",
+    "parent": "Usage"
+  },
+  {
+    "path": "readme/usage/editor-features",
+    "title": "Editor Features",
+    "parent": "Usage"
+  },
+  {
+    "path": "readme/usage/keyboard-shortcuts",
+    "title": "Keyboard Shortcuts",
+    "parent": "Usage"
+  },
+  {
+    "path": "readme/usage/bash-mode",
+    "title": "Bash Mode",
+    "parent": "Usage"
+  },
+  {
+    "path": "readme/usage/image-support",
+    "title": "Image Support",
+    "parent": "Usage"
+  },
+  {
+    "path": "readme/sessions",
+    "title": "Sessions",
+    "parent": "README"
+  },
+  {
+    "path": "readme/sessions/session-management",
+    "title": "Session Management",
+    "parent": "Sessions"
+  },
+  {
+    "path": "readme/sessions/context-compaction",
+    "title": "Context Compaction",
+    "parent": "Sessions"
+  },
+  {
+    "path": "readme/sessions/branching",
+    "title": "Branching",
+    "parent": "Sessions"
+  },
+  {
+    "path": "readme/sessions/autonomous-memory",
+    "title": "Autonomous Memory",
+    "parent": "Sessions"
+  },
+  {
+    "path": "readme/configuration",
+    "title": "Configuration",
+    "parent": "README"
+  },
+  {
+    "path": "readme/configuration/project-context-files",
+    "title": "Project Context Files",
+    "parent": "Configuration"
+  },
+  {
+    "path": "readme/configuration/custom-system-prompt",
+    "title": "Custom System Prompt",
+    "parent": "Configuration"
+  },
+  {
+    "path": "readme/configuration/custom-models-and-providers",
+    "title": "Custom Models and Providers",
+    "parent": "Configuration"
+  },
+  {
+    "path": "readme/configuration/settings-file",
+    "title": "Settings File",
+    "parent": "Configuration"
+  },
+  {
+    "path": "readme/extensions",
+    "title": "Extensions",
+    "parent": "README"
+  },
+  {
+    "path": "readme/extensions/themes",
+    "title": "Themes",
+    "parent": "Extensions"
+  },
+  {
+    "path": "readme/extensions/custom-slash-commands",
+    "title": "Custom Slash Commands",
+    "parent": "Extensions"
+  },
+  {
+    "path": "readme/extensions/skills",
+    "title": "Skills",
+    "parent": "Extensions"
+  },
+  {
+    "path": "readme/extensions/hooks",
+    "title": "Hooks",
+    "parent": "Extensions"
+  },
+  {
+    "path": "readme/extensions/custom-tools",
+    "title": "Custom Tools",
+    "parent": "Extensions"
+  },
+  {
+    "path": "readme/cli-reference",
+    "title": "CLI Reference",
+    "parent": "README"
+  },
+  {
+    "path": "readme/tools",
+    "title": "Tools",
+    "parent": "README"
+  },
+  {
+    "path": "readme/programmatic-usage",
+    "title": "Programmatic Usage",
+    "parent": "README"
+  },
+  {
+    "path": "readme/programmatic-usage/sdk",
+    "title": "SDK",
+    "parent": "Programmatic Usage"
+  },
+  {
+    "path": "readme/programmatic-usage/rpc-mode",
+    "title": "RPC Mode",
+    "parent": "Programmatic Usage"
+  },
+  {
+    "path": "readme/programmatic-usage/html-export",
+    "title": "HTML Export",
+    "parent": "Programmatic Usage"
+  },
+  {
+    "path": "readme/philosophy",
+    "title": "Philosophy",
+    "parent": "README"
+  },
+  {
+    "path": "readme/development",
+    "title": "Development",
+    "parent": "README"
+  },
+  {
+    "path": "readme/monorepo-packages",
+    "title": "Monorepo Packages",
+    "parent": "README"
+  },
+  {
+    "path": "readme/license",
+    "title": "License",
+    "parent": "README"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs",
+    "title": "Snapshot and Refs",
+    "parent": null
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/how-refs-work",
+    "title": "How Refs Work",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/the-snapshot-command",
+    "title": "The Snapshot Command",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/using-refs",
+    "title": "Using Refs",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/ref-lifecycle",
+    "title": "Ref Lifecycle",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/best-practices",
+    "title": "Best Practices",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/ref-notation-details",
+    "title": "Ref Notation Details",
+    "parent": "Snapshot and Refs"
+  },
+  {
+    "path": "agent-browser/snapshot-and-refs/troubleshooting",
+    "title": "Troubleshooting",
+    "parent": "Snapshot and Refs"
+  }
+]

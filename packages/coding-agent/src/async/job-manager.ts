@@ -16,6 +16,8 @@ export interface AsyncJob {
 	promise: Promise<void>;
 	resultText?: string;
 	errorText?: string;
+	/** Latest progress snapshot for task-type jobs (updated during execution). */
+	progressSnapshot?: Record<string, unknown>;
 }
 
 export interface AsyncJobManagerOptions {
@@ -164,6 +166,14 @@ export class AsyncJobManager {
 
 	getAllJobs(): AsyncJob[] {
 		return Array.from(this.#jobs.values());
+	}
+
+	/** Update the progress snapshot for a running job. */
+	updateProgress(id: string, snapshot: Record<string, unknown>): void {
+		const job = this.#jobs.get(id);
+		if (job && job.status === "running") {
+			job.progressSnapshot = snapshot;
+		}
 	}
 
 	getDeliveryState(): AsyncJobDeliveryState {

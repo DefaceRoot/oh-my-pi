@@ -10,6 +10,12 @@ const awaitSchema = Type.Object({
 			description: "Specific job IDs to wait for. If omitted, waits for any running job.",
 		}),
 	),
+	timeout: Type.Optional(
+		Type.Number({
+			description:
+				"Maximum seconds to wait. If the timeout expires before jobs complete, returns current status without aborting the jobs. Jobs keep running in the background.",
+		}),
+	),
 });
 
 type AwaitParams = Static<typeof awaitSchema>;
@@ -82,8 +88,17 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			return this.#buildResult(manager, jobsToWatch);
 		}
 
-		// Block until at least one running job finishes or the call is aborted
+		// Block until at least one running job finishes, timeout expires, or the call is aborted
 		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
+
+		// Add timeout promise if specified (non-destructive: jobs keep running)
+		let timeoutId: NodeJS.Timeout | undefined;
+		const timeoutMs = params.timeout != null && params.timeout > 0 ? params.timeout * 1000 : undefined;
+		if (timeoutMs) {
+			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
+			timeoutId = setTimeout(timeoutResolve, timeoutMs);
+			racePromises.push(timeoutPromise);
+		}
 
 		if (signal) {
 			const { promise: abortPromise, resolve: abortResolve } = Promise.withResolvers<void>();
@@ -94,9 +109,14 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 				await Promise.race(racePromises);
 			} finally {
 				signal.removeEventListener("abort", onAbort);
+				if (timeoutId) clearTimeout(timeoutId);
 			}
 		} else {
-			await Promise.race(racePromises);
+			try {
+				await Promise.race(racePromises);
+			} finally {
+				if (timeoutId) clearTimeout(timeoutId);
+			}
 		}
 
 		if (signal?.aborted) {
@@ -116,6 +136,7 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			startTime: number;
 			resultText?: string;
 			errorText?: string;
+			progressSnapshot?: Record<string, unknown>;
 		}[],
 	): AgentToolResult<AwaitToolDetails> {
 		const now = Date.now();
@@ -138,7 +159,7 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 		if (completed.length > 0) {
 			lines.push(`## Completed (${completed.length})\n`);
 			for (const j of completed) {
-				lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
+				lines.push(`### ${j.id} [${j.type}] \u2014 ${j.status}`);
 				lines.push(`Label: ${j.label}`);
 				if (j.resultText) {
 					lines.push("```", j.resultText, "```");
@@ -153,7 +174,36 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 		if (running.length > 0) {
 			lines.push(`## Still Running (${running.length})\n`);
 			for (const j of running) {
-				lines.push(`- \`${j.id}\` [${j.type}] — ${j.label}`);
+				const job = jobs.find(raw => raw.id === j.id);
+				lines.push(`### \`${j.id}\` [${j.type}] \u2014 ${j.label}`);
+				lines.push(`Duration: ${Math.round(j.durationMs / 1000)}s`);
+
+				// Include progress snapshot for running task jobs (nested subagent visibility)
+				const snapshot = job?.progressSnapshot as { progress?: Array<Record<string, unknown>> } | undefined;
+				if (snapshot?.progress && Array.isArray(snapshot.progress)) {
+					for (const p of snapshot.progress) {
+						const agent = p.agent ?? "unknown";
+						const status = p.status ?? "unknown";
+						const currentTool = p.currentTool ? ` (running: ${p.currentTool})` : "";
+						const lastIntent = p.lastIntent ? ` \u2014 ${p.lastIntent}` : "";
+						const tools = typeof p.toolCount === "number" ? ` [${p.toolCount} tools]` : "";
+						lines.push(`  - ${agent}: ${status}${currentTool}${tools}${lastIntent}`);
+
+						// Show nested subagent data if available
+						const extracted = p.extractedToolData as Record<string, unknown[]> | undefined;
+						if (extracted?.["task"]) {
+							for (const nestedTask of extracted["task"]) {
+								const nt = nestedTask as { results?: Array<{ agent?: string; id?: string; exitCode?: number }> };
+								if (nt.results) {
+									for (const nr of nt.results) {
+										lines.push(`    - nested ${nr.agent ?? "agent"} (${nr.id ?? "?"}): exit=${nr.exitCode ?? "?"}`);
+									}
+								}
+							}
+						}
+					}
+				}
+				lines.push("");
 			}
 		}
 

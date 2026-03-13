@@ -53,19 +53,25 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 		context: Type.Optional(
 			Type.String({
 				description:
-					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once — instead of duplicating across assignments.",
+					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once \u2014 instead of duplicating across assignments.",
 			}),
 		),
 		schema: Type.Optional(
 			Type.Record(Type.String(), Type.Unknown(), {
 				description:
-					"JTD schema defining expected response structure. Use typed properties. Output format belongs here — never in context or assignment.",
+					"JTD schema defining expected response structure. Use typed properties. Output format belongs here \u2014 never in context or assignment.",
 			}),
 		),
 		tasks: Type.Array(taskItemSchema, {
 			description:
 				"Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment.",
 		}),
+		timeout: Type.Optional(
+			Type.Number({
+				description:
+					"Maximum seconds to wait for tasks to complete. If the timeout expires, returns current status without aborting the tasks. Tasks keep running in the background and can be polled with the await tool. When set, tasks always execute asynchronously.",
+			}),
+		),
 	};
 
 	if (options.isolationEnabled) {

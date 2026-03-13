@@ -2,20 +2,20 @@ lastChangelogVersion: 13.9.2
 modelRoles: 
   default: anthropic/claude-opus-4-6:high
   ask: kimi-code/kimi-k2-turbo-preview:high
-  orchestrator: openai-codex/gpt-5.4:medium
+  orchestrator: kimi-code/kimi-k2.5:high
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
-  implement: anthropic/claude-opus-4-6:high
+  implement: zai/glm-5:high
   explore: anthropic/claude-sonnet-4-6:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
-  research: openai-codex/gpt-5.2:high
-  verifier: openai-codex/gpt-5.4:xhigh
+  research: kimi-code/kimi-k2.5:medium
+  verifier: zai/glm-5:high
   worktree-setup: kimi-code/kimi-k2.5:medium
-  code-reviewer: openai-codex/gpt-5.4:xhigh
+  code-reviewer: zai/glm-5:high
   plan-verifier: openai-codex/gpt-5.4:high
-  coderabbit: openai-codex/gpt-5.3-codex:low
+  coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: anthropic/claude-opus-4-6:high
   grafana: openai-codex/gpt-5.4:xhigh
@@ -74,7 +74,7 @@ agents_view:
 ask: 
   timeout: 0
 async: 
-  enabled: false
+  enabled: true
 lsp: 
   diagnosticsOnEdit: true
 browser: 

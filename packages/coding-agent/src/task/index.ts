@@ -253,7 +253,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
-		if (!asyncEnabled || selectedAgent?.blocking === true) {
+		const hasTimeout = "timeout" in params && typeof params.timeout === "number" && params.timeout > 0;
+
+		// Force async when timeout is set (so the orchestrator gets control back on timeout).
+		// Otherwise, use sync execution when async is disabled or agent is blocking.
+		if (!hasTimeout && (!asyncEnabled || selectedAgent?.blocking === true)) {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
@@ -266,6 +270,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
+			if (hasTimeout) {
+				// timeout requested but no async job manager \u2014 fall back to sync
+				return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			}
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
@@ -442,6 +450,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								(details as TaskToolDetails | undefined) ??
 								buildAsyncDetails("running", startedJobs[0]?.jobId ?? label);
 							onUpdate?.({ content: [{ type: "text", text }], details: progressDetails });
+							// Store progress snapshot on the job for await-tool visibility
+							if (progressDetails?.progress) {
+								manager.updateProgress(label, { progress: progressDetails.progress } as Record<string, unknown>);
+							}
 						},
 					},
 				);
@@ -473,6 +485,82 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			failedSchedules.length > 0
 				? ` Failed to schedule ${failedSchedules.length} task${failedSchedules.length === 1 ? "" : "s"}.`
 				: "";
+
+		// When timeout is set, wait up to that duration for jobs to complete.
+		// If they finish in time, return results. If not, return "still running" status.
+		// Jobs are NOT aborted on timeout \u2014 they keep running and can be polled with await.
+		if (hasTimeout) {
+			const timeoutMs = params.timeout! * 1000;
+			const jobPromises = startedJobs.map(({ jobId }) => {
+				const job = manager.getJob(jobId);
+				return job?.promise ?? Promise.resolve();
+			});
+			const allDone = Promise.all(jobPromises).then(() => true as const);
+			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<false>();
+			const timeoutId = setTimeout(() => timeoutResolve(false), timeoutMs);
+
+			let completed: boolean;
+			try {
+				completed = await Promise.race([allDone, timeoutPromise]);
+			} finally {
+				clearTimeout(timeoutId);
+			}
+
+			if (completed) {
+				// All jobs finished within timeout \u2014 collect results
+				const resultLines: string[] = [];
+				for (const { jobId } of startedJobs) {
+					const job = manager.getJob(jobId);
+					if (job) {
+						resultLines.push(`### ${job.id} [${job.type}] \u2014 ${job.status}`);
+						if (job.resultText) resultLines.push("```", job.resultText, "```");
+						if (job.errorText) resultLines.push(`Error: ${job.errorText}`);
+						resultLines.push("");
+						manager.acknowledgeDeliveries([jobId]);
+					}
+				}
+				return {
+					content: [{ type: "text", text: resultLines.join("\n") || "All tasks completed." }],
+					details: {
+						projectAgentsDir: null,
+						results: [],
+						totalDurationMs: Date.now() - Date.now(),
+						progress: getProgressSnapshot(),
+						async: { state: "completed", jobId: startedJobs[0].jobId, type: "task" },
+					},
+				};
+			}
+
+			// Timeout expired \u2014 jobs still running. Return status with job IDs for polling.
+			const statusLines: string[] = [`Timeout (${params.timeout}s) expired. Tasks still running in background.\n`];
+			for (const { jobId } of startedJobs) {
+				const job = manager.getJob(jobId);
+				if (job) {
+					const elapsed = Math.round((Date.now() - job.startTime) / 1000);
+					statusLines.push(`- \`${job.id}\`: ${job.status} (${elapsed}s elapsed)`);
+					const snapshot = job.progressSnapshot as { progress?: Array<Record<string, unknown>> } | undefined;
+					if (snapshot?.progress) {
+						for (const p of snapshot.progress) {
+							const agent = p.agent ?? "unknown";
+							const status = p.status ?? "unknown";
+							const currentTool = p.currentTool ? ` (running: ${p.currentTool})` : "";
+							statusLines.push(`  - ${agent}: ${status}${currentTool}`);
+						}
+					}
+				}
+			}
+			statusLines.push("", "Use `await` tool with these job IDs to check again, or set another `timeout` on the next task call.");
+			return {
+				content: [{ type: "text", text: statusLines.join("\n") }],
+				details: {
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					progress: getProgressSnapshot(),
+					async: { state: "running", jobId: startedJobs[0].jobId, type: "task" },
+				},
+			};
+		}
 
 		return {
 			content: [
