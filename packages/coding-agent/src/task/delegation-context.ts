@@ -71,8 +71,7 @@ function parseDelegationContext(text: string | undefined): Partial<DelegationMet
 	if (!block) return {};
 
 	const metadata: Partial<DelegationMetadata> = {};
-	for (const rawLine of block.split(/?
-/)) {
+	for (const rawLine of block.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) continue;
 		const separatorIndex = line.indexOf(":");
@@ -274,6 +273,5 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 		lines.push(`plan_workspace_dir: ${JSON.stringify(metadata.planWorkspaceDir)}`);
 	}
 	lines.push("</delegation_context>");
-	return lines.join("
-");
+	return lines.join("\n");
 }
