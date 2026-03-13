@@ -1,0 +1,12 @@
+{
+  "name": "@oh-my-pi/doc-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {"omp-docs": "./dist/cli.js"},
+  "scripts": {
+    "build": "tsc",
+    "verify-docs": "node dist/cli.js verify"
+  },
+  "dependencies": {"@oh-my-pi/pi-utils": "workspace:*"},
+  "devDependencies": {"@types/bun": "latest"}
+}

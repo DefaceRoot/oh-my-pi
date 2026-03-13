@@ -1,0 +1,3 @@
+# metric_direction: higher_is_better
+iteration	commit	metric	delta	status	description
+1	-	0.0	0.0	crash	Subagent infrastructure - tool access issue
