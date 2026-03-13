@@ -80,16 +80,30 @@ def discover_toc(repo: str) -> list[dict]:
     raw = mcp_ask(repo, question)
 
     # Extract JSON array from response (it may have markdown fencing)
-    match = re.search(r'\[.*\]', raw, re.DOTALL)
-    if not match:
+    # Use bracket counting to find the correct array boundary
+    start = raw.find('[')
+    if start == -1:
         print(f"Could not parse TOC from response. Raw response:\n{raw[:1000]}", file=sys.stderr)
         sys.exit(1)
 
+    depth = 0
+    end = start
+    for i in range(start, len(raw)):
+        if raw[i] == '[':
+            depth += 1
+        elif raw[i] == ']':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    json_str = raw[start:end]
+
     try:
-        pages = json.loads(match.group())
+        pages = json.loads(json_str)
     except json.JSONDecodeError:
         # Try to fix common issues (trailing commas)
-        cleaned = re.sub(r',\s*]', ']', match.group())
+        cleaned = re.sub(r',\s*]', ']', json_str)
         cleaned = re.sub(r',\s*}', '}', cleaned)
         pages = json.loads(cleaned)
 
