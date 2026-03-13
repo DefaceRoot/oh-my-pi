@@ -1,2 +1,3 @@
 # metric_direction: higher_is_better
 iteration	commit	metric	delta	status	description
+0	cb4ccb725	80.33	0.0	baseline	initial state — test coverage 80.33% lines
