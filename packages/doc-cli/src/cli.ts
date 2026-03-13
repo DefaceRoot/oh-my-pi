@@ -101,7 +101,7 @@ async function handleVerify(options: Record<string, string | boolean>): Promise<
 	
 	const rootDir = process.cwd();
 	const _configPath = typeof options.config === "string" ? options.config : undefined;
-	const outputDir = typeof options.output === "string" ? options.output : "./docs";
+	const _outputDir = typeof options.output === "string" ? options.output : "./docs"
 	
 	if (options.verbose) console.log(`Scanning packages from ${rootDir}...`);
 	
