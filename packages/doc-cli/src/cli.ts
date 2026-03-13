@@ -98,10 +98,9 @@ async function handleWatch(options: Record<string, string | boolean>): Promise<v
 
 async function handleVerify(options: Record<string, string | boolean>): Promise<void> {
 	const { scanPackages } = await import("./scanner.js");
-	const { generateDocs } = await import("./generator.js");
 	
 	const rootDir = process.cwd();
-	const configPath = typeof options.config === "string" ? options.config : undefined;
+	const _configPath = typeof options.config === "string" ? options.config : undefined;
 	const outputDir = typeof options.output === "string" ? options.output : "./docs";
 	
 	if (options.verbose) console.log(`Scanning packages from ${rootDir}...`);
