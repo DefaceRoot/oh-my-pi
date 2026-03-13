@@ -1,12 +1,24 @@
 {
+  "type": "module",
   "name": "@oh-my-pi/doc-cli",
   "version": "0.1.0",
-  "type": "module",
-  "bin": {"omp-docs": "./dist/cli.js"},
-  "scripts": {
-    "build": "tsc",
-    "verify-docs": "node dist/cli.js verify"
+  "description": "Documentation automation CLI",
+  "license": "MIT",
+  "bin": {
+    "omp-docs": "./src/cli.ts"
   },
-  "dependencies": {"@oh-my-pi/pi-utils": "workspace:*"},
-  "devDependencies": {"@types/bun": "latest"}
+  "scripts": {
+    "check": "tsgo -p tsconfig.json",
+    "test": "bun test",
+    "verify-docs": "bun src/cli.ts verify"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3"
+  },
+  "engines": {
+    "bun": ">=1.3.7"
+  }
 }
