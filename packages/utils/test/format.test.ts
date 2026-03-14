@@ -56,6 +56,11 @@ expect(formatDuration(3599999)).toBe("59m59s");
 expect(formatDuration(86399999)).toBe("23h59m");
 		expect(formatDuration(86400000)).toBe("1d");
 	});
+	it("handles negative and non-finite values", () => {
+		expect(formatDuration(-1)).toBe("-1ms");
+		expect(formatDuration(-60000)).toBe("-60000ms");
+expect(formatDuration(NaN)).toBe("NaNd");
+	});
 });
 
 describe("formatNumber", () => {
@@ -105,6 +110,11 @@ expect(formatNumber(-1000000)).toBe("-1000000");
 		expect(formatNumber(999999)).toBe("1000K");
 		expect(formatNumber(1000000)).toBe("1.0M");
 	});
+	it("handles non-finite values", () => {
+expect(formatNumber(NaN)).toBe("NaNB");
+expect(formatNumber(Infinity)).toBe("InfinityB");
+		expect(formatNumber(-Infinity)).toBe("-Infinity");
+	});
 });
 
 describe("formatBytes", () => {
@@ -144,6 +154,10 @@ describe("formatBytes", () => {
 		expect(formatBytes(-1)).toBe("-1B");
 expect(formatBytes(-1024)).toBe("-1024B");
 	});
+	it("handles non-finite values", () => {
+expect(formatBytes(NaN)).toBe("NaNGB");
+expect(formatBytes(Infinity)).toBe("InfinityGB");
+	});
 });
 
 describe("truncate", () => {
@@ -173,6 +187,10 @@ describe("truncate", () => {
 	it("handles ellipsis longer than maxLen", () => {
 expect(truncate("hello", 2, "...")).toBe("...");
 expect(truncate("hello", 1, "...")).toBe("...");
+	});
+	it("handles negative maxLen", () => {
+		expect(truncate("hello", -1)).toBe("…");
+		expect(truncate("hello", -10)).toBe("…");
 	});
 });
 
@@ -247,6 +265,12 @@ describe("formatAge", () => {
 		expect(formatAge(86399)).toBe("23h ago");
 		expect(formatAge(86400)).toBe("1d ago");
 	});
+	it("handles negative and non-finite values", () => {
+		expect(formatAge(-1)).toBe("just now");
+		expect(formatAge(-60)).toBe("just now");
+		expect(formatAge(NaN)).toBe("");
+		expect(formatAge(Infinity)).toBe("Infinitymo ago");
+	});
 });
 
 describe("pluralize", () => {
@@ -287,6 +311,11 @@ describe("pluralize", () => {
 		expect(pluralize("BOX", 2)).toBe("BOXes");
 expect(pluralize("CITY", 2)).toBe("CITies");
 	});
+	it("handles edge cases", () => {
+		expect(pluralize("file", 0)).toBe("files");
+		expect(pluralize("file", -1)).toBe("files");
+		expect(pluralize("", 2)).toBe("s");
+	});
 });
 
 describe("formatPercent", () => {
@@ -311,5 +340,10 @@ describe("formatPercent", () => {
 		expect(formatPercent(0.001)).toBe("0.1%");
 		expect(formatPercent(0.005)).toBe("0.5%");
 		expect(formatPercent(0.999)).toBe("99.9%");
+	});
+	it("handles non-finite values", () => {
+		expect(formatPercent(NaN)).toBe("NaN%");
+		expect(formatPercent(Infinity)).toBe("Infinity%");
+		expect(formatPercent(-Infinity)).toBe("-Infinity%");
 	});
 });
