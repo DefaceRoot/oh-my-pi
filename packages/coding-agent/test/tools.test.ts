@@ -877,8 +877,7 @@ describe("edit tool CRLF handling", () => {
 		}
 	});
 
-	// TODO: CRLF preservation broken by LSP formatting - fix later
-	it.skip("should preserve UTF-8 BOM after edit", async () => {
+	it("should preserve UTF-8 BOM after edit", async () => {
 		const testFile = path.join(testDir, "bom-test.txt");
 		fs.writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\n");
 
@@ -888,7 +887,8 @@ describe("edit tool CRLF handling", () => {
 			new_text: "REPLACED\n",
 		});
 
-		const content = await Bun.file(testFile).text();
+		// Note: Bun.file().text() strips UTF-8 BOM, so we use fs.readFileSync which preserves it
+		const content = fs.readFileSync(testFile, "utf-8");
 		expect(content).toBe("\uFEFFfirst\r\nREPLACED\r\nthird\r\n");
 	});
 });
