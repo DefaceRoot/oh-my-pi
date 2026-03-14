@@ -7,3 +7,4 @@ export * from "./scanner.js";
 export * from "./search.js";
 export * from "./types.js";
 export * from "./variables.js";
+export * from './integrations/gitbook.js';
