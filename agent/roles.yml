@@ -135,7 +135,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - chrome-devtools
     skills: all
   code-reviewer: 
     tools: 

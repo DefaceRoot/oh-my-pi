@@ -2515,6 +2515,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 		}
 
+		if (ref.sessionPath) {
+			// Session path is known but file doesn't exist yet - subagent is initializing
+			return {
+				source: ref.sessionPath,
+				content: "",
+				contextPreview: "(session initializing...)",
+			};
+		}
+
 		return undefined;
 	}
 
