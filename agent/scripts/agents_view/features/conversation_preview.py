@@ -131,6 +131,15 @@ def _normalize_todo_status(value: Any) -> str:
     if normalized in {"failed", "error", "cancelled", "canceled"}:
         return "abandoned"
     return normalized or "pending"
+
+
+def _normalize_agent_identity(value: Any) -> str:
+    agent = str(value or "").strip()
+    if not agent:
+        return ""
+    if agent.lower() == "task":
+        return "implement"
+    return agent
 _MAX_TODO_RENDER_TASKS = 20
 _SESSION_TELEMETRY_SIDEBAR_MODES = ("telemetry", "tasks")
 _RECENT_CHILD_SECONDS = 600
@@ -283,7 +292,7 @@ def _summarize_tool_call(name: str, args: Any) -> str:
     if name.lower() in ("task", "proxy_task"):
         tasks = args.get("tasks") or []
         task_count = len(tasks) if isinstance(tasks, list) else 0
-        agent = args.get("agent") or "task"
+        agent = _normalize_agent_identity(args.get("agent") or args.get("subagent_type")) or "subagent"
         return f"{agent}: {task_count} task(s)"
 
     if "query" in args:
@@ -1177,7 +1186,9 @@ def render_conversation_preview(
                 task_count = 0
                 task_descriptions: list[str] = []
                 if isinstance(raw_args, dict):
-                    agent_type = str(raw_args.get("agent") or raw_args.get("subagent_type") or "")
+                    agent_type = _normalize_agent_identity(
+                        raw_args.get("agent") or raw_args.get("subagent_type")
+                    )
                     tasks = raw_args.get("tasks") or []
                     if isinstance(tasks, list):
                         task_count = len(tasks)
@@ -1188,7 +1199,7 @@ def render_conversation_preview(
                                 task_descriptions.append(
                                     f"  [{task_id}] {task_desc}" if task_id else f"  {task_desc}"
                                 )
-                header = f"🤖 SUBAGENT SPAWN: {agent_type or 'task'}  [{timestamp}]"
+                header = f"🤖 SUBAGENT SPAWN: {agent_type or 'subagent'}  [{timestamp}]"
                 if task_count > 0:
                     body_lines = [f"{task_count} task(s) spawned:"] + task_descriptions
                     if task_count > 5:

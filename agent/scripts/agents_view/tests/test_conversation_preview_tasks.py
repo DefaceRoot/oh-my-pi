@@ -12,6 +12,7 @@ from agents_view.features.conversation_preview import (
     _extract_latest_todo_state,
     _parse_todo_text,
     _render_for_selected_session,
+    _summarize_tool_call,
     render_conversation_preview,
 )
 from agents_view.model import AgentSession
@@ -150,3 +151,47 @@ def test_parse_todo_text_maps_status_markers() -> None:
 
     assert [item["status"] for item in parsed] == ["done", "in_progress", "pending", "abandoned"]
     assert [item["id"] for item in parsed] == ["task-1", "task-2", "task-3", "task-4"]
+
+
+def test_summarize_task_tool_call_normalizes_legacy_agent_identity() -> None:
+    summary = _summarize_tool_call(
+        "task",
+        {
+            "agent": "task",
+            "tasks": [{"id": "child-1", "description": "Inspect auth flow"}],
+        },
+    )
+
+    assert summary == "implement: 1 task(s)"
+
+
+def test_summarize_task_tool_call_keeps_missing_agent_neutral() -> None:
+    summary = _summarize_tool_call(
+        "task",
+        {
+            "tasks": [{"id": "child-1", "description": "Inspect auth flow"}],
+        },
+    )
+
+    assert summary == "subagent: 1 task(s)"
+
+
+def test_render_conversation_preview_normalizes_legacy_subagent_spawn_identity() -> None:
+    rendered = render_conversation_preview(
+        [
+            {
+                "kind": "tool_call",
+                "timestamp": "10:00:00",
+                "tool": "task",
+                "args": {
+                    "agent": "task",
+                    "tasks": [{"id": "child-1", "description": "Inspect auth flow"}],
+                },
+            }
+        ],
+        width=80,
+        theme="github-dark",
+    ).plain
+
+    assert "SUBAGENT SPAWN: implement" in rendered
+    assert "SUBAGENT SPAWN: task" not in rendered

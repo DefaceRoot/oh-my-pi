@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 from rich.text import Text
 
+from agents_view.features.conversation_preview import _normalize_agent_identity
+
 _STATUS_MAP = {
     "✓": "done",
     "→": "in_progress",
@@ -29,8 +31,8 @@ _RUNNING_CHILD_STATUSES = {"run", "running", "busy", "active", "asking", "review
 _ROLE_LABELS = {
     "default": "DEF",
     "orchestrator": "ORCH",
+    "implement": "IMPL",
     "explore": "EXPL",
-    "task": "TASK",
     "lint": "LINT",
     "designer": "DSGN",
     "verifier": "VRFY",
@@ -160,7 +162,7 @@ def _render_task_list(
             if child_status and child_status not in _RUNNING_CHILD_STATUSES and child_state != "active":
                 continue
 
-            raw_role = str(getattr(child, "role", "") or "").lower()
+            raw_role = _normalize_agent_identity(getattr(child, "role", "")).lower()
             child_role = _ROLE_LABELS.get(raw_role, raw_role.upper()[:3] or "SUB")
             child_title = str(
                 getattr(child, "title", "")

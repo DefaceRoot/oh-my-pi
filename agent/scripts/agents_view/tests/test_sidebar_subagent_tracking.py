@@ -134,6 +134,14 @@ class TestSubagentDetailRendering:
             f"Role label should be 'DEF' not truncated 'DEFA': {rendered!r}"
         )
 
+    def test_legacy_task_child_role_is_rendered_as_implement(self) -> None:
+        parent = _session(title="Orchestrator")
+        legacy_child = _child("c1", title="Worker", role="task")
+        rendered = _render_task_list(parent, TODO_MIXED, [legacy_child], width=80).plain
+
+        assert "└─ IMPL " in rendered
+        assert "└─ TASK " not in rendered
+
 
 # ===================================================================
 # §2  Multiple children with mixed states

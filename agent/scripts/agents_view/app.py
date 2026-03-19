@@ -40,6 +40,7 @@ from agents_view.adapters.claude_adapter import ClaudeAdapter
 from agents_view.adapters.codex_adapter import CodexAdapter
 from agents_view.adapters.omp_adapter import OmpAdapter
 from agents_view.adapters.opencode_adapter import OpenCodeAdapter
+from agents_view.features.conversation_preview import _normalize_agent_identity
 from agents_view.model import AgentSession
 from agents_view.tmux_client import TmuxClient
 from agents_view.system_resources import _get_sys_resources
@@ -477,7 +478,9 @@ def _extract_task_call_summary(args: dict) -> tuple[str, str, str]:
     if not isinstance(args, dict):
         return "", "", ""
 
-    subagent_type = str(args.get("subagent_type", "") or "")
+    subagent_type = _normalize_agent_identity(
+        args.get("agent") or args.get("subagent_type")
+    )
     description_value = args.get("description", "")
     if description_value:
         description = str(description_value)
@@ -1300,7 +1303,7 @@ def _render_active_preview(
             task_rows[-6:], start=1
         ):
             result.append(f"  {idx}. ", style="bold #6cb6ff")
-            result.append(subagent_type or "task", style="bold #6cb6ff")
+            result.append(subagent_type or "subagent", style="bold #6cb6ff")
             if member:
                 result.append(f" [{member}]", style="#636e7b")
             if description:

@@ -438,6 +438,36 @@ def test_render_active_preview_includes_task_call_summary(tmp_path) -> None:
     assert ("explore" in rendered) or ("Task" in rendered)
 
 
+
+def test_render_active_preview_normalizes_legacy_task_subagent_identity(tmp_path) -> None:
+    session_file = tmp_path / "legacy-task-call.jsonl"
+    entries = [
+        {"type": "message", "cwd": "/tmp/project"},
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "name": "Task",
+                        "arguments": {
+                            "subagent_type": "task",
+                            "description": "Find auth module",
+                            "name": "AuthWorker",
+                        },
+                    }
+                ],
+            },
+        },
+    ]
+    session_file.write_text("\n".join(json.dumps(entry) for entry in entries), encoding="utf-8")
+
+    rendered = str(_render_active_preview(str(session_file)))
+
+    assert "implement" in rendered
+    assert " task" not in rendered.lower()
+
 def test_extract_status_timeline_renders_time_based_bar(tmp_path) -> None:
     session_file = tmp_path / "timeline.jsonl"
     entries = [
