@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import type { ToolSession } from "..";
+import { resolveLocalUrlToPath } from "../internal-urls/local-protocol";
+import { resolveToCwd } from "../tools/path-utils";
 
 export type InputProfileMode = "minimal" | "standard" | "detailed";
 
@@ -115,6 +117,7 @@ type InheritedDelegationContext = {
 	plan_reference?: string;
 	plan_file_path?: string;
 	plan_workspace_dir?: string;
+	commander_intent?: string;
 };
 
 const DELEGATION_CONTEXT_BLOCK_RE = /<delegation_context>\s*([\s\S]*?)<\/delegation_context>/gi;
@@ -183,6 +186,9 @@ function parseInheritedDelegationContext(text: string | undefined): InheritedDel
 				break;
 			case "plan_workspace_dir":
 				context.plan_workspace_dir = value;
+				break;
+			case "commander_intent":
+				context.commander_intent = value;
 				break;
 		}
 	}
@@ -300,6 +306,269 @@ function normalizeRecordArray(
 ): Array<Record<string, unknown>> | undefined {
 	if (!items || items.length === 0) return undefined;
 	return items.map(item => ({ ...item }));
+}
+
+interface PlanEnrichment {
+	planExcerpt?: string;
+	upstreamTasks?: Array<Record<string, unknown>>;
+	lessonsLearned?: string[];
+	intent?: string;
+}
+
+const MARKDOWN_HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*$/;
+const MARKDOWN_FENCE_RE = /^\s{0,3}(?:```|~~~)/;
+const MARKDOWN_LIST_ITEM_RE = /^(?:[-*+]\s+|\d+[.)]\s+)(.*)$/;
+
+function normalizeMarkdownHeadingTitle(title: string): string {
+	return title
+		.trim()
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.replace(/[:;]+$/u, "");
+}
+
+function parseMarkdownHeading(line: string): { level: number; title: string } | undefined {
+	const match = line.match(MARKDOWN_HEADING_RE);
+	if (!match) return undefined;
+	return { level: match[1].length, title: match[2].trim() };
+}
+
+function isMarkdownFenceLine(line: string): boolean {
+	return MARKDOWN_FENCE_RE.test(line);
+}
+
+function trimBlankLines(lines: string[]): string[] {
+	let start = 0;
+	let end = lines.length;
+	while (start < end && lines[start]?.trim().length === 0) start += 1;
+	while (end > start && lines[end - 1]?.trim().length === 0) end -= 1;
+	return lines.slice(start, end);
+}
+
+function collectMarkdownSectionBody(lines: string[], headingTitle: string): string[] | undefined {
+	const normalizedTitle = normalizeMarkdownHeadingTitle(headingTitle);
+	let inFence = false;
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		if (isMarkdownFenceLine(line)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+
+		const heading = parseMarkdownHeading(line);
+		if (!heading || normalizeMarkdownHeadingTitle(heading.title) !== normalizedTitle) continue;
+
+		const body: string[] = [];
+		let sectionFence = false;
+		for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+			const sectionLine = lines[cursor] ?? "";
+			if (isMarkdownFenceLine(sectionLine)) {
+				sectionFence = !sectionFence;
+				body.push(sectionLine);
+				continue;
+			}
+			if (!sectionFence) {
+				const nextHeading = parseMarkdownHeading(sectionLine);
+				if (nextHeading && nextHeading.level <= heading.level) break;
+			}
+			body.push(sectionLine);
+		}
+
+		const trimmed = trimBlankLines(body);
+		if (trimmed.length > 0) return trimmed;
+	}
+
+	return undefined;
+}
+
+function collectSectionText(content: string, headingTitle: string): string | undefined {
+	const body = collectMarkdownSectionBody(content.replace(/\r\n?/g, "\n").split("\n"), headingTitle);
+	if (!body) return undefined;
+	const text = body.join("\n").trim();
+	return text.length > 0 ? text : undefined;
+}
+
+function collectLeadText(content: string, headingTitle: string): string | undefined {
+	const body = collectMarkdownSectionBody(content.replace(/\r\n?/g, "\n").split("\n"), headingTitle);
+	if (!body) return undefined;
+
+	const lines: string[] = [];
+	let mode: "initial" | "paragraph" | "bullet" = "initial";
+	let inFence = false;
+
+	for (const rawLine of body) {
+		if (isMarkdownFenceLine(rawLine)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+
+		const trimmed = rawLine.trim();
+		if (!trimmed) {
+			if (mode !== "initial") break;
+			continue;
+		}
+
+		if (parseMarkdownHeading(rawLine)) break;
+
+		const bulletMatch = trimmed.match(MARKDOWN_LIST_ITEM_RE);
+		if (mode === "initial") {
+			mode = bulletMatch ? "bullet" : "paragraph";
+			const contentLine = (bulletMatch?.[1] ?? trimmed).trim();
+			if (contentLine) lines.push(contentLine);
+			continue;
+		}
+
+		if (mode === "bullet") {
+			if (bulletMatch) break;
+			lines.push(trimmed);
+			continue;
+		}
+
+		if (bulletMatch) break;
+		lines.push(trimmed);
+	}
+
+	const text = lines.join(" ").replace(/\s+/g, " ").trim();
+	return text.length > 0 ? text : undefined;
+}
+
+function collectListItems(content: string, headingTitle: string): string[][] | undefined {
+	const body = collectMarkdownSectionBody(content.replace(/\r\n?/g, "\n").split("\n"), headingTitle);
+	if (!body) return undefined;
+
+	const items: string[][] = [];
+	let current: string[] | undefined;
+	let inFence = false;
+
+	for (const rawLine of body) {
+		if (isMarkdownFenceLine(rawLine)) {
+			inFence = !inFence;
+			if (current) current.push(rawLine.trim());
+			continue;
+		}
+		if (inFence) {
+			if (current) current.push(rawLine.trim());
+			continue;
+		}
+
+		const trimmed = rawLine.trim();
+		if (!trimmed) {
+			if (current) current.push("");
+			continue;
+		}
+
+		if (parseMarkdownHeading(rawLine)) {
+			break;
+		}
+
+		const bulletMatch = trimmed.match(MARKDOWN_LIST_ITEM_RE);
+		if (bulletMatch) {
+			if (current) items.push(current);
+			current = [];
+			const contentLine = bulletMatch[1].trim();
+			if (contentLine) current.push(contentLine);
+			continue;
+		}
+
+		if (current) current.push(trimmed);
+	}
+
+	if (current) items.push(current);
+	return items.length > 0 ? items : undefined;
+}
+
+function parsePlanFieldValue(rawValue: string): string | undefined {
+	const trimmed = rawValue.trim();
+	if (!trimmed) return undefined;
+	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+		const unquoted = trimmed.slice(1, -1).trim();
+		return unquoted.length > 0 ? unquoted : undefined;
+	}
+	return trimmed;
+}
+
+function parsePlanKeyValueLines(lines: string[]): Record<string, string> {
+	const fields: Record<string, string> = {};
+	for (const rawLine of lines) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const separatorIndex = line.indexOf(":");
+		if (separatorIndex <= 0) continue;
+		const key = line.slice(0, separatorIndex).trim().toLowerCase();
+		const value = parsePlanFieldValue(line.slice(separatorIndex + 1).trim());
+		if (!value) continue;
+		fields[key] = value;
+	}
+	return fields;
+}
+
+function extractUpstreamTasks(content: string): Array<Record<string, unknown>> | undefined {
+	const items = collectListItems(content, "Dependencies");
+	if (!items) return undefined;
+
+	const upstreamTasks: Array<Record<string, unknown>> = [];
+	for (const itemLines of items) {
+		const fields = parsePlanKeyValueLines(itemLines);
+		const summary = normalizeText(fields.summary);
+		if (!summary) continue;
+
+		const upstreamTask: Record<string, unknown> = { summary };
+		const id = normalizeText(fields.id);
+		if (id) upstreamTask.id = id;
+		upstreamTasks.push(upstreamTask);
+	}
+
+	return upstreamTasks.length > 0 ? upstreamTasks : undefined;
+}
+
+function extractLessonsLearned(content: string): string[] | undefined {
+	const items = collectListItems(content, "Lessons Learned");
+	if (!items) return undefined;
+
+	const lessonsLearned = items
+		.map(itemLines => normalizeText(itemLines.join(" ").replace(/\s+/g, " ")))
+		.filter((value): value is string => value !== undefined)
+		.slice(0, 3);
+
+	return lessonsLearned.length > 0 ? lessonsLearned : undefined;
+}
+
+async function loadPlanEnrichment(planPath: string, session: ToolSession): Promise<PlanEnrichment | undefined> {
+	let resolvedPath: string;
+	try {
+		resolvedPath = planPath.startsWith("local://")
+			? resolveLocalUrlToPath(planPath, {
+					getArtifactsDir: () => session.getArtifactsDir?.() ?? null,
+					getSessionId: () => session.getSessionId?.() ?? null,
+				})
+			: path.normalize(resolveToCwd(planPath, session.cwd));
+	} catch {
+		return undefined;
+	}
+
+	let content: string;
+	try {
+		content = await Bun.file(resolvedPath).text();
+	} catch {
+		return undefined;
+	}
+
+	const normalizedContent = content.replace(/\r\n?/g, "\n");
+	const planExcerpt = collectSectionText(normalizedContent, "Plan Excerpt");
+	const intent = collectLeadText(normalizedContent, "Goals");
+	const upstreamTasks = extractUpstreamTasks(normalizedContent);
+	const lessonsLearned = extractLessonsLearned(normalizedContent);
+
+	if (!planExcerpt && !intent && !upstreamTasks && !lessonsLearned) return undefined;
+	return {
+		...(planExcerpt ? { planExcerpt } : {}),
+		...(intent ? { intent } : {}),
+		...(upstreamTasks ? { upstreamTasks } : {}),
+		...(lessonsLearned ? { lessonsLearned } : {}),
+	};
 }
 
 function normalizeDelegateName(delegate: string): string {
@@ -565,12 +834,32 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 	const inheritedContext = parseInheritedDelegationContext(input.session.getCompactContext?.());
 	const runtimeRole = normalizeText(input.session.getRuntimeRole?.())?.toLowerCase();
 	const normalizedProfile = resolveInputProfileForDelegate(input.delegate, input.options?.profile);
+	const planPath = inheritedContext.plan_file_path ?? inheritedContext.plan_reference;
 	const runtimeGit = await resolveRuntimeGitMetadata([
 		inheritedContext.worktree_path,
 		inheritedContext.repo_root,
 		input.session.cwd,
 	]);
-	const progress = normalizeProgress(input.options?.progress);
+	const planEnrichment =
+		normalizedProfile === "detailed" && planPath ? await loadPlanEnrichment(planPath, input.session) : undefined;
+	let progress = normalizeProgress(input.options?.progress);
+	if (planEnrichment) {
+		let mergedProgress = progress ? { ...progress } : undefined;
+		let progressChanged = false;
+		if (planEnrichment.upstreamTasks && mergedProgress?.upstream_tasks === undefined) {
+			mergedProgress ??= {};
+			mergedProgress.upstream_tasks = planEnrichment.upstreamTasks;
+			progressChanged = true;
+		}
+		if (planEnrichment.lessonsLearned && mergedProgress?.lessons_learned === undefined) {
+			mergedProgress ??= {};
+			mergedProgress.lessons_learned = planEnrichment.lessonsLearned;
+			progressChanged = true;
+		}
+		if (progressChanged) {
+			progress = mergedProgress;
+		}
+	}
 	const branch = inheritedContext.branch_name ?? runtimeGit?.branch;
 	const commit = runtimeGit?.commit;
 	const baseBranch = inheritedContext.base_branch ?? runtimeGit?.base_branch;
@@ -588,7 +877,9 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 	const delegator = runtimeRole ?? inheritedContext.parent_runtime_role ?? "unknown";
 	const parentEnvelopeId =
 		input.options?.parentEnvelopeId ?? inheritedContext.parent_envelope_id ?? inheritedContext.envelope_id;
-	const planPath = inheritedContext.plan_file_path ?? inheritedContext.plan_reference;
+	const derivedIntent =
+		normalizedProfile === "detailed" ? (planEnrichment?.intent ?? inheritedContext.commander_intent) : undefined;
+	const effectiveTask = derivedIntent && !task.intent ? { ...task, intent: derivedIntent } : task;
 
 	return {
 		contract_version: CONTRACT_VERSION,
@@ -605,6 +896,7 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 			workflow_mode: workflowMode,
 			...(planPath ? { plan_path: planPath } : {}),
 			...(inheritedContext.plan_workspace_dir ? { plan_workspace_dir: inheritedContext.plan_workspace_dir } : {}),
+			...(planEnrichment?.planExcerpt ? { plan_excerpt: planEnrichment.planExcerpt } : {}),
 			...(git ? { git } : {}),
 			...(inheritedContext.worktree_path ? { worktree: { path: inheritedContext.worktree_path } } : {}),
 		},
@@ -613,7 +905,7 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 			delegate: normalizeDelegateName(input.delegate) || "unknown",
 		},
 		...(progress ? { progress } : {}),
-		task,
+		task: effectiveTask,
 		...(input.options?.retryContext ? { retry_context: input.options.retryContext } : {}),
 		...(input.options?.outputContract ? { output_contract: input.options.outputContract } : {}),
 	};

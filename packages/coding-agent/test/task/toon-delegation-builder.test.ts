@@ -65,6 +65,9 @@ type ToonDelegationBuilderModule = {
 		session: ToolSession;
 		delegate: string;
 		task: SemanticTask;
+		options?: {
+			profile?: InputProfileMode;
+		};
 	}) => ToonDelegationResult | Promise<ToonDelegationResult>;
 };
 
@@ -100,18 +103,89 @@ function createSemanticTask(overrides: Partial<SemanticTask> = {}): SemanticTask
 	};
 }
 
-function makeInheritedContext(): string {
+function makeDelegationContext(fields: Record<string, string>): string {
 	return [
 		"<delegation_context>",
-		`repository_cwd: ${JSON.stringify("/inherited/workspace")}`,
-		`workflow_mode: ${JSON.stringify("plan_linked")}`,
-		`repo_root: ${JSON.stringify("/inherited/repo")}`,
-		`branch_name: ${JSON.stringify("feature/inherited")}`,
-		`base_branch: ${JSON.stringify("origin/main")}`,
+		...Object.entries(fields).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
 		"</delegation_context>",
 	].join("\n");
 }
 
+function makeInheritedContext(): string {
+	return makeDelegationContext({
+		repository_cwd: "/inherited/workspace",
+		workflow_mode: "plan_linked",
+		repo_root: "/inherited/repo",
+		branch_name: "feature/inherited",
+		base_branch: "origin/main",
+	});
+}
+
+const RICH_PLAN_CONTENT = [
+	"# Launch TOON delegation",
+	"",
+	"## Plan Excerpt",
+	"Keep the handoff compact while preserving the upstream reasoning trail.",
+	"Use the plan file rather than synthetic placeholders.",
+	"",
+	"## Goals",
+	"Ship detailed-profile TOON envelopes that reuse plan context instead of inventing placeholders.",
+	"",
+	"## Dependencies",
+	"- id: normalize-context",
+	"  summary: Normalize inherited plan metadata before rendering TOON",
+	"- id: summarize-plan",
+	"  summary: Extract plan sections into concise delegation metadata",
+	"",
+	"## Lessons Learned",
+	"- Keep plan excerpts short.",
+	"- Only surface dependencies when the plan names them.",
+	"- Prefer inherited intent over empty defaults.",
+	"- Do not invent pseudo-plan structure.",
+	"- Cap lessons learned to three entries.",
+].join("\n");
+
+const BARE_PLAN_CONTENT = [
+	"# Launch TOON delegation",
+	"",
+	"## Notes",
+	"No structured handoff metadata is available yet.",
+].join("\n");
+
+async function writePlanFixture(filePath: string, content: string): Promise<void> {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	await Bun.write(filePath, content);
+}
+
+function makePlanContext(cwd: string, planPath: string): string {
+	return makeDelegationContext({
+		repository_cwd: cwd,
+		workflow_mode: "plan_linked",
+		repo_root: cwd,
+		plan_file_path: planPath,
+		plan_workspace_dir: path.dirname(planPath),
+	});
+}
+
+function makeImplementationContext(cwd: string, extraFields: Record<string, string> = {}): string {
+	return makeDelegationContext({
+		repository_cwd: cwd,
+		workflow_mode: "implement",
+		repo_root: cwd,
+		...extraFields,
+	});
+}
+
+async function createPlanFixtureSet(cwd: string): Promise<{
+	richPlanPath: string;
+	barePlanPath: string;
+}> {
+	const richPlanPath = path.join(cwd, "plan-fixtures", "rich.md");
+	const barePlanPath = path.join(cwd, "plan-fixtures", "bare.md");
+	await writePlanFixture(richPlanPath, RICH_PLAN_CONTENT);
+	await writePlanFixture(barePlanPath, BARE_PLAN_CONTENT);
+	return { richPlanPath, barePlanPath };
+}
 function runGit(cwd: string, args: string[]): string {
 	const result = Bun.spawnSync(["git", ...args], {
 		cwd,
@@ -178,10 +252,30 @@ async function buildToonDelegation(input: {
 	session: ToolSession;
 	delegate: string;
 	task: SemanticTask;
+	options?: {
+		profile?: InputProfileMode;
+	};
 }): Promise<ToonDelegationResult> {
 	const builder = await loadBuilderModule();
 	expect(typeof builder.buildToonDelegation).toBe("function");
 	return await builder.buildToonDelegation(input);
+}
+
+async function buildDelegation(input: {
+	cwd: string;
+	compactContext: string;
+	delegate?: string;
+	profile?: InputProfileMode;
+	task?: SemanticTask;
+}): Promise<ToonDelegationResult> {
+	return await buildToonDelegation({
+		session: createSession(input.cwd, {
+			getCompactContext: () => input.compactContext,
+		}),
+		delegate: input.delegate ?? "task",
+		task: input.task ?? createSemanticTask(),
+		options: { profile: input.profile ?? "detailed" },
+	});
 }
 
 describe("toon delegation builder", () => {
@@ -323,5 +417,126 @@ describe("toon delegation builder", () => {
 			fs.rmSync(gitRepo.repoRoot, { recursive: true, force: true });
 			fs.rmSync(gitRepo.remoteRoot, { recursive: true, force: true });
 		}
+	});
+	it("extracts a plan excerpt only when the matching heading exists", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath, barePlanPath } = await createPlanFixtureSet(cwd);
+			const richContext = makePlanContext(cwd, richPlanPath);
+
+			const detailedResult = await buildDelegation({
+				cwd,
+				compactContext: richContext,
+			});
+			expect(detailedResult.metadata.context.plan_excerpt).toEqual(
+				expect.stringContaining("Keep the handoff compact while preserving the upstream reasoning trail."),
+			);
+			expect(detailedResult.metadata.context.plan_excerpt).toEqual(
+				expect.stringContaining("Use the plan file rather than synthetic placeholders."),
+			);
+
+			const standardResult = await buildDelegation({
+				cwd,
+				compactContext: richContext,
+				profile: "standard",
+			});
+			expect(standardResult.metadata.context.plan_excerpt).toBeUndefined();
+
+			const bareResult = await buildDelegation({
+				cwd,
+				compactContext: makePlanContext(cwd, barePlanPath),
+			});
+			expect(bareResult.metadata.context.plan_excerpt).toBeUndefined();
+		});
+	});
+
+	it("includes upstream task summaries only when plan dependencies are available", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath, barePlanPath } = await createPlanFixtureSet(cwd);
+			const richContext = makePlanContext(cwd, richPlanPath);
+
+			const detailedResult = await buildDelegation({
+				cwd,
+				compactContext: richContext,
+			});
+
+			const upstreamTasks = detailedResult.metadata.progress?.upstream_tasks as
+				| Array<{ summary?: string }>
+				| undefined;
+			expect(upstreamTasks).toHaveLength(2);
+			expect(upstreamTasks).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						summary: "Normalize inherited plan metadata before rendering TOON",
+					}),
+					expect.objectContaining({
+						summary: "Extract plan sections into concise delegation metadata",
+					}),
+				]),
+			);
+
+			const standardResult = await buildDelegation({
+				cwd,
+				compactContext: richContext,
+				profile: "standard",
+			});
+			expect(standardResult.metadata.progress?.upstream_tasks).toBeUndefined();
+
+			const bareResult = await buildDelegation({
+				cwd,
+				compactContext: makePlanContext(cwd, barePlanPath),
+			});
+			expect(bareResult.metadata.progress?.upstream_tasks).toBeUndefined();
+		});
+	});
+
+	it("populates commander intent from plan goals or inherited context", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath } = await createPlanFixtureSet(cwd);
+			const goalContext = makePlanContext(cwd, richPlanPath);
+			const goalResult = await buildDelegation({
+				cwd,
+				compactContext: goalContext,
+			});
+			expect(goalResult.metadata.task.intent).toBe(
+				"Ship detailed-profile TOON envelopes that reuse plan context instead of inventing placeholders.",
+			);
+
+			const inheritedIntent = "Carry forward the original migration intent without adding pseudo-sections.";
+			const inheritedResult = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd, {
+					commander_intent: inheritedIntent,
+				}),
+			});
+			expect(inheritedResult.metadata.task.intent).toBe(inheritedIntent);
+
+			const missingResult = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+			});
+			expect(missingResult.metadata.task.intent).toBeUndefined();
+		});
+	});
+
+	it("caps lessons learned to three entries and omits them when absent", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath, barePlanPath } = await createPlanFixtureSet(cwd);
+			const richContext = makePlanContext(cwd, richPlanPath);
+			const detailedResult = await buildDelegation({
+				cwd,
+				compactContext: richContext,
+			});
+			expect(detailedResult.metadata.progress?.lessons_learned).toEqual([
+				"Keep plan excerpts short.",
+				"Only surface dependencies when the plan names them.",
+				"Prefer inherited intent over empty defaults.",
+			]);
+
+			const bareResult = await buildDelegation({
+				cwd,
+				compactContext: makePlanContext(cwd, barePlanPath),
+			});
+			expect(bareResult.metadata.progress?.lessons_learned).toBeUndefined();
+		});
 	});
 });
