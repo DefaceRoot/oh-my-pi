@@ -447,6 +447,43 @@ _TOKEN_USAGE_TAIL_BYTES = 50 * 1024
 _CLAUDE_INPUT_COST_PER_MTOK = 3.0
 _CLAUDE_OUTPUT_COST_PER_MTOK = 15.0
 
+_TOTAL_TOKEN_FIELDS: tuple[str, ...] = ("totalTokens", "total_tokens", "total_tokens_used")
+_INPUT_TOKEN_FIELDS: tuple[str, ...] = (
+    "input",
+    "input_tokens",
+    "inputTokens",
+    "prompt_tokens",
+    "total_input_tokens",
+    "tokens_in",
+)
+_OUTPUT_TOKEN_FIELDS: tuple[str, ...] = (
+    "output",
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "total_output_tokens",
+    "tokens_out",
+)
+_CACHE_READ_TOKEN_FIELDS: tuple[str, ...] = (
+    "cacheRead",
+    "cache_read",
+    "cacheReadTokens",
+    "cache_read_tokens",
+    "cacheReadInputTokens",
+    "cache_read_input_tokens",
+    "input_cached_tokens",
+)
+_CACHE_WRITE_TOKEN_FIELDS: tuple[str, ...] = (
+    "cacheWrite",
+    "cache_write",
+    "cacheWriteTokens",
+    "cache_write_tokens",
+    "cacheCreationInputTokens",
+    "cache_creation_input_tokens",
+    "cacheWriteInputTokens",
+    "cache_write_input_tokens",
+)
+
 
 def _read_jsonl_tail_lines_for_usage(jsonl_path: str, tail_bytes: int = _TOKEN_USAGE_TAIL_BYTES) -> list[str]:
     with open(jsonl_path, "r", errors="replace") as fh:
@@ -460,29 +497,91 @@ def _read_jsonl_tail_lines_for_usage(jsonl_path: str, tail_bytes: int = _TOKEN_U
         return fh.readlines()
 
 
-def _to_int_token(value: object) -> int:
+def _to_int_token(value: object) -> Optional[int]:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        if math.isfinite(value):
+            return int(value)
+        return None
     if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
         try:
-            return int(float(value.strip()))
+            parsed = float(raw)
         except ValueError:
-            return 0
-    return 0
+            return None
+        if math.isfinite(parsed):
+            return int(parsed)
+        return None
+    return None
+
+
+def _first_usage_token_field(usage: dict, fields: tuple[str, ...]) -> Optional[int]:
+    for field in fields:
+        if field not in usage:
+            continue
+        parsed = _to_int_token(usage.get(field))
+        if parsed is None:
+            continue
+        return parsed
+    return None
 
 
 def _extract_usage_tokens(usage: dict) -> tuple[int, int]:
-    input_tokens = _to_int_token(
-        usage.get("input_tokens", usage.get("inputTokens", usage.get("input", 0)))
+    total_tokens = _first_usage_token_field(usage, _TOTAL_TOKEN_FIELDS)
+    input_tokens = _first_usage_token_field(usage, _INPUT_TOKEN_FIELDS)
+    output_tokens = _first_usage_token_field(usage, _OUTPUT_TOKEN_FIELDS)
+    cache_read_tokens = _first_usage_token_field(usage, _CACHE_READ_TOKEN_FIELDS)
+    cache_write_tokens = _first_usage_token_field(usage, _CACHE_WRITE_TOKEN_FIELDS)
+
+    normalized_output = max(0, output_tokens or 0)
+    has_component_tokens = any(
+        value is not None
+        for value in (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
     )
-    output_tokens = _to_int_token(
-        usage.get("output_tokens", usage.get("outputTokens", usage.get("output", 0)))
+    component_input_tokens = max(
+        0,
+        (input_tokens or 0) + (cache_read_tokens or 0) + (cache_write_tokens or 0),
     )
-    return (max(0, input_tokens), max(0, output_tokens))
+    component_total_tokens = component_input_tokens + normalized_output if has_component_tokens else 0
+
+    if total_tokens is not None:
+        normalized_total = max(0, total_tokens)
+        chosen_total = max(normalized_total, component_total_tokens)
+        chosen_output = min(normalized_output, chosen_total)
+        return (max(0, chosen_total - chosen_output), chosen_output)
+
+    if has_component_tokens:
+        return (component_input_tokens, normalized_output)
+
+    return (0, 0)
+
+
+def _select_usage_tokens(obj: dict, message_obj: Optional[dict]) -> tuple[int, int]:
+    usage_candidates: list[dict] = []
+    top_usage = obj.get("usage")
+    if isinstance(top_usage, dict):
+        usage_candidates.append(top_usage)
+
+    if message_obj is not None:
+        msg_usage = message_obj.get("usage")
+        if isinstance(msg_usage, dict) and msg_usage is not top_usage:
+            usage_candidates.append(msg_usage)
+
+    best_tokens = (0, 0)
+    best_total = 0
+    for usage in usage_candidates:
+        tokens = _extract_usage_tokens(usage)
+        candidate_total = tokens[0] + tokens[1]
+        if candidate_total >= best_total:
+            best_tokens = tokens
+            best_total = candidate_total
+
+    return best_tokens
 
 
 def _parse_event_timestamp(raw_value: object) -> Optional[float]:
@@ -556,19 +655,9 @@ def parse_token_usage_from_jsonl(jsonl_path: str) -> dict:
                 role = str(obj.get("role") or "")
                 content = obj.get("content")
 
-            usage_candidates: list[dict] = []
-            top_usage = obj.get("usage")
-            if isinstance(top_usage, dict):
-                usage_candidates.append(top_usage)
-            if message_obj is not None:
-                msg_usage = message_obj.get("usage")
-                if isinstance(msg_usage, dict) and msg_usage is not top_usage:
-                    usage_candidates.append(msg_usage)
-
-            for usage in usage_candidates:
-                tokens_in, tokens_out = _extract_usage_tokens(usage)
-                total_tokens_in += tokens_in
-                total_tokens_out += tokens_out
+            tokens_in, tokens_out = _select_usage_tokens(obj, message_obj)
+            total_tokens_in += tokens_in
+            total_tokens_out += tokens_out
 
             if role == "assistant":
                 blocks = content if isinstance(content, list) else [content]

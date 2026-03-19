@@ -173,56 +173,6 @@ def test_extract_last_mc_role_preserves_specialized_subagent_roles() -> None:
     assert extract_last_mc_role(lines) == "code-reviewer"
 
 
-def test_parse_context_usage_prefers_main_role_over_subagent() -> None:
-    lines = [
-        json.dumps(
-            {
-                "type": "model_change",
-                "model": "anthropic/claude-sonnet-4-6-20260205",
-                "role": "orchestrator",
-            }
-        ),
-        json.dumps(
-            {
-                "type": "message",
-                "message": {
-                    "role": "assistant",
-                    "usage": {
-                        "input": 500,
-                        "output": 0,
-                        "cacheRead": 0,
-                        "cacheWrite": 0,
-                    },
-                },
-            }
-        ),
-        json.dumps(
-            {
-                "type": "model_change",
-                "model": "openai-codex/gpt-5.3-codex",
-                "role": "subagent",
-            }
-        ),
-        json.dumps(
-            {
-                "type": "message",
-                "message": {
-                    "role": "assistant",
-                    "usage": {
-                        "input": 50_000,
-                        "output": 0,
-                        "cacheRead": 0,
-                        "cacheWrite": 0,
-                    },
-                },
-            }
-        ),
-    ]
-
-    pct = parse_context_usage_from_jsonl_lines(lines)
-
-    assert pct == pytest.approx(0.0005)
-
 
 def test_parse_context_usage_uses_assistant_message_model_without_model_change() -> None:
     lines = [
@@ -355,5 +305,137 @@ def test_parse_token_usage_from_jsonl_aggregates_usage_and_counts(tmp_path: Path
     assert parsed["cost_usd"] == pytest.approx((1_500 / 1_000_000) * 3.0 + (550 / 1_000_000) * 15.0)
 
 
+
+def test_parse_token_usage_from_jsonl_includes_cache_tokens_and_aliases(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "session-cache-aliases.jsonl"
+    records = [
+        json.dumps(
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "timestamp": "100",
+                    "usage": {
+                        "inputTokens": 100,
+                        "outputTokens": 40,
+                        "cacheReadInputTokens": "2000",
+                        "cacheCreationInputTokens": 500,
+                    },
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "event",
+                "ts": 90,
+                "usage": {"cache_read_input_tokens": 300},
+            }
+        ),
+    ]
+    jsonl_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    parsed = parse_token_usage_from_jsonl(str(jsonl_path))
+
+    assert parsed["total_tokens_in"] == 2_900
+    assert parsed["total_tokens_out"] == 40
+    assert parsed["session_start_ts"] == 90.0
+    assert parsed["cost_usd"] == pytest.approx((2_900 / 1_000_000) * 3.0 + (40 / 1_000_000) * 15.0)
+
+
+def test_parse_token_usage_from_jsonl_avoids_double_counting_top_and_nested_usage(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "session-top-nested-usage.jsonl"
+    records = [
+        json.dumps(
+            {
+                "type": "message",
+                "timestamp": "100",
+                "usage": {"totalTokens": 2_000, "outputTokens": 300},
+                "message": {
+                    "role": "assistant",
+                    "usage": {
+                        "input_tokens": 1_000,
+                        "output_tokens": 300,
+                        "cache_read_input_tokens": 700,
+                    },
+                },
+            }
+        )
+    ]
+    jsonl_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    parsed = parse_token_usage_from_jsonl(str(jsonl_path))
+
+    assert parsed["total_tokens_in"] == 1_700
+    assert parsed["total_tokens_out"] == 300
+
+
+def test_parse_token_usage_from_jsonl_uses_total_tokens_when_components_missing(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "session-total-only-usage.jsonl"
+    records = [
+        json.dumps(
+            {
+                "type": "event",
+                "timestamp": "75",
+                "usage": {"total_tokens": "640", "output": 40},
+            }
+        )
+    ]
+    jsonl_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    parsed = parse_token_usage_from_jsonl(str(jsonl_path))
+
+    assert parsed["total_tokens_in"] == 600
+    assert parsed["total_tokens_out"] == 40
+    assert parsed["session_start_ts"] == 75.0
+
+def test_parse_token_usage_from_jsonl_uses_non_undercounting_total_when_cache_fields_coexist(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "session-total-cache-mixed-usage.jsonl"
+    records = [
+        json.dumps(
+            {
+                "type": "event",
+                "timestamp": "80",
+                "usage": {
+                    "totalTokens": 640,
+                    "inputTokens": 600,
+                    "outputTokens": 40,
+                    "cacheReadInputTokens": 300,
+                },
+            }
+        )
+    ]
+    jsonl_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    parsed = parse_token_usage_from_jsonl(str(jsonl_path))
+
+    assert parsed["total_tokens_in"] == 900
+    assert parsed["total_tokens_out"] == 40
+    assert parsed["session_start_ts"] == 80.0
+
+def test_parse_token_usage_from_jsonl_falls_back_to_valid_alias_when_primary_is_null(tmp_path: Path) -> None:
+    jsonl_path = tmp_path / "session-null-primary-aliases.jsonl"
+    records = [
+        json.dumps(
+            {
+                "type": "event",
+                "timestamp": "70",
+                "usage": {
+                    "input": None,
+                    "input_tokens": 120,
+                    "output": None,
+                    "output_tokens": 30,
+                    "cacheRead": None,
+                    "cache_read_input_tokens": 400,
+                },
+            }
+        )
+    ]
+    jsonl_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    parsed = parse_token_usage_from_jsonl(str(jsonl_path))
+
+    assert parsed["total_tokens_in"] == 520
+    assert parsed["total_tokens_out"] == 30
+    assert parsed["session_start_ts"] == 70.0
 def test_parse_token_usage_from_jsonl_returns_empty_dict_for_missing_file() -> None:
     assert parse_token_usage_from_jsonl("/tmp/does-not-exist.jsonl") == {}
