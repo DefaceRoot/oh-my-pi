@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import {
 	buildTokenGauge,
+	type DetailPaneAction,
 	SubagentDetailPane,
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/subagent-detail-pane";
 import type { SubagentViewRef } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
@@ -596,6 +597,260 @@ describe("SubagentDetailPane", () => {
 			const lines = pane.render(80);
 			const text = Bun.stripANSI(lines.join("\n"));
 			expect(text).toContain("Agent: different");
+		});
+	});
+
+	describe("delegation-field interactions", () => {
+		const DELEGATION_COPY_FIELDS: Partial<SubagentViewRef> = {
+			taskTitle: "Build TOON delegation builder",
+			taskId: "task-2",
+			taskIntent: "Implement the core builder module",
+			delegatorRole: "orchestrator",
+			delegateRole: "implement",
+			inputProfile: "detailed",
+			planPath: "/repo/.omp/sessions/plans/toon/plan.md",
+			repoRoot: "/repo/oh-my-pi",
+			branch: "feature/toon-delegation",
+			worktreePath: "/repo/.worktrees/feature-toon",
+			envelopeId: "del_f1a2b3c4d5e6",
+			parentEnvelopeId: "del_4a9b2c1e8f3d",
+		};
+
+		describe("copy cycling", () => {
+			test("c cycles through copiable delegation field values", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80); // trigger layout
+
+				const fields = pane.getCopyableFields();
+				expect(fields.length).toBeGreaterThan(0);
+
+				// First press: copies first field
+				const action1 = pane.handleInput("c");
+				expect(action1).toBeDefined();
+				expect(action1!.type).toBe("copy");
+				expect((action1 as Extract<DetailPaneAction, { type: "copy" }>).value).toBe(fields[0]!.value);
+
+				// Second press: copies next field
+				const action2 = pane.handleInput("c");
+				expect(action2).toBeDefined();
+				expect((action2 as Extract<DetailPaneAction, { type: "copy" }>).value).toBe(fields[1]!.value);
+			});
+
+			test("y is an alias for c (copy)", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				const action = pane.handleInput("y");
+				expect(action).toBeDefined();
+				expect(action!.type).toBe("copy");
+			});
+
+			test("copy wraps around to first field after last", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				const fields = pane.getCopyableFields();
+				const total = fields.length;
+
+				// Cycle through all fields
+				let lastAction: DetailPaneAction | undefined;
+				for (let i = 0; i < total; i++) {
+					lastAction = pane.handleInput("c");
+				}
+				// Should have copied the last field
+				expect((lastAction as Extract<DetailPaneAction, { type: "copy" }>).value).toBe(fields[total - 1]!.value);
+
+				// Next press wraps to first field
+				const wrapAction = pane.handleInput("c");
+				expect((wrapAction as Extract<DetailPaneAction, { type: "copy" }>).value).toBe(fields[0]!.value);
+			});
+
+			test("returns undefined for c when no delegation fields", () => {
+				const pane = new SubagentDetailPane(makeFullRef());
+				pane.render(80);
+
+				const action = pane.handleInput("c");
+				expect(action).toBeUndefined();
+			});
+
+			test("includes expected copyable fields from delegation metadata", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				const fields = pane.getCopyableFields();
+				const labels = fields.map(f => f.label);
+				const values = fields.map(f => f.value);
+
+				expect(labels).toContain("Task ID");
+				expect(labels).toContain("Plan");
+				expect(labels).toContain("Branch");
+				expect(labels).toContain("Repo");
+				expect(labels).toContain("Worktree");
+				expect(labels).toContain("Envelope");
+				expect(labels).toContain("Parent Envelope");
+
+				expect(values).toContain("task-2");
+				expect(values).toContain("/repo/.omp/sessions/plans/toon/plan.md");
+				expect(values).toContain("feature/toon-delegation");
+				expect(values).toContain("/repo/oh-my-pi");
+				expect(values).toContain("/repo/.worktrees/feature-toon");
+				expect(values).toContain("del_f1a2b3c4d5e6");
+				expect(values).toContain("del_4a9b2c1e8f3d");
+			});
+
+			test("copy returns label and value in action", () => {
+				const pane = new SubagentDetailPane(makeFullRef({ taskId: "t-42", planPath: "/my/plan.md" }));
+				pane.render(80);
+
+				const action = pane.handleInput("c") as Extract<DetailPaneAction, { type: "copy" }>;
+				expect(action.type).toBe("copy");
+				expect(action.label).toBe("Task ID");
+				expect(action.value).toBe("t-42");
+
+				const action2 = pane.handleInput("c") as Extract<DetailPaneAction, { type: "copy" }>;
+				expect(action2.label).toBe("Plan");
+				expect(action2.value).toBe("/my/plan.md");
+			});
+
+			test("setRef resets copy field index", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				pane.handleInput("c"); // advance to first field
+				pane.handleInput("c"); // advance to second field
+
+				pane.setRef(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				// After setRef, copy should start from first field again
+				const fields = pane.getCopyableFields();
+				const action = pane.handleInput("c") as Extract<DetailPaneAction, { type: "copy" }>;
+				expect(action.value).toBe(fields[0]!.value);
+			});
+		});
+
+		describe("verbose toggle", () => {
+			test("d toggles verbose delegation details", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				expect(pane.getVerboseMode()).toBe(true);
+
+				const action = pane.handleInput("d");
+				expect(action).toBeDefined();
+				expect(action!.type).toBe("toggle-verbose");
+				expect((action as Extract<DetailPaneAction, { type: "toggle-verbose" }>).visible).toBe(false);
+				expect(pane.getVerboseMode()).toBe(false);
+
+				// Toggle back
+				const action2 = pane.handleInput("d");
+				expect((action2 as Extract<DetailPaneAction, { type: "toggle-verbose" }>).visible).toBe(true);
+				expect(pane.getVerboseMode()).toBe(true);
+			});
+
+			test("compact mode hides verbose fields", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.setVerboseMode(false);
+				const text = renderText(pane);
+
+				// Core fields remain visible
+				expect(text).toContain("Task:");
+				expect(text).toContain("Build TOON delegation builder");
+				expect(text).toContain("Branch:");
+				expect(text).toContain("feature/toon-delegation");
+				expect(text).toContain("Plan:");
+
+				// Verbose fields are hidden
+				expect(text).not.toContain("Profile:");
+				expect(text).not.toContain("detailed");
+				expect(text).not.toContain("Repo:");
+				expect(text).not.toContain("/repo/oh-my-pi");
+				expect(text).not.toContain("Worktree:");
+				expect(text).not.toContain("/repo/.worktrees/feature-toon");
+				expect(text).not.toContain("Envelope:");
+				expect(text).not.toContain("del_f1a2b3c4d5e6");
+			});
+
+			test("verbose mode shows all fields", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				// Default is verbose=true
+				const text = renderText(pane);
+
+				expect(text).toContain("Profile:");
+				expect(text).toContain("Repo:");
+				expect(text).toContain("Worktree:");
+				expect(text).toContain("Envelope:");
+				expect(text).toContain("del_f1a2b3c4d5e6");
+				expect(text).toContain("del_4a9b2c1e8f3d");
+			});
+
+			test("compact mode reduces copyable field count", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+				const verboseFieldCount = pane.getCopyableFields().length;
+
+				pane.setVerboseMode(false);
+				pane.render(80);
+				const compactFieldCount = pane.getCopyableFields().length;
+
+				expect(compactFieldCount).toBeLessThan(verboseFieldCount);
+			});
+
+			test("d returns undefined when no delegation fields", () => {
+				const pane = new SubagentDetailPane(makeFullRef());
+				pane.render(80);
+
+				const action = pane.handleInput("d");
+				expect(action).toBeUndefined();
+			});
+
+			test("setVerboseMode is idempotent when value unchanged", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+				const initialFields = pane.getCopyableFields().length;
+
+				pane.setVerboseMode(true); // already true
+				pane.render(80);
+				expect(pane.getCopyableFields().length).toBe(initialFields);
+			});
+		});
+
+		describe("help text", () => {
+			test("renders copy and toggle help hints when delegation fields present", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				const text = renderText(pane);
+
+				expect(text).toContain("c/y");
+				expect(text).toContain("copy field");
+				expect(text).toContain("d");
+				expect(text).toContain("compact");
+			});
+
+			test("help text shows 'details' label when in compact mode", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.setVerboseMode(false);
+				const text = renderText(pane);
+
+				expect(text).toContain("details");
+				expect(text).not.toContain("compact");
+			});
+
+			test("no help text when no delegation fields", () => {
+				const pane = new SubagentDetailPane(makeFullRef());
+				const text = renderText(pane);
+
+				expect(text).not.toContain("copy field");
+				expect(text).not.toContain("compact");
+			});
+		});
+
+		describe("unhandled keys", () => {
+			test("returns undefined for non-delegation keys", () => {
+				const pane = new SubagentDetailPane(makeFullRef(DELEGATION_COPY_FIELDS));
+				pane.render(80);
+
+				expect(pane.handleInput("x")).toBeUndefined();
+				expect(pane.handleInput("q")).toBeUndefined();
+				expect(pane.handleInput("z")).toBeUndefined();
+			});
 		});
 	});
 });

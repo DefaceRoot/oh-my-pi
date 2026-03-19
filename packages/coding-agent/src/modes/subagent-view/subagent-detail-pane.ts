@@ -2,6 +2,17 @@ import { Container, Text } from "@oh-my-pi/pi-tui";
 import { theme } from "../theme/theme";
 import type { SubagentStatus, SubagentViewRef } from "./types";
 
+/** A delegation field value that can be copied to clipboard. */
+export interface CopyableField {
+	label: string;
+	value: string;
+}
+
+/** Action returned from detail pane input handling. */
+export type DetailPaneAction =
+	| { type: "copy"; label: string; value: string }
+	| { type: "toggle-verbose"; visible: boolean };
+
 const STATUS_GLYPHS: Record<SubagentStatus, { glyph: string; color: "success" | "muted" | "error" | "dim" }> = {
 	running: { glyph: "●", color: "success" },
 	completed: { glyph: "◉", color: "muted" },
@@ -31,6 +42,9 @@ export class SubagentDetailPane extends Container {
 	#scrollOffset = 0;
 	#lastAvailableHeight = 0;
 	#renderedLineCount = 0;
+	#copyableFields: CopyableField[] = [];
+	#copyFieldIndex = -1;
+	#verboseMode = true;
 
 	constructor(ref?: SubagentViewRef) {
 		super();
@@ -64,8 +78,49 @@ export class SubagentDetailPane extends Container {
 		this.#lastAvailableHeight = height;
 	}
 
+	/**
+	 * Handle delegation-field interactions.
+	 *
+	 * - `c` / `y`: cycle-copy the next copiable delegation field value
+	 * - `d`: toggle verbose delegation details (envelope IDs, profile, repo, worktree)
+	 *
+	 * @returns Action describing what happened, or undefined if key was not handled.
+	 */
+	handleInput(keyData: string): DetailPaneAction | undefined {
+		if ((keyData === "c" || keyData === "y") && this.#copyableFields.length > 0) {
+			this.#copyFieldIndex = (this.#copyFieldIndex + 1) % this.#copyableFields.length;
+			const field = this.#copyableFields[this.#copyFieldIndex]!;
+			return { type: "copy", label: field.label, value: field.value };
+		}
+		if (keyData === "d" && this.#ref && this.#hasDelegationFields(this.#ref)) {
+			this.#verboseMode = !this.#verboseMode;
+			this.#rebuild();
+			return { type: "toggle-verbose", visible: this.#verboseMode };
+		}
+		return undefined;
+	}
+
+	/** Copiable delegation field entries for the current ref. */
+	getCopyableFields(): readonly CopyableField[] {
+		return this.#copyableFields;
+	}
+
+	/** Whether verbose delegation details are shown. */
+	getVerboseMode(): boolean {
+		return this.#verboseMode;
+	}
+
+	/** Set verbose delegation detail visibility. */
+	setVerboseMode(visible: boolean): void {
+		if (this.#verboseMode === visible) return;
+		this.#verboseMode = visible;
+		this.#rebuild();
+	}
+
 	#rebuild(): void {
 		this.clear();
+		this.#copyableFields = [];
+		this.#copyFieldIndex = -1;
 		const ref = this.#ref;
 		if (!ref) {
 			this.addChild(new Text(theme.fg("dim", "No agent selected"), 1, 0));
@@ -194,6 +249,7 @@ export class SubagentDetailPane extends Container {
 		// Task ID (subordinate, 4-space indent)
 		if (ref.taskId) {
 			this.addChild(new Text(`    ${theme.fg("text", "ID:")} ${theme.fg("dim", ref.taskId)}`, 1, 0));
+			this.#pushCopyable("Task ID", ref.taskId);
 		}
 		// Intent (italic when present)
 		if (ref.taskIntent) {
@@ -215,35 +271,41 @@ export class SubagentDetailPane extends Container {
 		} else if (ref.delegateRole) {
 			this.addChild(new Text(`  ${theme.fg("text", "To:")} ${theme.fg("text", ref.delegateRole)}`, 1, 0));
 		}
-		// Input profile
-		if (ref.inputProfile) {
+		// Input profile (verbose)
+		if (ref.inputProfile && this.#verboseMode) {
 			this.addChild(new Text(`  ${theme.fg("text", "Profile:")} ${theme.fg("dim", ref.inputProfile)}`, 1, 0));
 		}
 		// Plan path
 		if (ref.planPath) {
 			this.addChild(new Text(`  ${theme.fg("text", "Plan:")} ${theme.fg("accent", ref.planPath)}`, 1, 0));
+			this.#pushCopyable("Plan", ref.planPath);
 		} else {
 			this.addChild(new Text(`  ${theme.fg("text", "Plan:")} ${theme.fg("dim", "No plan")}`, 1, 0));
 		}
-		// Repo root
-		if (ref.repoRoot) {
+		// Repo root (verbose)
+		if (ref.repoRoot && this.#verboseMode) {
 			this.addChild(new Text(`  ${theme.fg("text", "Repo:")} ${theme.fg("text", ref.repoRoot)}`, 1, 0));
+			this.#pushCopyable("Repo", ref.repoRoot);
 		}
 		// Branch
 		if (ref.branch) {
 			this.addChild(new Text(`  ${theme.fg("text", "Branch:")} ${theme.fg("text", ref.branch)}`, 1, 0));
+			this.#pushCopyable("Branch", ref.branch);
 		}
-		// Worktree (omit row entirely when undefined)
-		if (ref.worktreePath) {
+		// Worktree (verbose, omit row entirely when undefined)
+		if (ref.worktreePath && this.#verboseMode) {
 			this.addChild(new Text(`  ${theme.fg("text", "Worktree:")} ${theme.fg("text", ref.worktreePath)}`, 1, 0));
+			this.#pushCopyable("Worktree", ref.worktreePath);
 		}
-		// Envelope ID
-		if (ref.envelopeId) {
+		// Envelope ID (verbose)
+		if (ref.envelopeId && this.#verboseMode) {
 			this.addChild(new Text(`  ${theme.fg("text", "Envelope:")} ${theme.fg("dim", ref.envelopeId)}`, 1, 0));
+			this.#pushCopyable("Envelope", ref.envelopeId);
 		}
-		// Parent envelope ID (omit row entirely when undefined)
-		if (ref.parentEnvelopeId) {
+		// Parent envelope ID (verbose, omit row entirely when undefined)
+		if (ref.parentEnvelopeId && this.#verboseMode) {
 			this.addChild(new Text(`  ${theme.fg("text", "Parent:")} ${theme.fg("dim", ref.parentEnvelopeId)}`, 1, 0));
+			this.#pushCopyable("Parent Envelope", ref.parentEnvelopeId);
 		}
 		// Retry attempt (omit row entirely when undefined)
 		if (ref.retryAttempt !== undefined) {
@@ -254,7 +316,19 @@ export class SubagentDetailPane extends Container {
 		// Quality indicator
 		this.#addQualityIndicator(ref);
 
+		// Help text for delegation-field interactions
+		const hints: string[] = [];
+		if (this.#copyableFields.length > 0) {
+			hints.push(`${theme.fg("dim", "c/y")} ${theme.fg("muted", "copy field")}`);
+		}
+		hints.push(`${theme.fg("dim", "d")} ${theme.fg("muted", this.#verboseMode ? "compact" : "details")}`);
+		this.addChild(new Text(`  ${hints.join("  ")}`, 1, 0));
+
 		this.addChild(new Text("", 1, 0));
+	}
+
+	#pushCopyable(label: string, value: string): void {
+		this.#copyableFields.push({ label, value });
 	}
 
 	#addQualityIndicator(ref: SubagentViewRef): void {
