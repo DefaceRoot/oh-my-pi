@@ -159,6 +159,8 @@ interface LoadedSubagentTranscript {
 	source: string;
 	content: string;
 	sessionContext?: SessionContext;
+	agentName?: string;
+	role?: string;
 	model?: string;
 	tokens?: number;
 	contextPreview?: string;
@@ -614,24 +616,26 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private buildSidebarTokenSection(): SidebarModel["tokens"] {
 		const contextUsage = this.session.getContextUsage();
-		const usageStats = this.sessionManager.getUsageStatistics();
-		const derivedTokens = usageStats.input + usageStats.output + usageStats.cacheRead + usageStats.cacheWrite;
-		const costUsd = Number.isFinite(usageStats.cost) && usageStats.cost > 0 ? usageStats.cost : undefined;
-		const hasData = contextUsage !== undefined || derivedTokens > 0 || costUsd !== undefined;
-		if (!hasData) return undefined;
+		if (!contextUsage) return undefined;
 
-		const tokensUsedFromContext =
-			typeof contextUsage?.tokens === "number" && Number.isFinite(contextUsage.tokens)
-				? contextUsage.tokens
-				: undefined;
-		const tokensUsed = Math.max(0, Math.round(tokensUsedFromContext ?? derivedTokens));
-		const tokensTotal = Math.max(tokensUsed, Math.round(contextUsage?.contextWindow ?? 0));
+		const contextWindow = Number.isFinite(contextUsage.contextWindow) ? Math.round(contextUsage.contextWindow) : 0;
+		if (contextWindow <= 0) return undefined;
+
+		if (typeof contextUsage.tokens !== "number" || !Number.isFinite(contextUsage.tokens)) {
+			return undefined;
+		}
+
+		const tokensUsed = Math.max(0, Math.round(contextUsage.tokens));
+		const tokensTotal = Math.max(tokensUsed, contextWindow);
 		const contextUsedPercent =
-			typeof contextUsage?.percent === "number" && Number.isFinite(contextUsage.percent)
+			typeof contextUsage.percent === "number" && Number.isFinite(contextUsage.percent)
 				? contextUsage.percent
 				: tokensTotal > 0
 					? (tokensUsed / tokensTotal) * 100
 					: 0;
+
+		const usageStats = this.sessionManager.getUsageStatistics();
+		const costUsd = Number.isFinite(usageStats.cost) && usageStats.cost > 0 ? usageStats.cost : undefined;
 
 		return {
 			contextUsedPercent,
@@ -2337,6 +2341,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const nestedCount = nestedRefs.length;
 		const isParentSelection = this.subagentNestedCycleIndex < 0;
 		const nestedPosition = isParentSelection ? 0 : this.subagentNestedCycleIndex + 1;
+		const resolvedSelectedAgent = selected.agent ?? transcript.agentName ?? transcript.role;
 		const hierarchyLines = currentRefs.map(ref => {
 			const depth = Math.max(0, ref.depth ?? 0);
 			const indent = "  ".repeat(Math.min(depth, 6));
@@ -2345,7 +2350,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			const selector = isSelected ? theme.bold(theme.fg("accent", "▸")) : " ";
 			const branch = isRoot ? "" : "↳ ";
 			const ordinal = this.extractSubagentOrdinal(ref.id);
-			const agentName = this.clipPreview(this.getSubagentAgentLabel(ref.agent), 24);
+			const refAgent = ref.id === selected.id ? (ref.agent ?? resolvedSelectedAgent) : ref.agent;
+			const agentName = this.clipPreview(this.getSubagentAgentLabel(refAgent), 24);
 			const title = this.clipPreview(ref.description ?? this.extractSubagentTitleFromId(ref.id), 84);
 			const line = `${indent}${branch}(${ordinal}) ${agentName} | ${title}`;
 			const lineText = isSelected ? theme.fg("text", line) : theme.fg("dim", line);
@@ -2354,7 +2360,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const maxHierarchyLines = 12;
 		const visibleHierarchyLines = hierarchyLines.slice(0, maxHierarchyLines);
 		const hiddenHierarchyCount = Math.max(0, hierarchyLines.length - visibleHierarchyLines.length);
-		const agentLabel = this.getSubagentAgentLabel(selected.agent);
+		const agentLabel = this.getSubagentAgentLabel(resolvedSelectedAgent);
 		const requestedModelMeta = splitSubagentModelLabel(selected.model);
 		const actualModelMeta = splitSubagentModelLabel(transcript.model);
 		const requestedModelLabel = requestedModelMeta.model;
@@ -2446,10 +2452,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				),
 			nestedArrowMode: this.subagentNestedArrowMode,
 			metadata: {
-				agentName: this.getSubagentAgentLabel(selected.agent),
+				agentName: this.getSubagentAgentLabel(resolvedSelectedAgent),
 				subagentId: selected.id,
 				sessionId: transcript.sessionId ?? selected.sessionId,
-				role: selected.agent,
+				role: resolvedSelectedAgent,
 				provider: actualModelMeta.provider ?? selected.provider,
 				model: actualModelLabel ?? requestedModelLabel,
 				tokens: selected.tokens ?? transcript.tokens,
@@ -2612,9 +2618,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	private sumAssistantMessageUsageTokens(entries: ReadonlyArray<unknown>): number {
-		let tokens = 0;
-		for (const entry of entries) {
+	private getLatestAssistantMessageUsageTokens(entries: ReadonlyArray<unknown>): number {
+		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			const entry = entries[index];
 			if (!entry || typeof entry !== "object") continue;
 			const record = entry as Record<string, unknown>;
 			if (record.type !== "message") continue;
@@ -2622,13 +2628,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!message || typeof message !== "object") continue;
 			if ((message as { role?: unknown }).role !== "assistant") continue;
 			const usageTokens = getTotalUsageTokens((message as { usage?: unknown }).usage);
-			if (typeof usageTokens === "number") tokens += usageTokens;
+			if (typeof usageTokens === "number") return usageTokens;
 		}
-		return tokens;
+
+		return 0;
 	}
 
 	private buildFallbackSubagentSessionContext(rawTranscript: string): {
 		sessionContext?: SessionContext;
+		agentName?: string;
+		role?: string;
 		model?: string;
 		tokens?: number;
 		contextPreview?: string;
@@ -2646,19 +2655,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const messages: AgentMessage[] = [];
+		let agentName: string | undefined;
+		let role: string | undefined;
 		let model: string | undefined;
 		let thinkingLevel = "high";
 		let mode = "none";
 		let modeData: Record<string, unknown> | undefined;
 		let contextPreview: string | undefined;
 		let assignment: string | undefined;
-		let tokens = 0;
 		let sessionId: string | undefined;
 		let toolNames: string[] | undefined;
 		let mcpServers: string[] | undefined;
 		let mcpAllowlist: string[] | undefined;
 		let contextFilePath: string | undefined;
 		const skillsUsed = this.extractUsedSkillNamesFromEntries(entries as SessionEntry[]);
+		const tokens = this.getLatestAssistantMessageUsageTokens(entries);
 
 		for (const entry of entries) {
 			if (entry.type === "session" && typeof entry.id === "string" && !sessionId) {
@@ -2667,6 +2678,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			if (entry.type === "model_change" && typeof entry.model === "string") {
 				model = entry.model;
+				role = typeof entry.role === "string" && entry.role.trim().length > 0 ? entry.role : role;
 				continue;
 			}
 
@@ -2683,6 +2695,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 
 			if (entry.type === "session_init" && typeof entry.task === "string") {
+				agentName = typeof entry.agentName === "string" && entry.agentName.trim().length > 0 ? entry.agentName : agentName;
 				assignment ??= entry.task;
 				contextPreview ??= extractTaskContextPreview(entry.task);
 				sessionId =
@@ -2708,23 +2721,18 @@ export class InteractiveMode implements InteractiveModeContext {
 				continue;
 			}
 
-			const role = (message as { role?: unknown }).role;
-			if (typeof role !== "string") {
+			const messageRole = (message as { role?: unknown }).role;
+			if (typeof messageRole !== "string") {
 				continue;
 			}
 
 			messages.push(message as AgentMessage);
-			if (role === "assistant") {
-				const usage = (message as { usage?: unknown }).usage;
-				const usageTokens = getTotalUsageTokens(usage);
-				if (typeof usageTokens === "number") {
-					tokens += usageTokens;
-				}
-			}
 		}
 
 		if (messages.length === 0) {
 			return {
+				agentName,
+				role: agentName ?? role,
 				model,
 				tokens: tokens > 0 ? tokens : undefined,
 				contextPreview,
@@ -2749,6 +2757,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		return {
 			sessionContext,
+			agentName,
+			role: agentName ?? role,
 			model,
 			tokens: tokens > 0 ? tokens : undefined,
 			contextPreview,
@@ -2774,9 +2784,10 @@ export class InteractiveMode implements InteractiveModeContext {
 						(entry): entry is SessionInitEntry => entry.type === "session_init",
 					);
 					const latestModel = latestModelEntry?.type === "model_change" ? latestModelEntry.model : undefined;
+					const latestRole = latestModelEntry?.type === "model_change" ? latestModelEntry.role : undefined;
 					const sessionTask = sessionInitEntry?.task;
 					const skillsUsed = this.extractUsedSkillNamesFromEntries(entries);
-					const tokensTotal = this.sumAssistantMessageUsageTokens(entries);
+					const tokensTotal = this.getLatestAssistantMessageUsageTokens(entries);
 					const tokens = tokensTotal > 0 ? tokensTotal : undefined;
 					const sessionContext = subSession.buildSessionContext();
 					const header = subSession.getHeader();
@@ -2789,6 +2800,8 @@ export class InteractiveMode implements InteractiveModeContext {
 							source: ref.sessionPath,
 							content: rawTranscript,
 							sessionContext: fallback.sessionContext,
+							agentName: sessionInitEntry?.agentName ?? fallback.agentName ?? ref.agent,
+							role: sessionInitEntry?.agentName ?? latestRole ?? fallback.role ?? ref.agent,
 							model: latestModel ?? fallback.model,
 							tokens: fallback.tokens ?? tokens,
 							contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : fallback.contextPreview,
@@ -2807,6 +2820,8 @@ export class InteractiveMode implements InteractiveModeContext {
 						source: ref.sessionPath,
 						content: rawTranscript,
 						sessionContext,
+						agentName: sessionInitEntry?.agentName ?? ref.agent,
+						role: sessionInitEntry?.agentName ?? latestRole ?? ref.agent,
 						model: latestModel,
 						tokens,
 						contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : undefined,
@@ -2825,6 +2840,8 @@ export class InteractiveMode implements InteractiveModeContext {
 						source: ref.sessionPath,
 						content: rawTranscript,
 						sessionContext: fallback.sessionContext,
+						agentName: fallback.agentName ?? ref.agent,
+						role: fallback.role ?? ref.agent,
 						model: fallback.model,
 						tokens: fallback.tokens,
 						contextPreview: fallback.contextPreview,
@@ -2880,7 +2897,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			const rawTranscript = await Bun.file(sessionPath).text();
 			const entries = parseJsonlLenient<Record<string, unknown>>(rawTranscript);
-			const tokens = this.sumAssistantMessageUsageTokens(entries);
+			const tokens = this.getLatestAssistantMessageUsageTokens(entries);
 			return tokens > 0 ? tokens : undefined;
 		} catch (error) {
 			if (!isEnoent(error)) {

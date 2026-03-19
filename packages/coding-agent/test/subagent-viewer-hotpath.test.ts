@@ -244,7 +244,7 @@ describe("InteractiveMode subagent token loading", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("loadTokensFromSessionPath includes cache usage when totals are absent", async () => {
+	test("loadTokensFromSessionPath uses tokens from the latest assistant request with usage", async () => {
 		const sessionPath = path.join(tempDir, "cache-aware.jsonl");
 		await writeFile(
 			sessionPath,
@@ -253,10 +253,21 @@ describe("InteractiveMode subagent token loading", () => {
 					type: "message",
 					message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5 } },
 				}),
+				JSON.stringify({ type: "compaction", summary: "trimmed" }),
 				JSON.stringify({
 					type: "message",
-					message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 } },
+					message: {
+						role: "assistant",
+						usage: {
+							inputTokens: 10,
+							outputTokens: 8,
+							cacheReadInputTokens: 4_000,
+							cacheCreationInputTokens: 2_000,
+						},
+					},
 				}),
+				JSON.stringify({ type: "handoff", target: "child-session" }),
+				JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "no usage" }] } }),
 			].join("\n")}\n`,
 			"utf8",
 		);
@@ -264,10 +275,11 @@ describe("InteractiveMode subagent token loading", () => {
 		const mode = Object.create(InteractiveMode.prototype) as any;
 		const tokens = await mode.loadTokensFromSessionPath(sessionPath);
 
-		expect(tokens).toBe(198);
+		expect(tokens).toBe(6_018);
 	});
 
-	test("loadSubagentTranscript includes cache usage when session loads", async () => {
+
+	test("loadSubagentTranscript uses latest assistant usage instead of cumulative transcript totals", async () => {
 		const sessionPath = path.join(tempDir, "session-usage.jsonl");
 		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
 
@@ -279,6 +291,12 @@ describe("InteractiveMode subagent token loading", () => {
 					type: "message",
 					message: { role: "assistant", usage: { input: 100, output: 20, cacheRead: 7, cacheWrite: 3 } },
 				},
+				{ type: "compaction", summary: "trimmed" },
+				{
+					type: "message",
+					message: { role: "assistant", usage: { input: 10, output: 4, cacheRead: 2, cacheWrite: 1 } },
+				},
+				{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "no usage" }] } },
 			],
 			buildSessionContext: () => ({
 				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
@@ -294,7 +312,49 @@ describe("InteractiveMode subagent token loading", () => {
 		const mode = Object.create(InteractiveMode.prototype) as any;
 		const transcript = await mode.loadSubagentTranscript({ id: "cache-subagent", sessionPath } as SubagentViewRef);
 
-		expect(transcript?.tokens).toBe(130);
+		expect(transcript?.tokens).toBe(17);
+	});
+
+	test("buildSidebarTokenSection uses current context usage instead of historical session totals", () => {
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.session = {
+			getContextUsage: () => ({ tokens: 1_200, contextWindow: 200_000, percent: 0.6 }),
+		};
+		mode.sessionManager = {
+			getUsageStatistics: () => ({
+				input: 900_000,
+				output: 250_000,
+				cacheRead: 400_000,
+				cacheWrite: 120_000,
+				cost: 2.345,
+			}),
+		};
+
+		const tokens = mode.buildSidebarTokenSection();
+		expect(tokens).toMatchObject({
+			tokensUsed: 1_200,
+			tokensTotal: 200_000,
+			contextUsedPercent: 0.6,
+			costUsd: 2.345,
+		});
+	});
+
+	test("buildSidebarTokenSection leaves tokens unset when post-compaction context usage is unknown", () => {
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.session = {
+			getContextUsage: () => ({ tokens: null, contextWindow: 200_000, percent: null }),
+		};
+		mode.sessionManager = {
+			getUsageStatistics: () => ({
+				input: 900_000,
+				output: 250_000,
+				cacheRead: 400_000,
+				cacheWrite: 120_000,
+				cost: 2.345,
+			}),
+		};
+
+		expect(mode.buildSidebarTokenSection()).toBeUndefined();
 	});
 	test("loadSubagentTranscript context preview skips prompt template headers", async () => {
 		const sessionPath = path.join(tempDir, "session-template.jsonl");
@@ -415,7 +475,7 @@ describe("InteractiveMode subagent token loading", () => {
 		expect(transcript?.skillsUsed).toBeUndefined();
 	});
 
-	test("loadSubagentTranscript fallback parsing keeps explicit skill usage when session loading fails", async () => {
+	test("loadSubagentTranscript fallback parsing keeps explicit skill usage and latest usage tokens", async () => {
 		const sessionPath = path.join(tempDir, "session-fallback-skill-read.jsonl");
 		const systemPrompt = [
 			"# Skills",
@@ -437,6 +497,7 @@ describe("InteractiveMode subagent token loading", () => {
 					type: "message",
 					message: {
 						role: "assistant",
+						usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5 },
 						content: [
 							{
 								type: "toolCall",
@@ -446,6 +507,15 @@ describe("InteractiveMode subagent token loading", () => {
 							},
 						],
 					},
+				}),
+				JSON.stringify({ type: "compaction", summary: "trimmed" }),
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", usage: { input: 10, output: 4, cacheRead: 2, cacheWrite: 1 } },
+				}),
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "no usage metadata" }] },
 				}),
 			].join("\n")}\n`,
 			"utf8",
@@ -460,6 +530,7 @@ describe("InteractiveMode subagent token loading", () => {
 		} as SubagentViewRef);
 
 		expect(transcript?.skillsUsed).toEqual(["systematic-debugging"]);
+		expect(transcript?.tokens).toBe(17);
 	});
 
 	test("loadSubagentTranscript loads session metadata and parent context file content", async () => {
@@ -589,6 +660,61 @@ describe("InteractiveMode subagent token loading", () => {
 		expect(headerText).toContain("Nested 0/0 descendants");
 		expect(headerText).not.toContain("Nested nested");
 		expect(headerText).toContain("Source /tmp/22-VerifyPhase07.jsonl");
+	});
+
+	test("renderSubagentSession falls back to transcript identity when the snapshot ref is missing agent metadata", async () => {
+		const setContent = vi.fn();
+		const statusLine = { setHookStatus: vi.fn() };
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.subagentCycleIndex = 0;
+		mode.subagentNestedCycleIndex = 0;
+		mode.subagentNestedArrowMode = false;
+		mode.subagentSessionViewer = { setContent };
+		mode.statusLine = statusLine;
+		mode.ui = { requestRender: vi.fn(), terminal: { rows: 40, columns: 120 } };
+		mode.keybindings = { getDisplayString: vi.fn(() => "Ctrl+X") };
+		mode.inputController = { cycleAgentMode: vi.fn(async () => undefined) };
+
+		const rootRef = makeRef("0-TokenRollup", {
+			agent: "implement",
+			description: "Implement canonical token rollup",
+			status: "running",
+		});
+		const selected = makeRef("0-TokenRollup.1-ReviewTotals", {
+			agent: undefined,
+			rootId: "0-TokenRollup",
+			parentId: "0-TokenRollup",
+			depth: 1,
+			description: "Review token totals",
+			status: "completed",
+		});
+		const groups = [makeGroup("0-TokenRollup", [rootRef, selected])];
+
+		await mode.renderSubagentSession(
+			selected,
+			{
+				source: "/tmp/review-totals.jsonl",
+				content: "",
+				agentName: "code-reviewer",
+				role: "code-reviewer",
+				model: "openai-codex/gpt-5.2-codex",
+				tokens: 4049,
+				skillsUsed: [],
+			},
+			groups,
+		);
+
+		expect(setContent).toHaveBeenCalledTimes(1);
+		const payload = setContent.mock.calls[0]?.[0];
+		const headerText = plain(payload.headerLines.join("\n"));
+		const statusText = plain(String(statusLine.setHookStatus.mock.calls.at(-1)?.[1] ?? ""));
+		expect(payload.metadata).toMatchObject({
+			agentName: "code-reviewer",
+			role: "code-reviewer",
+			subagentId: "0-TokenRollup.1-ReviewTotals",
+		});
+		expect(headerText).toContain("↳ (1) code-reviewer | Review token totals");
+		expect(statusText).toContain("agent:1/1 code-reviewer");
 	});
 
 	test("renderSubagentSession uses neutral placeholders when agent metadata is missing", async () => {
