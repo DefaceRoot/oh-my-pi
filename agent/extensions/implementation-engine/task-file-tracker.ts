@@ -603,6 +603,7 @@ const IMPLEMENTATION_WORKER_MARKER_RE =
 	/Implementation subagent for delegated coding work/i;
 const IMPLEMENTATION_WORKER_DELIVERY_LOOP_RE =
 	/<delivery_loop>[\s\S]*?spawn a `lint` subagent[\s\S]*?code-reviewer[\s\S]*?commit/i;
+const QUALITY_GATE_SKIP_DIRECTIVE_RE = /<skip_quality_gates\s*\/>/i;
 const IMPLEMENTATION_WORKER_DOC_EXTENSIONS = new Set([
 	".md",
 	".mdc",
@@ -700,6 +701,20 @@ export function isImplementationWorkerPrompt(
 		IMPLEMENTATION_WORKER_MARKER_RE.test(mergedPrompt) ||
 		IMPLEMENTATION_WORKER_DELIVERY_LOOP_RE.test(mergedPrompt)
 	);
+}
+
+/**
+ * Detect whether the orchestrator has opted out of quality gates for this
+ * implementation subagent. The orchestrator signals this by including
+ * `<skip_quality_gates />` in the task context when the assignment does
+ * not involve file or code changes (e.g. running a script, capturing output).
+ */
+export function isQualityGateSkipDirective(
+	systemPrompt: string | undefined,
+	prompt: string | undefined,
+): boolean {
+	const mergedPrompt = `${systemPrompt ?? ""}\n${prompt ?? ""}`;
+	return QUALITY_GATE_SKIP_DIRECTIVE_RE.test(mergedPrompt);
 }
 
 export function isImplementationWorkerGateAgent(

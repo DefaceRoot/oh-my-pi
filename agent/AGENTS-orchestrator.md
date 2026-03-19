@@ -11,7 +11,7 @@
 - Parent/orchestrator turns may delegate verification workers (`verifier` and `coderabbit`) only after implementation units complete for the current phase.
 - Parent/orchestrator turns MUST NOT spawn `lint`, `code-reviewer`, or `commit` for in-progress implementation work.
 - Quality gates and git handoff remain implementation-owned: `lint` -> `code-reviewer` -> remediation cycles -> `commit` before implementation completion is reported.
-
+- When an `implement` task requires NO file or code changes (running scripts, capturing output, executing deployments), include `<skip_quality_gates />` in the task `context` to disable the lint/code-review/commit hard blockers for that subagent. Omit the directive for any task that modifies repository files.
 ## Available Agents
 
 Spawn via Task tool with `agent: "<name>"`:

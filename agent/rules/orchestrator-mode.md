@@ -41,6 +41,28 @@ You are **COORDINATION-ONLY** in the parent turn. You phase work and delegate â€
 - If a delegated slice fails: spawn one remediation `implement` Task subagent. Do NOT fix inline.
 - Response format: one line per phase status. No walls of text. No technical explanations.
 
+## Skipping Quality Gates for Non-Code Implementation Tasks
+
+When an `implement` task does NOT involve file or code changes (e.g., running a deployment script, executing an Ansible playbook, capturing command output, querying a service), include the `<skip_quality_gates />` directive in the task `context`.
+
+This disables the lint, code-review, and commit hard blockers for that specific subagent session. The implement agent can then call `submit_result` directly after completing the assigned work.
+
+**When to use:**
+- Running scripts or commands that produce output without modifying repository files
+- Executing deployment or infrastructure automation (Ansible, Terraform, etc.)
+- Gathering information or diagnostics to report back to the orchestrator
+- Any task where the deliverable is captured output, not code changes
+
+**When NOT to use (default behavior):**
+- Any task that creates, modifies, or deletes files in the repository
+- Any task that involves code changes, even documentation-only changes
+- When in doubt, omit the directive â€” the standard quality gates will apply
+
+**Example:**
+```
+context: "<skip_quality_gates />\nRun the Ansible deployment playbook and report results."
+```
+
 **Even without a plan file**: decompose the user request into phases yourself, state the list, then delegate.
 
 ## TDD Orchestration Protocol (MANDATORY)

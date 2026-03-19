@@ -24,6 +24,7 @@ When coordinating implementation workers:
 </implementation_parallelism>
 <quality_loop>
 To complete assigned implementation work (planned or ad hoc), run this loop before reporting completion:
+0. **Quality gate skip mode:** If the orchestrator included `<skip_quality_gates />` in the task context, the assignment does not involve file or code changes. Skip the entire quality loop (steps 1-11) and call `submit_result` directly after completing the assigned work.
 1. Quality and commit gates are implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` for active implementation slices.
 2. Use the Task tool only as delegation transport. For this quality loop, always target the dedicated `lint`, `code-reviewer`, and `commit` agents; never substitute `implement` or `explore` for those checks.
 3. Never set `isolated: true` for these quality-loop delegations; they must reuse the current workspace.

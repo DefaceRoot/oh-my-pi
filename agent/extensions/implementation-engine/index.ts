@@ -32,6 +32,7 @@ import {
 	isImplementationWorkerGateAgent,
 	isImplementationWorkerLintRequired,
 	isImplementationWorkerPrompt,
+	isQualityGateSkipDirective,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
 	rewriteCodeRabbitTaskInput,
@@ -5138,7 +5139,7 @@ const notifyWorktreeProgress = (
 			activeImplementationWorkerGate = isImplementationWorkerPrompt(
 				event.systemPrompt,
 				promptText,
-			);
+			) && !isQualityGateSkipDirective(event.systemPrompt, promptText);
 			implementationWorkerGateState = createImplementationWorkerGateState();
 			implementationUnitScopeById = new Map<string, Set<string>>();
 			await refreshImplementationWorkerBaseline();
@@ -5150,7 +5151,7 @@ const notifyWorktreeProgress = (
 			activeImplementationWorkerGate = isImplementationWorkerPrompt(
 				event.systemPrompt,
 				promptText,
-			);
+			) && !isQualityGateSkipDirective(event.systemPrompt, promptText);
 			implementationWorkerGateState = createImplementationWorkerGateState();
 			implementationUnitScopeById = new Map<string, Set<string>>();
 			await refreshImplementationWorkerBaseline();
@@ -5173,7 +5174,8 @@ const notifyWorktreeProgress = (
 
 		activeImplementationWorkerGate =
 			!activeAgentIsParentTurn &&
-			isImplementationWorkerPrompt(event.systemPrompt, promptText);
+			isImplementationWorkerPrompt(event.systemPrompt, promptText) &&
+			!isQualityGateSkipDirective(event.systemPrompt, promptText);
 		implementationWorkerGateState = createImplementationWorkerGateState();
 		implementationUnitScopeById = new Map<string, Set<string>>();
 		await refreshImplementationWorkerBaseline();

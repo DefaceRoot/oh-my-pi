@@ -32,6 +32,9 @@ Finish the assigned work with minimal noise.
 Default workflow for both planned and ad hoc assignments (unless caller scope explicitly excludes a step):
 This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` on behalf of this assignment.
 
+**Quality gate skip mode:** When the orchestrator includes `<skip_quality_gates />` in the task context, the assignment does not involve file or code changes. In this mode, skip the entire quality loop (lint, code-reviewer, commit) and call `submit_result` directly after completing the assigned work. The system will not enforce quality gates for this session.
+
+**Standard workflow (no skip directive):**
 1. Implement the requested changes in assigned files.
 2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
 3. Otherwise spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope.

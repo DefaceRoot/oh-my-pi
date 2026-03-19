@@ -10,6 +10,7 @@ import {
 	getImplementationWorkerSubmitDecision,
 	isImplementationWorkerLintRequired,
 	isImplementationWorkerPrompt,
+	isQualityGateSkipDirective,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
 	rewriteCodeRabbitTaskInput,
@@ -542,5 +543,56 @@ describe("implementation worker submit gate", () => {
 			success: true,
 		});
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);
+	});
+});
+
+describe("isQualityGateSkipDirective", () => {
+	test("returns true when directive is in the user prompt", () => {
+		expect(isQualityGateSkipDirective(undefined, "<skip_quality_gates />\nRun ansible playbook")).toBe(true);
+	});
+
+	test("returns true when directive is in the system prompt", () => {
+		expect(isQualityGateSkipDirective("<skip_quality_gates />", "Run ansible playbook")).toBe(true);
+	});
+
+	test("returns false when directive is absent", () => {
+		expect(isQualityGateSkipDirective(
+			"<role>Implementation subagent for delegated coding work</role>",
+			"Implement the feature",
+		)).toBe(false);
+	});
+
+	test("returns false with undefined prompts", () => {
+		expect(isQualityGateSkipDirective(undefined, undefined)).toBe(false);
+	});
+
+	test("handles self-closing tag with extra whitespace", () => {
+		expect(isQualityGateSkipDirective(undefined, "<skip_quality_gates   />")).toBe(true);
+	});
+
+	test("is case-insensitive", () => {
+		expect(isQualityGateSkipDirective(undefined, "<SKIP_QUALITY_GATES />")).toBe(true);
+		expect(isQualityGateSkipDirective(undefined, "<Skip_Quality_Gates />")).toBe(true);
+	});
+
+	test("detects directive embedded in context with other content", () => {
+		const context = [
+			"Background: Deploy the staging environment.",
+			"<skip_quality_gates />",
+			"Run the deployment playbook at infra/deploy.yml.",
+		].join("\n");
+		expect(isQualityGateSkipDirective(undefined, context)).toBe(true);
+	});
+
+	test("implementation worker gate is effectively disabled when skip directive is present", () => {
+		const systemPrompt = "<role>Implementation subagent for delegated coding work with optional explore-agent fan-out.</role>";
+		const prompt = "<skip_quality_gates />\nRun ansible deploy and capture output.";
+		// isImplementationWorkerPrompt would return true
+		expect(isImplementationWorkerPrompt(systemPrompt, prompt)).toBe(true);
+		// But the skip directive should also be detected
+		expect(isQualityGateSkipDirective(systemPrompt, prompt)).toBe(true);
+		// So the gate activation logic (isWorker && !isSkip) should resolve to false
+		const gateActive = isImplementationWorkerPrompt(systemPrompt, prompt) && !isQualityGateSkipDirective(systemPrompt, prompt);
+		expect(gateActive).toBe(false);
 	});
 });
