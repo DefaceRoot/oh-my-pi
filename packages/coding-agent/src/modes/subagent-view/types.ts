@@ -1,4 +1,6 @@
-export type SubagentStatus = "running" | "completed" | "failed" | "pending" | "cancelled";
+import type { SubagentOutcome } from "../../task/subagent-outcome";
+
+export type SubagentStatus = "running" | "completed" | "failed" | "pending" | "cancelled" | "user_stopped";
 
 export interface SubagentViewRef {
 	id: string;
@@ -6,6 +8,7 @@ export interface SubagentViewRef {
 	outputPath?: string;
 	agent?: string;
 	description?: string;
+	provider?: string;
 	model?: string;
 	tokens?: number;
 	contextPreview?: string;
@@ -22,6 +25,11 @@ export interface SubagentViewRef {
 	sessionId?: string;
 	parentAgentName?: string;
 	assignmentPreview?: string;
+	abortReason?: string;
+	toolNames?: string[];
+	mcpServers?: string[];
+	mcpAllowlist?: string[];
+	outcome?: SubagentOutcome;
 }
 
 export interface SubagentViewGroup {

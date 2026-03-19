@@ -8,6 +8,7 @@ const STATUS_GLYPHS: Record<SubagentStatus, { glyph: string; color: "success" | 
 	failed: { glyph: "✗", color: "error" },
 	pending: { glyph: "◌", color: "dim" },
 	cancelled: { glyph: "⊘", color: "muted" },
+	user_stopped: { glyph: "⏹", color: "error" },
 };
 
 const GAUGE_WIDTH = 16;

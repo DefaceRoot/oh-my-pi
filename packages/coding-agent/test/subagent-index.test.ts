@@ -122,6 +122,32 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]?.assignmentPreview?.split("\n")).toHaveLength(8);
 	});
 
+	test("ingestTaskResults keeps session routing metadata from live updates", () => {
+		const index = new SubagentIndex({ artifactsDir });
+		const outputPath = path.join(artifactsDir, "2-Implement.md");
+
+		index.ingestTaskResults([
+			{
+				...buildTaskResult({ id: "2-Implement", outputPath }),
+				sessionId: "sess-child-1234567890",
+				parentSessionId: "sess-parent-abcdef",
+				mcpServers: ["augment", "github"],
+				tools: ["read", "grep", "submit_result"],
+				abortReason: "User stopped from flight deck: duplicate workstream",
+			} as SingleResult,
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({
+			id: "2-Implement",
+			sessionId: "sess-child-1234567890",
+			parentSessionId: "sess-parent-abcdef",
+			mcpServers: ["augment", "github"],
+			tools: ["read", "grep", "submit_result"],
+			abortReason: "User stopped from flight deck: duplicate workstream",
+		});
+	});
+
 	test("ingestTaskResults skips template boilerplate when deriving context preview", () => {
 		const index = new SubagentIndex({ artifactsDir });
 		const task = [
@@ -200,6 +226,90 @@ describe("SubagentIndex", () => {
 
 		const snapshot = index.getSnapshot();
 		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalMinusCache", tokens: 65 });
+	});
+
+	test("ingestTaskResults keeps provider, model, and last-activity metadata from live updates", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+
+		index.ingestTaskResults([
+			{
+				...buildTaskResult({ id: "5-LiveMetadata", tokens: 321, durationMs: 2_500 }),
+				status: "running",
+				provider: "anthropic",
+				model: "claude-sonnet-4-20250514",
+				lastUpdatedMs: 1_739_603_401_234,
+			} as SingleResult,
+		]);
+
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({
+			id: "5-LiveMetadata",
+			status: "running",
+			provider: "anthropic",
+			model: "claude-sonnet-4-20250514",
+			lastUpdatedMs: 1_739_603_401_234,
+		});
+	});
+
+	test("ingestTaskResults marks user-stopped aborts distinctly from generic cancellation", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "6-UserStopped",
+				aborted: true,
+				abortReason: "User stopped: waiting on product decision",
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({
+			id: "6-UserStopped",
+			status: "user_stopped",
+			abortReason: "User stopped: waiting on product decision",
+		});
+	});
+
+
+	test("live activity updates do not reshuffle running subagents that already have startedAt order", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			{
+				...buildTaskResult({ id: "z-older", tokens: 11, durationMs: 10 }),
+				status: "running",
+				startedAt: 1_000,
+				lastUpdatedMs: 1_100,
+			} as SingleResult,
+			{
+				...buildTaskResult({ id: "a-newer", tokens: 22, durationMs: 20 }),
+				status: "running",
+				startedAt: 2_000,
+				lastUpdatedMs: 2_100,
+			} as SingleResult,
+		]);
+
+		expect(index.getSnapshot().refs.map(ref => ref.id)).toEqual(["a-newer", "z-older"]);
+		expect(index.getSnapshot().groups.map(group => group.rootId)).toEqual(["a-newer", "z-older"]);
+
+		index.ingestTaskResults([
+			{
+				...buildTaskResult({ id: "z-older", tokens: 33, durationMs: 30 }),
+				status: "running",
+				startedAt: 1_000,
+				lastUpdatedMs: 9_999,
+			} as SingleResult,
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs.map(ref => ref.id)).toEqual(["a-newer", "z-older"]);
+		expect(snapshot.groups.map(group => group.rootId)).toEqual(["a-newer", "z-older"]);
+		expect(snapshot.refs.find(ref => ref.id === "z-older")).toMatchObject({
+			lastUpdatedMs: 9_999,
+			tokens: 33,
+		});
 	});
 
 	test("ingesting live and final updates for same id keeps a single grouped ref", () => {

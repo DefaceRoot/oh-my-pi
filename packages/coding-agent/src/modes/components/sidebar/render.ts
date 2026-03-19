@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { truncateToWidth } from "@oh-my-pi/pi-tui";
 import chalk from "chalk";
+import { getSubagentOutcomeLabel, type SubagentOutcome } from "../../../task/subagent-outcome";
 import type {
 	SidebarLspServer,
 	SidebarMcpServer,
@@ -42,6 +43,21 @@ function formatCompactTokens(value: number): string {
 function formatSubagentTokenSuffix(tokens?: number): string {
 	if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens <= 0) return "";
 	return chalk.dim(` · ${formatCompactTokens(tokens)} tok`);
+}
+
+function formatSubagentOutcomeSuffix(outcome?: SubagentOutcome): string {
+	if (!outcome) return "";
+	const label = getSubagentOutcomeLabel(outcome.status);
+	switch (outcome.status) {
+		case "pass":
+			return ` ${chalk.green(`[${label}]`)}`;
+		case "fail":
+			return ` ${chalk.red(`[${label}]`)}`;
+		case "go":
+			return ` ${chalk.green(`[${label}]`)}`;
+		case "no_go":
+			return ` ${chalk.red(`[${label}]`)}`;
+	}
 }
 
 function renderTokenLine(tokens: SidebarTokenSection): string {
@@ -88,20 +104,30 @@ function renderTodoLine(todo: SidebarTodoItem, frame?: number): string {
 	}
 }
 
-function renderSubagentLine(status: SidebarSubagent["status"], label: string, tokens?: number, prefix = ""): string {
+function renderSubagentLine(
+	status: SidebarSubagent["status"],
+	label: string,
+	tokens?: number,
+	outcome?: SubagentOutcome,
+	prefix = "",
+): string {
 	const tokenSuffix = formatSubagentTokenSuffix(tokens);
+	const outcomeSuffix = formatSubagentOutcomeSuffix(outcome);
 	if (status === "running") {
-		return `${prefix}${chalk.cyan("◐")} ${chalk.cyan(label)}${tokenSuffix}`;
+		return `${prefix}${chalk.cyan("◐")} ${chalk.cyan(label)}${tokenSuffix}${outcomeSuffix}`;
+	}
+	if (status === "user_stopped") {
+		return `${prefix}${chalk.yellow("■")} ${chalk.yellow(label)}${tokenSuffix}${outcomeSuffix}`;
 	}
 	if (status === "failed") {
-		return `${prefix}${chalk.red("✗")} ${label}${tokenSuffix}`;
+		return `${prefix}${chalk.red("✗")} ${label}${tokenSuffix}${outcomeSuffix}`;
 	}
 
-	return `${chalk.gray(`${prefix}${chalk.green("✓")} ${label}`)}${tokenSuffix}`;
+	return `${chalk.gray(`${prefix}${chalk.green("✓")} ${label}`)}${tokenSuffix}${outcomeSuffix}`;
 }
 
 function renderSubagentLines(subagent: SidebarSubagent): string[] {
-	const lines = [renderSubagentLine(subagent.status, subagent.agentName, subagent.tokens)];
+	const lines = [renderSubagentLine(subagent.status, subagent.agentName, subagent.tokens, subagent.outcome)];
 	if (subagent.title) {
 		lines.push(`   ${chalk.dim(subagent.title)}`);
 	}
@@ -110,7 +136,7 @@ function renderSubagentLines(subagent: SidebarSubagent): string[] {
 	for (let index = 0; index < children.length; index += 1) {
 		const child = children[index]!;
 		const branch = index === children.length - 1 ? "└─ " : "├─ ";
-		lines.push(renderSubagentLine(child.status, child.agentName, child.tokens, `  ${branch}`));
+		lines.push(renderSubagentLine(child.status, child.agentName, child.tokens, child.outcome, `  ${branch}`));
 	}
 
 	return lines;

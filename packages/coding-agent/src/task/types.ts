@@ -2,6 +2,8 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { TaskSubagentStopRequest } from "./subagent-stop-request";
+import type { SubagentOutcome } from "./subagent-outcome";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -30,6 +32,9 @@ export const TASK_SUBAGENT_EVENT_CHANNEL = "task:subagent:event";
 
 /** EventBus channel for aggregated subagent progress */
 export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
+
+/** EventBus channel for targeted subagent stop requests from the UI */
+export const TASK_SUBAGENT_STOP_REQUEST_CHANNEL = "task:subagent:stop-request";
 
 /** Single task item for parallel execution */
 export const taskItemSchema = Type.Object({
@@ -153,7 +158,20 @@ export interface AgentProgress {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
+	startedAt?: number;
+	lastUpdatedMs?: number;
+	provider?: string;
+	model?: string;
 	modelOverride?: string | string[];
+	sessionId?: string;
+	parentAgentName?: string;
+	thinkingLevel?: string;
+	tokenCapacity?: number;
+	toolNames?: string[];
+	mcpServers?: string[];
+	mcpAllowlist?: string[];
+	abortReason?: string;
+	outcome?: SubagentOutcome;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 }
@@ -173,10 +191,22 @@ export interface SingleResult {
 	truncated: boolean;
 	durationMs: number;
 	tokens: number;
+	startedAt?: number;
+	lastUpdatedMs?: number;
+	provider?: string;
+	model?: string;
 	modelOverride?: string | string[];
+	sessionId?: string;
+	parentAgentName?: string;
+	thinkingLevel?: string;
+	tokenCapacity?: number;
+	toolNames?: string[];
+	mcpServers?: string[];
+	mcpAllowlist?: string[];
 	error?: string;
 	aborted?: boolean;
 	abortReason?: string;
+	outcome?: SubagentOutcome;
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
 	/** Output path for the task result */
@@ -192,6 +222,8 @@ export interface SingleResult {
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
 }
+
+export type { TaskSubagentStopRequest };
 
 /** Tool details for TUI rendering */
 export interface TaskToolDetails {

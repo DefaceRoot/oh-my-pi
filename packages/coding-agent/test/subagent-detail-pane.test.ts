@@ -234,9 +234,29 @@ describe("SubagentDetailPane", () => {
 			expect(text).toContain("2");
 		});
 
+		test("renders parent session id and enabled MCP servers", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					parentSessionId: "root-session-1234",
+					mcpServers: ["augment", "github"],
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Parent Session:");
+			expect(text).toContain("root-session-1234");
+			expect(text).toContain("MCP:");
+			expect(text).toContain("augment, github");
+		});
+
 		test("omits session section when all context fields are missing", () => {
 			const pane = new SubagentDetailPane(
-				makeFullRef({ sessionId: undefined, parentAgentName: undefined, depth: undefined }),
+				makeFullRef({
+					sessionId: undefined,
+					parentSessionId: undefined,
+					parentAgentName: undefined,
+					depth: undefined,
+					mcpServers: undefined,
+				}),
 			);
 			const text = renderText(pane);
 			expect(text).not.toContain("Session");

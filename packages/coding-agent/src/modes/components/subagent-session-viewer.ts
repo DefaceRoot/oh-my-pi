@@ -1,5 +1,7 @@
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { type Component, matchesKey, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { getSubagentOutcomeLabel, getSubagentOutcomeTone, type SubagentOutcome } from "../../task/subagent-outcome";
+import { formatDuration } from "../../tools/render-utils";
 import type { SubagentStatus } from "../subagent-view/types";
 import { theme } from "../theme/theme";
 
@@ -8,12 +10,22 @@ const MIN_BODY_HEIGHT = 4;
 
 export interface SubagentSessionViewerMetadata {
 	agentName?: string;
+	subagentId?: string;
+	sessionId?: string;
 	role?: string;
+	provider?: string;
 	model?: string;
 	tokens?: number;
 	tokenCapacity?: number;
 	status?: SubagentStatus;
 	thinkingLevel?: string;
+	elapsedMs?: number;
+	toolNames?: string[];
+	mcpServers?: string[];
+	mcpAllowlist?: string[];
+	abortReason?: string;
+	outcome?: SubagentOutcome;
+	canStop?: boolean;
 }
 
 export interface SubagentSessionViewerContent {
@@ -30,6 +42,7 @@ export interface SubagentSessionViewerOptions {
 	onNavigateRoot: (direction: 1 | -1) => void;
 	onNavigateNested: (direction: 1 | -1) => void;
 	onCycleAgentMode: () => void;
+	onStop?: () => void;
 }
 
 function renderStatusGlyph(status?: SubagentStatus): string {
@@ -42,6 +55,8 @@ function renderStatusGlyph(status?: SubagentStatus): string {
 			return `${theme.fg("error", "✗")} ${theme.fg("error", "FAILED")}`;
 		case "cancelled":
 			return `${theme.fg("muted", "⊘")} ${theme.fg("muted", "CANCELLED")}`;
+		case "user_stopped":
+			return `${theme.fg("warning", "⏹")} ${theme.fg("warning", "USER STOPPED")}`;
 		default:
 			return `${theme.fg("dim", "◌")} ${theme.fg("dim", "PENDING")}`;
 	}
@@ -49,9 +64,24 @@ function renderStatusGlyph(status?: SubagentStatus): string {
 
 function formatTokenCount(tokens?: number): string {
 	if (tokens == null) return "---";
-	if (tokens < 1000) return String(tokens);
-	if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`;
-	return `${(tokens / 1_000_000).toFixed(1)}M`;
+	return new Intl.NumberFormat("en-US").format(Math.max(0, Math.round(tokens)));
+}
+
+function formatList(items?: string[], emptyLabel = "---"): string {
+	if (!items || items.length === 0) return emptyLabel;
+	return items.join(", ");
+}
+
+function sanitizeList(items?: string[]): string[] | undefined {
+	if (!items) return undefined;
+	const sanitized = items.map(item => sanitizeText(item)).filter((item): item is string => item.length > 0);
+	return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function extractSubagentOrdinal(subagentId?: string): string | undefined {
+	if (!subagentId) return undefined;
+	const match = subagentId.match(/^(\d+)/);
+	return match?.[1];
 }
 
 export class SubagentSessionViewerComponent implements Component {
@@ -74,6 +104,7 @@ export class SubagentSessionViewerComponent implements Component {
 	readonly #onNavigateRoot: (direction: 1 | -1) => void;
 	readonly #onNavigateNested: (direction: 1 | -1) => void;
 	readonly #onCycleAgentMode: () => void;
+	readonly #onStop?: () => void;
 
 	constructor(options: SubagentSessionViewerOptions) {
 		this.#getTerminalRows = options.getTerminalRows;
@@ -82,6 +113,7 @@ export class SubagentSessionViewerComponent implements Component {
 		this.#onNavigateRoot = options.onNavigateRoot;
 		this.#onNavigateNested = options.onNavigateNested;
 		this.#onCycleAgentMode = options.onCycleAgentMode;
+		this.#onStop = options.onStop;
 	}
 
 	setContent(content: SubagentSessionViewerContent): void {
@@ -95,9 +127,32 @@ export class SubagentSessionViewerComponent implements Component {
 						...content.metadata,
 						agentName: content.metadata.agentName != null ? sanitizeText(content.metadata.agentName) : undefined,
 						role: content.metadata.role != null ? sanitizeText(content.metadata.role) : undefined,
+						subagentId:
+							content.metadata.subagentId != null ? sanitizeText(content.metadata.subagentId) : undefined,
+						sessionId: content.metadata.sessionId != null ? sanitizeText(content.metadata.sessionId) : undefined,
+						provider: content.metadata.provider != null ? sanitizeText(content.metadata.provider) : undefined,
 						model: content.metadata.model != null ? sanitizeText(content.metadata.model) : undefined,
 						thinkingLevel:
 							content.metadata.thinkingLevel != null ? sanitizeText(content.metadata.thinkingLevel) : undefined,
+						elapsedMs: content.metadata.elapsedMs,
+						toolNames: sanitizeList(content.metadata.toolNames),
+						mcpServers: sanitizeList(content.metadata.mcpServers),
+						mcpAllowlist: sanitizeList(content.metadata.mcpAllowlist),
+						abortReason:
+							content.metadata.abortReason != null ? sanitizeText(content.metadata.abortReason) : undefined,
+						outcome: content.metadata.outcome
+							? {
+									...content.metadata.outcome,
+									label:
+										content.metadata.outcome.label != null
+											? sanitizeText(content.metadata.outcome.label)
+											: undefined,
+									summary:
+										content.metadata.outcome.summary != null
+											? sanitizeText(content.metadata.outcome.summary)
+											: undefined,
+								}
+							: undefined,
 					}
 				: undefined,
 		};
@@ -174,6 +229,10 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 		if (keyData === "a" || keyData === "A") {
 			this.#onCycleAgentMode();
+			return;
+		}
+		if ((keyData === "s" || keyData === "S") && this.#content.metadata?.canStop) {
+			this.#onStop?.();
 		}
 	}
 
@@ -231,45 +290,97 @@ export class SubagentSessionViewerComponent implements Component {
 
 		const hasContent =
 			meta.agentName ||
+			meta.subagentId ||
+			meta.sessionId ||
 			meta.role ||
+			meta.provider ||
 			meta.model ||
 			meta.tokens != null ||
 			meta.tokenCapacity != null ||
 			meta.status ||
-			meta.thinkingLevel;
+			meta.thinkingLevel ||
+			meta.elapsedMs != null ||
+			(meta.toolNames?.length ?? 0) > 0 ||
+			(meta.mcpServers?.length ?? 0) > 0 ||
+			(meta.mcpAllowlist?.length ?? 0) > 0 ||
+			meta.outcome ||
+			meta.abortReason;
 		if (!hasContent) return [];
-
 		const lines: string[] = [];
-		const sessionLabel = meta.agentName ? `Subagent: ${meta.agentName}` : "Subagent Session";
-		lines.push(` ${theme.bold(theme.fg("accent", sessionLabel))}`);
+		const ordinal = extractSubagentOrdinal(meta.subagentId);
+		const titleLabel = ordinal ? `Subagent #${ordinal}` : "Subagent Session";
+		const titleSuffix = meta.agentName ? ` ${theme.fg("text", `· ${meta.agentName}`)}` : "";
+		lines.push(` ${theme.bold(theme.fg("accent", `${titleLabel}${titleSuffix}`))}`);
+		if (meta.subagentId) {
+			lines.push(` ${theme.fg("dim", "Subagent ID")} ${theme.fg("text", meta.subagentId)}`);
+		}
+		if (meta.sessionId) {
+			lines.push(` ${theme.fg("dim", "OMP Session")} ${theme.fg("text", meta.sessionId)}`);
+		}
 		lines.push(` ${theme.fg("dim", "Status")} ${renderStatusGlyph(meta.status)}`);
-
 		const infoParts: string[] = [];
 		if (meta.role) infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", meta.role)}`);
+		if (meta.provider) infoParts.push(`${theme.fg("dim", "Provider")} ${theme.fg("text", meta.provider)}`);
 		if (meta.model) infoParts.push(`${theme.fg("dim", "Model")} ${theme.fg("text", meta.model)}`);
 		if (infoParts.length > 0) {
 			lines.push(` ${infoParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}
-
 		const stats: string[] = [];
 		if (meta.tokens != null) {
 			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", formatTokenCount(meta.tokens))}`);
 		}
+		if (meta.tokenCapacity != null) {
+			stats.push(`${theme.fg("dim", "Capacity")} ${theme.fg("text", formatTokenCount(meta.tokenCapacity))}`);
+		}
 		if (meta.thinkingLevel) {
 			stats.push(`${theme.fg("dim", "Thinking")} ${theme.fg("text", meta.thinkingLevel)}`);
 		}
+		if (meta.elapsedMs != null) {
+			stats.push(`${theme.fg("dim", "Elapsed")} ${theme.fg("text", formatDuration(meta.elapsedMs))}`);
+		}
 		if (stats.length > 0) {
 			lines.push(` ${stats.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+		}
+		const toolCount = meta.toolNames?.length ?? 0;
+		if (toolCount > 0 || (meta.mcpServers?.length ?? 0) > 0 || (meta.mcpAllowlist?.length ?? 0) > 0) {
+			const detailParts: string[] = [];
+			if (toolCount > 0) {
+				detailParts.push(`${theme.fg("dim", "Tools")} ${theme.fg("text", String(toolCount))}`);
+			}
+			if (meta.mcpServers?.length) {
+				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(meta.mcpServers))}`);
+			}
+			if (meta.mcpAllowlist?.length) {
+				detailParts.push(`${theme.fg("dim", "Allowlist")} ${theme.fg("text", formatList(meta.mcpAllowlist))}`);
+			}
+			lines.push(` ${detailParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+		}
+		if (meta.abortReason) {
+			lines.push(` ${theme.fg("dim", "Abort")} ${theme.fg("warning", meta.abortReason)}`);
+		}
+		if (meta.outcome) {
+			const outcomeLabel = getSubagentOutcomeLabel(meta.outcome.status);
+			const outcomeTone = getSubagentOutcomeTone(meta.outcome.status);
+			const outcomeParts = [`${theme.fg("dim", "Outcome")} ${theme.fg(outcomeTone, outcomeLabel)}`];
+			if (meta.outcome.summary) {
+				outcomeParts.push(theme.fg("dim", truncateToWidth(meta.outcome.summary, 80)));
+			}
+			lines.push(` ${outcomeParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+		}
+		if (meta.canStop) {
+			lines.push(` ${theme.fg("dim", "Action")} ${theme.fg("warning", "S stop")}`);
 		}
 
 		return lines;
 	}
 
 	#footerControlsLine(): string {
-		return theme.fg(
-			"dim",
-			`↑↓/j/k scroll  PgUp/PgDn page  Home/End  ←/→ task  Tab/Shift+Tab nested  ${this.#leaderKey} close`,
-		);
+		const controls = ["↑↓/j/k scroll", "PgUp/PgDn page", "Home/End", "←/→ task", "Tab/Shift+Tab nested"];
+		if (this.#content.metadata?.canStop) {
+			controls.push("S stop");
+		}
+		controls.push(`${this.#leaderKey} close`);
+		return theme.fg("dim", controls.join("  "));
 	}
 
 	#footerRowCount(innerWidth: number): number {
@@ -303,7 +414,10 @@ export class SubagentSessionViewerComponent implements Component {
 		}
 		const rawRows = this.#content.renderTranscriptLines(innerWidth);
 		const safeRows = rawRows.filter((line): line is string => typeof line === "string");
-		const wrappedRows = this.#wrapLines(safeRows.length > 0 ? safeRows : [theme.fg("dim", "(no transcript content)")], innerWidth);
+		const wrappedRows = this.#wrapLines(
+			safeRows.length > 0 ? safeRows : [theme.fg("dim", "(no transcript content)")],
+			innerWidth,
+		);
 		this.#cachedBodyRows = wrappedRows;
 		this.#cachedBodyWidth = innerWidth;
 		this.#cachedBodyVersion = this.#contentVersion;

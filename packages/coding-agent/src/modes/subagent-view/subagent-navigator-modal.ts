@@ -1,4 +1,7 @@
 import { Container, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { parseModelString } from "../../config/model-resolver";
+import { getSubagentOutcomeLabel, type SubagentOutcome } from "../../task/subagent-outcome";
+import { formatDuration } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
 import type { SubagentNavigatorSelection, SubagentStatus, SubagentViewGroup, SubagentViewRef } from "./types";
 
@@ -6,6 +9,7 @@ const MAX_VISIBLE_ROWS = 18;
 const MIN_INDEX_WIDTH = 3;
 const MIN_TITLE_WIDTH = 12;
 const MIN_STATUS_WIDTH = 10;
+const MIN_RESULT_WIDTH = 7;
 const MIN_ROLE_WIDTH = 8;
 const MIN_MODEL_WIDTH = 12;
 const MIN_LAST_ACTIVE_WIDTH = 9;
@@ -27,6 +31,7 @@ interface NavigatorColumns {
 	indexW: number;
 	titleW: number;
 	statusW: number;
+	resultW: number;
 	roleW: number;
 	modelW: number;
 	lastActiveW: number;
@@ -42,7 +47,7 @@ interface StatusDisplay {
 	color: StatusColor;
 }
 
-const STATUS_ORDER: SubagentStatus[] = ["running", "completed", "failed", "pending", "cancelled"];
+const STATUS_ORDER: SubagentStatus[] = ["running", "completed", "failed", "pending", "user_stopped", "cancelled"];
 
 export class SubagentNavigatorModal extends Container {
 	#groups: SubagentViewGroup[] = [];
@@ -56,6 +61,7 @@ export class SubagentNavigatorModal extends Container {
 
 	readonly #onSelectionChange: (selection: SubagentNavigatorSelection) => void;
 	readonly #onOpenSelection: (selection: SubagentNavigatorSelection) => void;
+	readonly #onStopSelection?: (selection: SubagentNavigatorSelection) => void;
 	readonly #onClose: () => void;
 
 	constructor(
@@ -64,12 +70,14 @@ export class SubagentNavigatorModal extends Container {
 		options: {
 			onSelectionChange: (selection: SubagentNavigatorSelection) => void;
 			onOpenSelection: (selection: SubagentNavigatorSelection) => void;
+			onStopSelection?: (selection: SubagentNavigatorSelection) => void;
 			onClose: () => void;
 		},
 	) {
 		super();
 		this.#onSelectionChange = options.onSelectionChange;
 		this.#onOpenSelection = options.onOpenSelection;
+		this.#onStopSelection = options.onStopSelection;
 		this.#onClose = options.onClose;
 		this.setGroups(groups, selection);
 	}
@@ -121,10 +129,11 @@ export class SubagentNavigatorModal extends Container {
 	render(width: number): string[] {
 		const safeWidth = Math.max(3, width);
 		const innerWidth = Math.max(1, safeWidth - 2);
-
+		const selectionRows = this.#renderSelectionSummary(innerWidth);
 		const bodyLines = this.#renderBody(innerWidth);
 		const lines = [
 			this.#renderTopBorder(innerWidth),
+			...selectionRows.map(line => this.#frameSummaryRow(line, innerWidth)),
 			...bodyLines.map(line => this.#frameRow(line, innerWidth)),
 			this.#frameRow(theme.fg("dim", this.#buildFooterHint()), innerWidth),
 			this.#renderBottomBorder(innerWidth),
@@ -143,6 +152,13 @@ export class SubagentNavigatorModal extends Container {
 		}
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.#onOpenSelection(this.getSelection());
+			return;
+		}
+		if (keyData === "s" || keyData === "S") {
+			const selected = this.#currentSelectionEntry();
+			if (selected && this.#isSelectionStoppable(selected.ref)) {
+				this.#onStopSelection?.(this.getSelection());
+			}
 			return;
 		}
 		if (keyData === "/") {
@@ -333,9 +349,53 @@ export class SubagentNavigatorModal extends Container {
 		return lines;
 	}
 
+	#renderSelectionSummary(width: number): string[] {
+		const selected = this.#currentSelectionEntry();
+		if (!selected) return [];
+
+		const ref = selected.ref;
+		const lines: string[] = [];
+		lines.push(theme.bold(theme.fg("accent", `Selected ${this.#resolveTitle(ref)}`)));
+
+		const infoParts: string[] = [];
+		infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", ref.agent ?? "task")}`);
+		infoParts.push(`${theme.fg("dim", "Status")} ${renderStatusCell(ref.status)}`);
+		if (ref.sessionId) {
+			infoParts.push(`${theme.fg("dim", "OMP")} ${theme.fg("text", ref.sessionId)}`);
+		}
+		infoParts.push(`${theme.fg("dim", "ID")} ${theme.fg("text", ref.id)}`);
+		lines.push(infoParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `));
+
+		const detailParts: string[] = [];
+		if (ref.mcpServers?.length) {
+			detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(ref.mcpServers))}`);
+		}
+		if (ref.toolNames?.length) {
+			detailParts.push(`${theme.fg("dim", "Tools")} ${theme.fg("text", String(ref.toolNames.length))}`);
+		}
+		if (typeof ref.elapsedMs === "number" && Number.isFinite(ref.elapsedMs) && ref.elapsedMs >= 0) {
+			detailParts.push(`${theme.fg("dim", "Elapsed")} ${theme.fg("text", formatDuration(ref.elapsedMs))}`);
+		}
+		const outcomeSummary = formatOutcomeSummary(ref.outcome);
+		if (outcomeSummary) {
+			detailParts.push(outcomeSummary);
+		}
+		if (ref.abortReason) {
+			detailParts.push(`${theme.fg("dim", "Abort")} ${theme.fg("warning", ref.abortReason)}`);
+		}
+		if (this.#isSelectionStoppable(ref)) {
+			detailParts.push(`${theme.fg("dim", "Action")} ${theme.fg("warning", "S stop")}`);
+		}
+		if (detailParts.length > 0) {
+			lines.push(detailParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `));
+		}
+
+		return lines.map(line => truncateToWidth(line, width));
+	}
+
 	#renderHeader(width: number): string {
 		const cols = buildColumnSpec(width, this.#flatRefs.length);
-		const header = `${"#".padStart(cols.indexW)}${COLUMN_SEPARATOR}${"Title".padEnd(cols.titleW)}${COLUMN_SEPARATOR}${"Status".padEnd(cols.statusW)}${COLUMN_SEPARATOR}${"Role".padEnd(cols.roleW)}${COLUMN_SEPARATOR}${"Model".padEnd(cols.modelW)}${COLUMN_SEPARATOR}${"Last Active".padEnd(cols.lastActiveW)}${COLUMN_SEPARATOR}${"Tokens".padStart(cols.tokensW)}`;
+		const header = `${"#".padStart(cols.indexW)}${COLUMN_SEPARATOR}${"Title".padEnd(cols.titleW)}${COLUMN_SEPARATOR}${"Status".padEnd(cols.statusW)}${COLUMN_SEPARATOR}${"Result".padEnd(cols.resultW)}${COLUMN_SEPARATOR}${"Role".padEnd(cols.roleW)}${COLUMN_SEPARATOR}${"Model".padEnd(cols.modelW)}${COLUMN_SEPARATOR}${"Last Active".padEnd(cols.lastActiveW)}${COLUMN_SEPARATOR}${"Tokens".padStart(cols.tokensW)}`;
 		return theme.bold(theme.fg("accent", truncateToWidth(header, width)));
 	}
 
@@ -348,13 +408,14 @@ export class SubagentNavigatorModal extends Container {
 		const titleText = `${titlePrefix}${this.#resolveTitle(entry.ref)}`;
 		const title = padToWidth(truncateToWidth(titleText, cols.titleW), cols.titleW);
 		const status = padToWidth(truncateToWidth(renderStatusCell(entry.ref.status), cols.statusW), cols.statusW);
+		const result = padToWidth(truncateToWidth(formatOutcomeCell(entry.ref.outcome), cols.resultW), cols.resultW);
 		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "task", cols.roleW), cols.roleW);
-		const model = padToWidth(truncateToWidth(entry.ref.model ?? "default", cols.modelW), cols.modelW);
+		const model = padToWidth(truncateToWidth(formatModelCell(entry.ref.model), cols.modelW), cols.modelW);
 		const lastActiveMs = entry.ref.lastUpdatedMs ?? this.#groups[entry.groupIdx]?.lastUpdatedMs;
 		const lastActiveLabel = formatLastActive(lastActiveMs);
 		const lastActive = padToWidth(truncateToWidth(lastActiveLabel, cols.lastActiveW), cols.lastActiveW);
 		const tokens = formatTokens(entry.ref.tokens).padStart(cols.tokensW);
-		const row = `${theme.fg("text", index)}${sep}${theme.fg("text", title)}${sep}${status}${sep}${theme.fg("text", role)}${sep}${theme.fg("text", model)}${sep}${theme.fg(lastActiveLabel === "---" ? "dim" : "text", lastActive)}${sep}${theme.fg("text", tokens)}`;
+		const row = `${theme.fg("text", index)}${sep}${theme.fg("text", title)}${sep}${status}${sep}${result}${sep}${theme.fg("text", role)}${sep}${theme.fg("text", model)}${sep}${theme.fg(lastActiveLabel === "---" ? "dim" : "text", lastActive)}${sep}${theme.fg("text", tokens)}`;
 		const fitted = padToWidth(truncateToWidth(row, width), width);
 
 		if (selected) {
@@ -374,7 +435,6 @@ export class SubagentNavigatorModal extends Container {
 
 		return padToWidth(truncateToWidth(chips.join("  "), width), width);
 	}
-
 
 	#resolveTitle(ref: SubagentViewRef): string {
 		return ref.description ?? ref.contextPreview ?? extractSubagentTitleFromId(ref.id);
@@ -413,7 +473,23 @@ export class SubagentNavigatorModal extends Container {
 		if (this.#filterMode) {
 			return "Enter apply  Esc cancel";
 		}
-		return "↑↓ nav  Enter open  / filter  q quit";
+		const selected = this.#currentSelectionEntry();
+		const stopHint = selected && this.#isSelectionStoppable(selected.ref) ? "  S stop" : "";
+		return `↑↓ nav  Enter open  / filter${stopHint}  q quit`;
+	}
+
+	#currentSelectionEntry(): FlatEntry | undefined {
+		return this.#flatRefs[this.#flatIndex];
+	}
+
+	#isSelectionStoppable(ref: SubagentViewRef): boolean {
+		return ref.status === "running" || ref.status === "pending";
+	}
+
+	#frameSummaryRow(content: string, innerWidth: number): string {
+		const side = theme.fg("borderAccent", theme.boxSharp.vertical);
+		const fitted = padToWidth(truncateToWidth(content, innerWidth), innerWidth);
+		return `${side}${fitted}${side}`;
 	}
 }
 
@@ -421,18 +497,20 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 	const safeWidth = Math.max(1, width);
 	const indexW = clamp(String(Math.max(1, rowCount)).length + 1, MIN_INDEX_WIDTH, 5);
 	const statusW = MIN_STATUS_WIDTH;
+	const resultW = MIN_RESULT_WIDTH;
 	const roleW = clamp(Math.floor(safeWidth * 0.13), MIN_ROLE_WIDTH, 14);
 	const modelW = clamp(Math.floor(safeWidth * 0.2), MIN_MODEL_WIDTH, 26);
 	const lastActiveW = clamp(Math.floor(safeWidth * 0.12), MIN_LAST_ACTIVE_WIDTH, 12);
-	const separators = COLUMN_SEPARATOR.length * 6;
+	const separators = COLUMN_SEPARATOR.length * 7;
 	const titleW = Math.max(
 		MIN_TITLE_WIDTH,
-		safeWidth - indexW - statusW - roleW - modelW - lastActiveW - TOKENS_WIDTH - separators,
+		safeWidth - indexW - statusW - resultW - roleW - modelW - lastActiveW - TOKENS_WIDTH - separators,
 	);
 	return {
 		indexW,
 		titleW,
 		statusW,
+		resultW,
 		roleW,
 		modelW,
 		lastActiveW,
@@ -467,9 +545,10 @@ function getStatusDisplay(status?: SubagentStatus): StatusDisplay {
 			return { glyph: "◉", label: "DONE", summaryLabel: "done", color: "accent" };
 		case "failed":
 			return { glyph: "✗", label: "FAILED", summaryLabel: "failed", color: "error" };
+		case "user_stopped":
+			return { glyph: "⏹", label: "USER STOPPED", summaryLabel: "user stopped", color: "warning" };
 		case "cancelled":
 			return { glyph: "⊘", label: "CANCELED", summaryLabel: "canceled", color: "muted" };
-		case "pending":
 		default:
 			return { glyph: "◌", label: "PENDING", summaryLabel: "pending", color: "warning" };
 	}
@@ -485,12 +564,37 @@ function renderStatusSummaryChip(status: SubagentStatus, count: number): string 
 	return theme.fg(display.color, `${display.glyph} ${count} ${display.summaryLabel}`);
 }
 
-
 function formatTokens(tokens?: number): string {
 	if (tokens === undefined || tokens === null) return "---";
-	if (tokens < 1000) return String(tokens);
-	if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`;
-	return `${(tokens / 1_000_000).toFixed(1)}M`;
+	return new Intl.NumberFormat("en-US").format(Math.max(0, Math.round(tokens)));
+}
+
+function formatList(items?: string[], emptyLabel = "---"): string {
+	if (!items || items.length === 0) return emptyLabel;
+	return items.join(", ");
+}
+
+function formatOutcomeCell(outcome?: SubagentOutcome): string {
+	if (!outcome) return theme.fg("dim", "---");
+	const label = getSubagentOutcomeLabel(outcome.status);
+	const color = outcome.status === "pass" || outcome.status === "go" ? "success" : "error";
+	return theme.fg(color, label);
+}
+
+function formatOutcomeSummary(outcome?: SubagentOutcome): string | undefined {
+	if (!outcome) return undefined;
+	const label = getSubagentOutcomeLabel(outcome.status);
+	const color = outcome.status === "pass" || outcome.status === "go" ? "success" : "error";
+	const parts = [`${theme.fg("dim", "Result")} ${theme.fg(color, label)}`];
+	if (outcome.summary) {
+		parts.push(theme.fg("dim", outcome.summary));
+	}
+	return parts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `);
+}
+
+function formatModelCell(model?: string): string {
+	if (!model) return "default";
+	return parseModelString(model)?.id ?? model;
 }
 
 function toTrustedEpochMs(value?: number): number | undefined {

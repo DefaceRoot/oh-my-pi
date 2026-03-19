@@ -27,6 +27,8 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/review";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
+import { getSubagentOutcomeLabel, getSubagentOutcomeTone, type SubagentOutcome } from "./subagent-outcome";
+import { isUserStoppedAbortReason } from "./subagent-stop";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
 
@@ -77,6 +79,22 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
 		if (finding) findings.push(finding);
 	}
 	return findings;
+}
+
+function renderOutcomeBadge(outcome: SubagentOutcome | undefined, theme: Theme): string | undefined {
+	if (!outcome) return undefined;
+	return formatBadge(getSubagentOutcomeLabel(outcome.status), getSubagentOutcomeTone(outcome.status), theme);
+}
+
+function renderOutcomeSummaryLine(
+	outcome: SubagentOutcome | undefined,
+	continuePrefix: string,
+	theme: Theme,
+): string | undefined {
+	if (!outcome?.summary) return undefined;
+	const label = getSubagentOutcomeLabel(outcome.status);
+	const tone = getSubagentOutcomeTone(outcome.status);
+	return `${continuePrefix}${theme.fg(tone, `Result ${label}`)} ${theme.fg("dim", truncateToWidth(replaceTabs(outcome.summary), 80))}`;
 }
 
 function formatJsonScalar(value: unknown, _theme: Theme): string {
@@ -523,6 +541,10 @@ function renderAgentProgress(
 		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
+	const outcomeBadge = renderOutcomeBadge(progress.outcome, theme);
+	if (outcomeBadge) {
+		statusLine += ` ${outcomeBadge}`;
+	}
 
 	if (progress.status === "running") {
 		if (!description) {
@@ -543,6 +565,9 @@ function renderAgentProgress(
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
 		}
 	}
+	if (progress.status !== "pending" && progress.durationMs > 0) {
+		statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(progress.durationMs))}`;
+	}
 
 	lines.push(statusLine);
 
@@ -559,7 +584,7 @@ function renderAgentProgress(
 			if (progress.currentToolStartMs) {
 				const elapsed = Date.now() - progress.currentToolStartMs;
 				if (elapsed > 5000) {
-					toolLine += `${theme.sep.dot}${theme.fg("warning", formatDuration(elapsed))}`;
+					toolLine += `${theme.sep.dot}${theme.fg("warning", `tool ${formatDuration(elapsed)}`)}`;
 				}
 			}
 			lines.push(toolLine);
@@ -573,6 +598,10 @@ function renderAgentProgress(
 			}
 			lines.push(toolLine);
 		}
+	}
+	const outcomeSummaryLine = renderOutcomeSummaryLine(progress.outcome, continuePrefix, theme);
+	if (outcomeSummaryLine) {
+		lines.push(outcomeSummaryLine);
 	}
 
 	// Render extracted tool data inline (e.g., review findings)
@@ -740,6 +769,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		result.output,
 	);
 	const aborted = result.aborted ?? false;
+	const userStopped = aborted && isUserStoppedAbortReason(result.abortReason);
 	const mergeFailed = !aborted && result.exitCode === 0 && !!result.error;
 	const success = !aborted && result.exitCode === 0 && !result.error;
 	const needsWarning = Boolean(missingCompleteWarning) && success;
@@ -752,7 +782,9 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
-		? "aborted"
+		? userStopped
+			? "user stopped"
+			: "aborted"
 		: needsWarning
 			? "warning"
 			: success
@@ -770,6 +802,10 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
+	const outcomeBadge = renderOutcomeBadge(result.outcome, theme);
+	if (outcomeBadge) {
+		statusLine += ` ${outcomeBadge}`;
+	}
 	if (result.tokens > 0) {
 		statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(result.tokens)} tokens`)}`;
 	}
@@ -785,8 +821,12 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 
 	if (aborted && result.abortReason) {
 		lines.push(
-			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg("dim", truncateToWidth(replaceTabs(result.abortReason), 80))}`,
+			`${continuePrefix}${theme.fg(userStopped ? "warning" : "error", userStopped ? "user stopped" : theme.status.aborted)} ${theme.fg("dim", truncateToWidth(replaceTabs(result.abortReason), 80))}`,
 		);
+	}
+	const outcomeSummaryLine = renderOutcomeSummaryLine(result.outcome, continuePrefix, theme);
+	if (outcomeSummaryLine) {
+		lines.push(outcomeSummaryLine);
 	}
 	// Check for review result (submit_result with review schema + report_finding)
 	const completeData = result.extractedToolData?.submit_result as Array<{ data: unknown }> | undefined;

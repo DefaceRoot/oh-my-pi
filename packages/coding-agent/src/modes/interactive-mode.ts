@@ -20,6 +20,7 @@ import { $env, isEnoent, logger, parseJsonlLenient, postmortem } from "@oh-my-pi
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
+import { parseModelString } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type Settings, settings } from "../config/settings";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
@@ -32,8 +33,18 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
-import { getRecentSessions, type SessionContext, type SessionEntry, SessionManager } from "../session/session-manager";
+import {
+	getRecentSessions,
+	type SessionContext,
+	type SessionEntry,
+	type SessionInitEntry,
+	SessionManager,
+} from "../session/session-manager";
+import { stopSubagentRuntime } from "../task/subagent-runtime-registry";
+import { buildUserStoppedAbortReason } from "../task/subagent-stop";
+import { TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
+import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
 import { getDirectUsageTokens } from "../utils/usage-tokens";
@@ -152,6 +163,14 @@ interface LoadedSubagentTranscript {
 	tokens?: number;
 	contextPreview?: string;
 	skillsUsed?: string[];
+	sessionId?: string;
+	assignment?: string;
+	toolNames?: string[];
+	mcpServers?: string[];
+	mcpAllowlist?: string[];
+	contextFilePath?: string;
+	parentContext?: string;
+	delegationHistory?: string[];
 }
 
 function renderSubagentStatusBadge(): string {
@@ -160,6 +179,12 @@ function renderSubagentStatusBadge(): string {
 
 function renderSubagentStatusField(label: string, value: string, color: ThemeColor): string {
 	return `${theme.fg("dim", `${label}:`)}${theme.fg(color, value)}`;
+}
+
+function splitSubagentModelLabel(model?: string): { provider?: string; model?: string } {
+	if (!model) return {};
+	const parsed = parseModelString(model);
+	return { provider: parsed?.provider, model: parsed?.id ?? model };
 }
 
 /** Options for creating an InteractiveMode instance (for future API use) */
@@ -676,6 +701,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				agentName: ref.agent ?? "task",
 				status: this.getSidebarSubagentStatus(ref, now),
 				tokens: ref.tokens,
+				outcome: ref.outcome,
 			}));
 
 			const parentStatus = this.getSidebarSubagentGroupStatus([
@@ -690,6 +716,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				status: parentStatus,
 				title: rootRef.description ?? rootRef.contextPreview,
 				tokens: rootRef.tokens,
+				outcome: rootRef.outcome,
 				children: children.length > 0 ? children : undefined,
 			});
 		}
@@ -699,6 +726,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private getSidebarSubagentStatus(ref: SubagentViewRef, now: number): SidebarSubagent["status"] {
 		const statusFromRef = ref.status;
+		if (statusFromRef === "user_stopped") {
+			return "user_stopped";
+		}
 		if (statusFromRef === "failed" || statusFromRef === "cancelled") {
 			return "failed";
 		}
@@ -718,6 +748,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	private getSidebarSubagentGroupStatus(statuses: SidebarSubagent["status"][]): SidebarSubagent["status"] {
 		if (statuses.includes("running")) return "running";
 		if (statuses.includes("failed")) return "failed";
+		if (statuses.includes("user_stopped")) return "user_stopped";
 		return "completed";
 	}
 
@@ -1575,6 +1606,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				onOpenSelection: selection => {
 					void this.openSubagentTranscriptFromNavigator(selection);
 				},
+				onStopSelection: selection => {
+					void this.stopSubagentFromNavigatorSelection(selection);
+				},
 				onClose: () => this.exitSubagentView(),
 			},
 		);
@@ -1640,6 +1674,76 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private async openSubagentTranscriptFromNavigator(selection: SubagentNavigatorSelection): Promise<void> {
 		await this.openSubagentTranscriptFromGroups(this.subagentNavigatorGroups, selection);
+	}
+
+	private async stopSubagentFromNavigatorSelection(selection: SubagentNavigatorSelection): Promise<void> {
+		const groups = this.subagentNavigatorGroups;
+		if (groups.length === 0) return;
+		const group = groups[selection.groupIndex] ?? groups[0];
+		if (!group) return;
+		const ref = this.getSubagentSelectionRef(group, selection.nestedIndex);
+		if (!ref) return;
+		await this.stopSubagentSession(ref);
+	}
+
+	private async stopSubagentSession(ref: SubagentViewRef): Promise<void> {
+		const reason = await this.showHookInput("Why was this session stopped?", "Optional reason");
+		if (reason === undefined) return;
+
+		const abortReason = buildUserStoppedAbortReason(reason);
+		let handled = false;
+		this.session.eventBus?.emit(TASK_SUBAGENT_STOP_REQUEST_CHANNEL, {
+			id: ref.id,
+			sessionId: ref.sessionId,
+			sessionPath: ref.sessionPath,
+			reason: abortReason,
+			respond: (wasHandled: boolean) => {
+				handled = handled || wasHandled;
+			},
+		});
+		if (!handled) {
+			handled = await stopSubagentRuntime(
+				{ id: ref.id, sessionId: ref.sessionId, sessionPath: ref.sessionPath },
+				abortReason,
+			);
+		}
+		if (!handled) {
+			this.showWarning(`Unable to stop subagent '${ref.id}'.`);
+			return;
+		}
+
+		this.markSubagentAsUserStopped(ref.id, abortReason);
+		this.showStatus(`Stopping subagent ${ref.id}...`);
+		if (this.subagentViewActiveId === ref.id) {
+			await this.refreshActiveViewerTranscript();
+		} else {
+			this.ui.requestRender();
+		}
+	}
+
+	private markSubagentAsUserStopped(id: string, abortReason: string): void {
+		const now = Date.now();
+		for (const ref of this.subagentSnapshot.refs) {
+			if (ref.id !== id) continue;
+			ref.status = "user_stopped";
+			ref.abortReason = abortReason;
+			ref.lastUpdatedMs = now;
+			if (typeof ref.startedAt === "number") {
+				ref.elapsedMs = Math.max(0, now - ref.startedAt);
+			}
+		}
+		for (const group of this.subagentSnapshot.groups) {
+			for (const ref of group.refs) {
+				if (ref.id !== id) continue;
+				ref.status = "user_stopped";
+				ref.abortReason = abortReason;
+				ref.lastUpdatedMs = now;
+				if (typeof ref.startedAt === "number") {
+					ref.elapsedMs = Math.max(0, now - ref.startedAt);
+				}
+			}
+			group.lastUpdatedMs = Math.max(group.lastUpdatedMs, now);
+		}
 	}
 
 	private async openSubagentTranscriptFromGroups(
@@ -1773,15 +1877,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Called when the viewer's Esc is pressed. If a hidden navigator exists,
-	 * unhide it and hide the viewer. Otherwise, perform a full exit.
+	 * close the current viewer and return to the navigator. Otherwise, perform a full exit.
 	 */
 	private returnToNavigatorOrExit(): void {
 		if (this.subagentNavigatorComponent && this.subagentNavigatorOverlay) {
-			// Return to navigator: hide viewer, unhide navigator
-			this.subagentSessionOverlay?.setHidden(true);
+			this.subagentViewRequestToken += 1;
+			const selection = this.subagentNavigatorComponent.getSelection();
+			this.closeSubagentSessionViewer();
 			this.subagentNavigatorOverlay.setHidden(false);
 			this.subagentNestedArrowMode = false;
-			this.ui.requestRender();
+			this.applySubagentNavigatorSelection(selection);
 			return;
 		}
 		this.exitSubagentView();
@@ -1899,6 +2004,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.syncSubagentOverlaysForSnapshotChange(snapshot, reason);
 			return;
 		}
+		// Even if snapshot version hasn't changed (same refs), refresh viewer
+		// content as transcript files may have grown
+		if (this.subagentSessionViewer && this.subagentViewActiveId) {
+			await this.refreshActiveViewerTranscript();
+			return;
+		}
 		if (this.isInitialized) {
 			this.ui.requestRender();
 		}
@@ -1998,20 +2109,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		for (const ref of refs) {
 			const hierarchy = this.getSubagentHierarchy(ref.id);
 			const rootId = ref.rootId ?? hierarchy.rootId;
-			const recency = this.getSubagentRecencyScore(ref);
+			const activityScore = this.getSubagentLastActivityScore(ref);
 			const existing = groups.get(rootId);
 			if (existing) {
 				existing.refs.push(ref);
-				if (recency > existing.lastUpdatedMs) {
-					existing.lastUpdatedMs = recency;
+				if (activityScore > existing.lastUpdatedMs) {
+					existing.lastUpdatedMs = activityScore;
 				}
 				continue;
 			}
-			groups.set(rootId, { rootId, refs: [ref], lastUpdatedMs: recency });
+			groups.set(rootId, { rootId, refs: [ref], lastUpdatedMs: activityScore });
 		}
 
 		const sortedGroups = Array.from(groups.values()).sort((a, b) => {
-			if (b.lastUpdatedMs !== a.lastUpdatedMs) return b.lastUpdatedMs - a.lastUpdatedMs;
+			const sortDelta = this.getSubagentGroupSortScore(b) - this.getSubagentGroupSortScore(a);
+			if (sortDelta !== 0) return sortDelta;
 			return a.rootId.localeCompare(b.rootId);
 		});
 
@@ -2032,6 +2144,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private getSubagentRootRef(group: SubagentViewGroup): SubagentViewRef | undefined {
 		return group.refs.find(ref => ref.id === group.rootId) ?? group.refs[0];
+	}
+
+	private getSubagentGroupSortScore(group: SubagentViewGroup): number {
+		const rootRef = this.getSubagentRootRef(group);
+		if (rootRef) return this.getSubagentRecencyScore(rootRef);
+		let best = 0;
+		for (const ref of group.refs) {
+			best = Math.max(best, this.getSubagentRecencyScore(ref));
+		}
+		return best;
 	}
 
 	private getSubagentNestedRefs(group: SubagentViewGroup): SubagentViewRef[] {
@@ -2113,7 +2235,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	private getSubagentRecencyScore(ref: SubagentViewRef): number {
-		return ref.lastUpdatedMs ?? ref.lastSeenOrder ?? 0;
+		return ref.startedAt ?? ref.lastUpdatedMs ?? ref.lastSeenOrder ?? 0;
+	}
+
+	private getSubagentLastActivityScore(ref: SubagentViewRef): number {
+		return ref.lastUpdatedMs ?? ref.lastSeenOrder ?? this.getSubagentRecencyScore(ref);
 	}
 
 	private closeSubagentSessionViewer(): void {
@@ -2123,13 +2249,78 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentSessionViewer = undefined;
 	}
 
+	private renderSubagentTextSection(title: string, bodyLines: string[]): string[] {
+		if (bodyLines.length === 0) return [];
+		return [
+			theme.bold(theme.fg("warning", title)),
+			...bodyLines.map(line => (line.length > 0 ? theme.fg("dim", line) : "")),
+		];
+	}
+
+	private renderSubagentHeaderField(label: string, value: string, valueColor: ThemeColor = "text"): string {
+		return `${theme.bold(theme.fg("accent", `${label}`))} ${theme.fg(valueColor, value)}`;
+	}
+
 	private renderSubagentTranscriptLines(transcript: LoadedSubagentTranscript, width: number): string[] {
-		const fallbackLines = transcript.content.split("\n");
-		if (!transcript.sessionContext || transcript.sessionContext.messages.length === 0) {
-			return fallbackLines.length > 0 ? fallbackLines : [theme.fg("dim", "(no transcript content)")];
+		const lines: string[] = [];
+		const pushSection = (title: string, bodyLines: string[]) => {
+			const section = this.renderSubagentTextSection(title, bodyLines);
+			if (section.length === 0) return;
+			if (lines.length > 0) lines.push("");
+			lines.push(...section);
+		};
+		const fallbackLines = transcript.content.split("\n").filter(line => line.length > 0);
+
+		pushSection("Parent Session Context", transcript.parentContext?.split("\n").map(line => line.trimEnd()) ?? []);
+		pushSection("Assignment", transcript.assignment?.split("\n").map(line => line.trimEnd()) ?? []);
+		pushSection("Delegations", transcript.delegationHistory ?? []);
+
+		const renderedTranscript =
+			transcript.sessionContext && transcript.sessionContext.messages.length > 0
+				? this.uiHelpers.renderSessionContextToLines(transcript.sessionContext, width)
+				: fallbackLines;
+		if (renderedTranscript.length > 0) {
+			if (lines.length > 0) lines.push("");
+			lines.push(theme.bold(theme.fg("warning", "Transcript")));
+			lines.push(...renderedTranscript);
 		}
-		const rendered = this.uiHelpers.renderSessionContextToLines(transcript.sessionContext, width);
-		return rendered.length > 0 ? rendered : fallbackLines;
+
+		return lines.length > 0 ? lines : [theme.fg("dim", "(no transcript content)")];
+	}
+
+	private buildSubagentDelegationHistory(selected: SubagentViewRef, group: SubagentViewGroup): string[] | undefined {
+		const refsById = new Map(group.refs.map(ref => [ref.id, ref]));
+		const selectedDepth = selected.depth ?? 0;
+		const descendants = group.refs.filter(
+			ref => ref.id !== selected.id && this.isSubagentDescendantOf(ref, selected.id, refsById),
+		);
+		if (descendants.length === 0) return undefined;
+		return descendants.map(ref => {
+			const relativeDepth = Math.max(0, (ref.depth ?? 0) - selectedDepth - 1);
+			const indent = "  ".repeat(Math.min(relativeDepth, 6));
+			const ordinal = this.extractSubagentOrdinal(ref.id);
+			const title = this.clipPreview(
+				ref.description ?? ref.contextPreview ?? this.extractSubagentTitleFromId(ref.id),
+				80,
+			);
+			const outcome = ref.outcome ? ` [${ref.outcome.status.replace(/_/g, "-").toUpperCase()}]` : "";
+			return `${indent}↳ (${ordinal}) ${ref.agent ?? "subagent"}${outcome} | ${title}`;
+		});
+	}
+
+	private isSubagentDescendantOf(
+		ref: SubagentViewRef,
+		ancestorId: string,
+		refsById: Map<string, SubagentViewRef>,
+	): boolean {
+		let parentId = ref.parentId;
+		const visited = new Set<string>();
+		while (parentId && !visited.has(parentId)) {
+			if (parentId === ancestorId) return true;
+			visited.add(parentId);
+			parentId = refsById.get(parentId)?.parentId;
+		}
+		return false;
 	}
 
 	private async renderSubagentSession(
@@ -2164,9 +2355,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		const visibleHierarchyLines = hierarchyLines.slice(0, maxHierarchyLines);
 		const hiddenHierarchyCount = Math.max(0, hierarchyLines.length - visibleHierarchyLines.length);
 		const agentLabel = selected.agent ?? "task";
-		const requestedModelLabel = selected.model;
-		const actualModelLabel = transcript.model;
+		const requestedModelMeta = splitSubagentModelLabel(selected.model);
+		const actualModelMeta = splitSubagentModelLabel(transcript.model);
+		const requestedModelLabel = requestedModelMeta.model;
+		const actualModelLabel = actualModelMeta.model;
 		const modelLabel = actualModelLabel ?? requestedModelLabel ?? "default";
+		const delegationHistory =
+			transcript.delegationHistory ?? this.buildSubagentDelegationHistory(selected, currentGroup);
 		const contextLabel = this.clipPreview(
 			selected.description ?? selected.contextPreview ?? transcript.contextPreview ?? "(no context)",
 			120,
@@ -2184,10 +2379,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const statusSeparator = theme.fg("statusLineSep", theme.sep.dot);
 		const nestedStatusLabel =
 			nestedCount === 0
-				? "nested 0/0 descendants (root implied)"
+				? "0/0 descendants (root implied)"
 				: isParentSelection
-					? `nested 0/${nestedCount} descendants (root implied)`
-					: `nested ${nestedPosition}/${nestedCount} descendants`;
+					? `0/${nestedCount} descendants (root implied)`
+					: `${nestedPosition}/${nestedCount} descendants`;
 		const statusAgentLabel =
 			nestedCount === 0
 				? "nested 0/0 root-implied"
@@ -2196,11 +2391,14 @@ export class InteractiveMode implements InteractiveModeContext {
 					: `${nestedPosition}/${nestedCount} ${agentLabel}`;
 		const headerLines = [
 			theme.bold(theme.fg("accent", `Subagent session ${selected.id}`)),
-			`${theme.fg("dim", "Task")} ${theme.fg("text", `${taskPosition}/${taskCount}`)} ${theme.fg("statusLineSep", theme.sep.dot)} ${theme.fg("dim", "Nested")} ${theme.fg("text", nestedStatusLabel)}`,
-			`${theme.fg("dim", "Context")} ${theme.fg("text", contextLabel)}`,
-			`${theme.fg("dim", "Skills")} ${theme.fg("text", skillsLabel)}`,
-			`${theme.fg("dim", "Source")} ${theme.fg("muted", transcript.source)}`,
-			theme.bold(theme.fg("warning", "Hierarchy")),
+			[
+				this.renderSubagentHeaderField("Task", `${taskPosition}/${taskCount}`),
+				this.renderSubagentHeaderField("Nested", nestedStatusLabel),
+			].join(` ${theme.fg("statusLineSep", theme.sep.dot)} `),
+			this.renderSubagentHeaderField("Context", contextLabel),
+			this.renderSubagentHeaderField("Skills", skillsLabel, skillsUsed.length > 0 ? "text" : "muted"),
+			this.renderSubagentHeaderField("Source", shortenPath(transcript.source), "muted"),
+			theme.bold(theme.fg("accent", "Hierarchy")),
 			...visibleHierarchyLines,
 			...(hiddenHierarchyCount > 0 ? [theme.fg("dim", `  … +${hiddenHierarchyCount} more nested subagents`)] : []),
 		];
@@ -2218,6 +2416,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				onCycleAgentMode: () => {
 					void this.inputController.cycleAgentMode();
 				},
+				onStop: () => {
+					const viewerGroups = this.getSnapshotGroups();
+					const viewerGroup = viewerGroups[this.subagentCycleIndex] ?? viewerGroups[0];
+					const currentSelection = viewerGroup
+						? this.getSubagentSelectionRef(viewerGroup, this.subagentNestedCycleIndex)
+						: undefined;
+					if (!currentSelection) return;
+					void this.stopSubagentSession(currentSelection);
+				},
 			});
 			this.subagentSessionViewer = viewer;
 			this.subagentSessionOverlay = this.ui.showOverlay(viewer, {
@@ -2229,16 +2436,33 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.subagentSessionViewer.setContent({
 			headerLines,
-			renderTranscriptLines: width => this.renderSubagentTranscriptLines(transcript, width),
+			renderTranscriptLines: width =>
+				this.renderSubagentTranscriptLines(
+					{
+						...transcript,
+						delegationHistory,
+					},
+					width,
+				),
 			nestedArrowMode: this.subagentNestedArrowMode,
 			metadata: {
 				agentName: selected.agent ?? selected.id,
+				subagentId: selected.id,
+				sessionId: transcript.sessionId ?? selected.sessionId,
 				role: selected.agent,
-				model: transcript.model ?? selected.model,
+				provider: actualModelMeta.provider ?? selected.provider,
+				model: actualModelLabel ?? requestedModelLabel,
 				tokens: selected.tokens ?? transcript.tokens,
 				tokenCapacity: selected.tokenCapacity,
 				status: selected.status,
 				thinkingLevel: selected.thinkingLevel,
+				elapsedMs: selected.elapsedMs,
+				toolNames: transcript.toolNames ?? selected.toolNames,
+				mcpServers: transcript.mcpServers ?? selected.mcpServers,
+				mcpAllowlist: transcript.mcpAllowlist ?? selected.mcpAllowlist,
+				abortReason: selected.abortReason,
+				outcome: selected.outcome,
+				canStop: selected.status === "running" || selected.status === "pending",
 			},
 		});
 		this.statusLine.setHookStatus(
@@ -2258,7 +2482,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private collectSkillNamesFromValue(value: unknown, names: Set<string>): void {
 		if (typeof value === "string") {
-			for (const match of value.matchAll(/skill:\/\/([^\/\s"'`?#]+)/g)) {
+			for (const match of value.matchAll(/skill:\/\/([^/\s"'`?#]+)/g)) {
 				const name = match[1]?.trim();
 				if (name) names.add(name);
 			}
@@ -2297,7 +2521,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!message || typeof message !== "object") return undefined;
 		const record = message as Record<string, unknown>;
 		const isSkillPrompt =
-			record.customType === SKILL_PROMPT_MESSAGE_TYPE && (record.role === "custom" || record.type === "custom_message");
+			record.customType === SKILL_PROMPT_MESSAGE_TYPE &&
+			(record.role === "custom" || record.type === "custom_message");
 		if (!isSkillPrompt) {
 			return undefined;
 		}
@@ -2348,6 +2573,41 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (normalized.length <= maxChars) return normalized;
 		return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 	}
+
+	private readSubagentStringArray(value: unknown): string[] | undefined {
+		if (!Array.isArray(value)) return undefined;
+		const items = value
+			.filter((item): item is string => typeof item === "string")
+			.map(item => item.trim())
+			.filter(item => item.length > 0);
+		return items.length > 0 ? items : undefined;
+	}
+
+	private resolveSubagentContextFilePath(contextFilePath: string | undefined): string | undefined {
+		if (!contextFilePath) return undefined;
+		if (!contextFilePath.startsWith("local://")) return contextFilePath;
+		if (!this.sessionManager) return contextFilePath;
+		return resolveLocalUrlToPath(contextFilePath, {
+			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+			getSessionId: () => this.sessionManager.getSessionId(),
+		});
+	}
+
+	private async readSubagentContextFile(contextFilePath: string | undefined): Promise<string | undefined> {
+		const resolvedPath = this.resolveSubagentContextFilePath(contextFilePath);
+		if (!resolvedPath) return undefined;
+		try {
+			return await Bun.file(resolvedPath).text();
+		} catch (error) {
+			if (isEnoent(error)) return undefined;
+			logger.warn("Failed to read subagent parent context file", {
+				path: resolvedPath,
+				error: String(error),
+			});
+			return undefined;
+		}
+	}
+
 	private sumAssistantMessageUsageTokens(entries: ReadonlyArray<unknown>): number {
 		let tokens = 0;
 		for (const entry of entries) {
@@ -2369,6 +2629,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		tokens?: number;
 		contextPreview?: string;
 		skillsUsed?: string[];
+		sessionId?: string;
+		assignment?: string;
+		toolNames?: string[];
+		mcpServers?: string[];
+		mcpAllowlist?: string[];
+		contextFilePath?: string;
 	} {
 		const entries = parseJsonlLenient<Record<string, unknown>>(rawTranscript);
 		if (entries.length === 0) {
@@ -2381,10 +2647,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		let mode = "none";
 		let modeData: Record<string, unknown> | undefined;
 		let contextPreview: string | undefined;
+		let assignment: string | undefined;
 		let tokens = 0;
+		let sessionId: string | undefined;
+		let toolNames: string[] | undefined;
+		let mcpServers: string[] | undefined;
+		let mcpAllowlist: string[] | undefined;
+		let contextFilePath: string | undefined;
 		const skillsUsed = this.extractUsedSkillNamesFromEntries(entries as SessionEntry[]);
 
 		for (const entry of entries) {
+			if (entry.type === "session" && typeof entry.id === "string" && !sessionId) {
+				sessionId = entry.id;
+				continue;
+			}
 			if (entry.type === "model_change" && typeof entry.model === "string") {
 				model = entry.model;
 				continue;
@@ -2402,8 +2678,20 @@ export class InteractiveMode implements InteractiveModeContext {
 				continue;
 			}
 
-			if (entry.type === "session_init" && typeof entry.task === "string" && !contextPreview) {
-				contextPreview = extractTaskContextPreview(entry.task);
+			if (entry.type === "session_init" && typeof entry.task === "string") {
+				assignment ??= entry.task;
+				contextPreview ??= extractTaskContextPreview(entry.task);
+				sessionId =
+					(typeof entry.sessionId === "string" && entry.sessionId.trim().length > 0
+						? entry.sessionId
+						: sessionId) ?? sessionId;
+				toolNames = this.readSubagentStringArray(entry.tools) ?? toolNames;
+				mcpServers = this.readSubagentStringArray(entry.mcpServers) ?? mcpServers;
+				mcpAllowlist = this.readSubagentStringArray(entry.mcpAllowlist) ?? mcpAllowlist;
+				contextFilePath =
+					typeof entry.contextFile === "string" && entry.contextFile.trim().length > 0
+						? entry.contextFile
+						: contextFilePath;
 				continue;
 			}
 
@@ -2437,6 +2725,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				tokens: tokens > 0 ? tokens : undefined,
 				contextPreview,
 				skillsUsed,
+				sessionId,
+				assignment,
+				toolNames,
+				mcpServers,
+				mcpAllowlist,
+				contextFilePath: this.resolveSubagentContextFilePath(contextFilePath),
 			};
 		}
 
@@ -2455,64 +2749,115 @@ export class InteractiveMode implements InteractiveModeContext {
 			tokens: tokens > 0 ? tokens : undefined,
 			contextPreview,
 			skillsUsed,
+			sessionId,
+			assignment,
+			toolNames,
+			mcpServers,
+			mcpAllowlist,
+			contextFilePath: this.resolveSubagentContextFilePath(contextFilePath),
 		};
 	}
 
 	private async loadSubagentTranscript(ref: SubagentViewRef): Promise<LoadedSubagentTranscript | undefined> {
-		if (ref.sessionPath && (await Bun.file(ref.sessionPath).exists())) {
-			const rawTranscript = await Bun.file(ref.sessionPath).text();
+		if (ref.sessionPath) {
 			try {
-				const subSession = await SessionManager.open(ref.sessionPath);
-				const entries = subSession.getEntries();
-				const latestModelEntry = [...entries].reverse().find(entry => entry.type === "model_change");
-				const sessionInitEntry = entries.find(entry => entry.type === "session_init");
-				const latestModel = latestModelEntry?.type === "model_change" ? latestModelEntry.model : undefined;
-				const sessionTask = sessionInitEntry?.type === "session_init" ? sessionInitEntry.task : undefined;
-				const skillsUsed = this.extractUsedSkillNamesFromEntries(entries);
-				const tokensTotal = this.sumAssistantMessageUsageTokens(entries);
-				const tokens = tokensTotal > 0 ? tokensTotal : undefined;
-				const sessionContext = subSession.buildSessionContext();
-				if (sessionContext.messages.length === 0) {
+				const rawTranscript = await Bun.file(ref.sessionPath).text();
+				try {
+					const subSession = await SessionManager.open(ref.sessionPath);
+					const entries = subSession.getEntries();
+					const latestModelEntry = [...entries].reverse().find(entry => entry.type === "model_change");
+					const sessionInitEntry = entries.find(
+						(entry): entry is SessionInitEntry => entry.type === "session_init",
+					);
+					const latestModel = latestModelEntry?.type === "model_change" ? latestModelEntry.model : undefined;
+					const sessionTask = sessionInitEntry?.task;
+					const skillsUsed = this.extractUsedSkillNamesFromEntries(entries);
+					const tokensTotal = this.sumAssistantMessageUsageTokens(entries);
+					const tokens = tokensTotal > 0 ? tokensTotal : undefined;
+					const sessionContext = subSession.buildSessionContext();
+					const header = subSession.getHeader();
+					const contextFilePath = this.resolveSubagentContextFilePath(sessionInitEntry?.contextFile);
+					const parentContext = await this.readSubagentContextFile(contextFilePath);
+
+					if (sessionContext.messages.length === 0) {
+						const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
+						return {
+							source: ref.sessionPath,
+							content: rawTranscript,
+							sessionContext: fallback.sessionContext,
+							model: latestModel ?? fallback.model,
+							tokens: fallback.tokens ?? tokens,
+							contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : fallback.contextPreview,
+							skillsUsed: skillsUsed ?? fallback.skillsUsed,
+							sessionId: sessionInitEntry?.sessionId ?? header?.id ?? fallback.sessionId ?? ref.sessionId,
+							assignment: sessionTask ?? fallback.assignment,
+							toolNames: sessionInitEntry?.tools ?? fallback.toolNames,
+							mcpServers: sessionInitEntry?.mcpServers ?? fallback.mcpServers,
+							mcpAllowlist: sessionInitEntry?.mcpAllowlist ?? fallback.mcpAllowlist,
+							contextFilePath: contextFilePath ?? fallback.contextFilePath,
+							parentContext: parentContext ?? (await this.readSubagentContextFile(fallback.contextFilePath)),
+						};
+					}
+
+					return {
+						source: ref.sessionPath,
+						content: rawTranscript,
+						sessionContext,
+						model: latestModel,
+						tokens,
+						contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : undefined,
+						skillsUsed,
+						sessionId: sessionInitEntry?.sessionId ?? header?.id ?? ref.sessionId,
+						assignment: sessionTask,
+						toolNames: sessionInitEntry?.tools,
+						mcpServers: sessionInitEntry?.mcpServers,
+						mcpAllowlist: sessionInitEntry?.mcpAllowlist,
+						contextFilePath,
+						parentContext,
+					};
+				} catch {
 					const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
 					return {
 						source: ref.sessionPath,
 						content: rawTranscript,
 						sessionContext: fallback.sessionContext,
-						model: latestModel ?? fallback.model,
-						tokens: fallback.tokens ?? tokens,
-						contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : fallback.contextPreview,
-						skillsUsed: skillsUsed ?? fallback.skillsUsed,
+						model: fallback.model,
+						tokens: fallback.tokens,
+						contextPreview: fallback.contextPreview,
+						skillsUsed: fallback.skillsUsed,
+						sessionId: fallback.sessionId ?? ref.sessionId,
+						assignment: fallback.assignment,
+						toolNames: fallback.toolNames,
+						mcpServers: fallback.mcpServers,
+						mcpAllowlist: fallback.mcpAllowlist,
+						contextFilePath: fallback.contextFilePath,
+						parentContext: await this.readSubagentContextFile(fallback.contextFilePath),
 					};
 				}
-
-				return {
-					source: ref.sessionPath,
-					content: rawTranscript,
-					sessionContext,
-					model: latestModel,
-					tokens,
-					contextPreview: sessionTask ? extractTaskContextPreview(sessionTask) : undefined,
-					skillsUsed,
-				};
-			} catch {
-				const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
-				return {
-					source: ref.sessionPath,
-					content: rawTranscript,
-					sessionContext: fallback.sessionContext,
-					model: fallback.model,
-					tokens: fallback.tokens,
-					contextPreview: fallback.contextPreview,
-					skillsUsed: fallback.skillsUsed,
-				};
+			} catch (error) {
+				if (!isEnoent(error)) {
+					logger.warn("Failed to read subagent session transcript", {
+						path: ref.sessionPath,
+						error: String(error),
+					});
+				}
 			}
 		}
 
-		if (ref.outputPath && (await Bun.file(ref.outputPath).exists())) {
-			return {
-				source: ref.outputPath,
-				content: await Bun.file(ref.outputPath).text(),
-			};
+		if (ref.outputPath) {
+			try {
+				return {
+					source: ref.outputPath,
+					content: await Bun.file(ref.outputPath).text(),
+				};
+			} catch (error) {
+				if (!isEnoent(error)) {
+					logger.warn("Failed to read subagent output transcript", {
+						path: ref.outputPath,
+						error: String(error),
+					});
+				}
+			}
 		}
 
 		if (ref.sessionPath) {
@@ -2529,12 +2874,17 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	private async loadTokensFromSessionPath(sessionPath: string): Promise<number | undefined> {
 		try {
-			if (!(await Bun.file(sessionPath).exists())) return undefined;
 			const rawTranscript = await Bun.file(sessionPath).text();
 			const entries = parseJsonlLenient<Record<string, unknown>>(rawTranscript);
 			const tokens = this.sumAssistantMessageUsageTokens(entries);
 			return tokens > 0 ? tokens : undefined;
-		} catch {
+		} catch (error) {
+			if (!isEnoent(error)) {
+				logger.warn("Failed to load subagent token usage from transcript", {
+					path: sessionPath,
+					error: String(error),
+				});
+			}
 			return undefined;
 		}
 	}

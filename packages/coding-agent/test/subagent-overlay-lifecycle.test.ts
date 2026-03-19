@@ -225,7 +225,7 @@ describe("overlay lifecycle: navigator hide/unhide", () => {
 });
 
 describe("overlay lifecycle: viewer close returns to navigator", () => {
-	test("viewer Esc unhides navigator and hides viewer", () => {
+	test("viewer Esc unhides navigator and closes the viewer", () => {
 		const { mode, navigatorOverlayHandle, viewerOverlayHandle } = createModeWithViewerOpenFromNavigator();
 
 		// Pre-condition: navigator is hidden, viewer is visible
@@ -237,12 +237,12 @@ describe("overlay lifecycle: viewer close returns to navigator", () => {
 
 		// Navigator was unhidden
 		expect(navigatorOverlayHandle.setHidden).toHaveBeenCalledWith(false);
-		// Viewer was hidden (not destroyed)
-		expect(viewerOverlayHandle.setHidden).toHaveBeenCalledWith(true);
-		// Neither overlay was permanently destroyed
+		// Viewer was closed and cleared
+		expect(viewerOverlayHandle.hide).toHaveBeenCalledTimes(1);
+		expect(mode.subagentSessionViewer).toBeUndefined();
+		expect(mode.subagentSessionOverlay).toBeUndefined();
+		// Navigator overlay/component stay alive
 		expect(navigatorOverlayHandle.hide).not.toHaveBeenCalled();
-		expect(viewerOverlayHandle.hide).not.toHaveBeenCalled();
-		// Navigator component still exists
 		expect(mode.subagentNavigatorComponent).toBeDefined();
 	});
 });

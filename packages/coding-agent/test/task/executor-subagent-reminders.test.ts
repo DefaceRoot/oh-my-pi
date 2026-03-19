@@ -146,6 +146,21 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
 	});
 
+	it("preserves an explicit abort reason when the caller signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort("User stopped from flight deck: duplicate workstream");
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-user-stop-before-start",
+			signal: controller.signal,
+		});
+
+		expect(result.aborted).toBe(true);
+		expect(result.abortReason).toBe("User stopped from flight deck: duplicate workstream");
+		expect(result.stderr).toBe("User stopped from flight deck: duplicate workstream");
+	});
+
 	it("does not force object-shaped submit_result data when output schema allows primitives", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {

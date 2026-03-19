@@ -179,15 +179,15 @@ describe("overlay stability: repeated open/viewer/open cycles", () => {
 		mode.returnToNavigatorOrExit();
 		expect(navHandle.isHidden()).toBe(false);
 		const viewerHandle1 = showOverlayCalls[1]!.handle;
-		expect(viewerHandle1.isHidden()).toBe(true);
+		expect(viewerHandle1.hide).toHaveBeenCalledTimes(1);
+		expect(mode.subagentSessionViewer).toBeUndefined();
+		expect(mode.subagentSessionOverlay).toBeUndefined();
 
-		// Cycle 2: open viewer again from navigator — viewer must be re-created
-		// because returning to navigator hid the viewer but the renderSubagentSession
-		// path checks this.subagentSessionViewer existence
+		// Cycle 2: open viewer again from navigator — a fresh viewer is created
 		await mode.openSubagentTranscriptFromGroups(mode.subagentNavigatorGroups, { groupIndex: 0, nestedIndex: -1 });
 		// Navigator hidden again
 		expect(navHandle.isHidden()).toBe(true);
-		// Viewer may be reused or recreated depending on implementation
+		expect(showOverlayCalls).toHaveLength(3);
 		expect(mode.subagentSessionViewer).toBeDefined();
 
 		// Cycle 2: return to navigator
@@ -198,6 +198,35 @@ describe("overlay stability: repeated open/viewer/open cycles", () => {
 		expect(mode.subagentNavigatorComponent).toBeDefined();
 	});
 });
+
+	test("returning to navigator closes the old viewer so another selection opens a fresh viewer", async () => {
+		const { mode, showOverlayCalls } = createModeForStabilityTest();
+
+		mode.openSubagentNavigator();
+		const navHandle = showOverlayCalls[0]!.handle;
+
+		await mode.openSubagentTranscriptFromGroups(mode.subagentNavigatorGroups, { groupIndex: 0, nestedIndex: -1 });
+		expect(showOverlayCalls).toHaveLength(2);
+		const firstViewerHandle = showOverlayCalls[1]!.handle;
+
+		mode.returnToNavigatorOrExit();
+
+		expect(firstViewerHandle.hide).toHaveBeenCalledTimes(1);
+		expect(mode.subagentSessionViewer).toBeUndefined();
+		expect(mode.subagentSessionOverlay).toBeUndefined();
+		expect(navHandle.isHidden()).toBe(false);
+
+		const secondRef = makeRef("1-Research", { agent: "research", description: "Follow-up investigation" });
+		const updatedGroups = [makeGroup("0-Explore", [makeRef("0-Explore")]), makeGroup("1-Research", [secondRef])];
+		mode.subagentNavigatorGroups = updatedGroups;
+		mode.subagentSnapshot = makeSnapshot(updatedGroups.flatMap(group => group.refs), updatedGroups, 2);
+
+		await mode.openSubagentTranscriptFromGroups(updatedGroups, { groupIndex: 1, nestedIndex: -1 });
+
+		expect(showOverlayCalls).toHaveLength(3);
+		expect(mode.subagentViewActiveId).toBe("1-Research");
+		expect(navHandle.isHidden()).toBe(true);
+	});
 
 describe("overlay stability: Ctrl+X full exit in hidden-navigator state", () => {
 	test("full exit when navigator is hidden and viewer is open closes both", async () => {

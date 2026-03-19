@@ -502,6 +502,15 @@ export class AgentSession {
 		return { running, recent };
 	}
 
+	cancelRunningAsyncJobs(): number {
+		if (!this.#asyncJobManager) return 0;
+		const runningJobs = this.#asyncJobManager.getRunningJobs();
+		if (runningJobs.length === 0) return 0;
+		this.#asyncJobManager.cancelAll();
+		return runningJobs.length;
+	}
+
+
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================

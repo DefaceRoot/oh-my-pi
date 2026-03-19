@@ -24,6 +24,7 @@ _FEATURE_MODULES = [
 		# Conversation and preview
 		"conversation_preview",       # JSONL conversation view with role labels
 		"task_list_panel",            # Persistent todo panel above preview
+		"live_log_panel",             # Live stream indicator + popup for log-writing commands
 		"preview_search",             # Ctrl+F search within preview pane
 		# Input and interaction
 		"enhanced_input",             # History nav, readline keybindings, char count

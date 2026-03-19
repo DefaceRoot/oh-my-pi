@@ -319,7 +319,10 @@ describe("InteractiveMode subagent token loading", () => {
 		} as any);
 
 		const mode = Object.create(InteractiveMode.prototype) as any;
-		const transcript = await mode.loadSubagentTranscript({ id: "templated-subagent", sessionPath } as SubagentViewRef);
+		const transcript = await mode.loadSubagentTranscript({
+			id: "templated-subagent",
+			sessionPath,
+		} as SubagentViewRef);
 
 		expect(transcript?.contextPreview).toBe("Investigate navigator title fallback");
 		expect(transcript?.contextPreview).not.toContain("Background");
@@ -414,7 +417,7 @@ describe("InteractiveMode subagent token loading", () => {
 		].join("\n");
 		await writeFile(
 			sessionPath,
-			[
+			`${[
 				JSON.stringify({ type: "session_init", task: "demo", systemPrompt }),
 				JSON.stringify({
 					type: "message",
@@ -430,17 +433,146 @@ describe("InteractiveMode subagent token loading", () => {
 						],
 					},
 				}),
-			].join("\n") + "\n",
+			].join("\n")}\n`,
 			"utf8",
 		);
 
 		vi.spyOn(SessionManager, "open").mockRejectedValue(new Error("boom"));
 
 		const mode = Object.create(InteractiveMode.prototype) as any;
-		const transcript = await mode.loadSubagentTranscript({ id: "fallback-skill-reader", sessionPath } as SubagentViewRef);
+		const transcript = await mode.loadSubagentTranscript({
+			id: "fallback-skill-reader",
+			sessionPath,
+		} as SubagentViewRef);
 
 		expect(transcript?.skillsUsed).toEqual(["systematic-debugging"]);
 	});
 
+	test("loadSubagentTranscript loads session metadata and parent context file content", async () => {
+		const sessionPath = path.join(tempDir, "session-rich.jsonl");
+		const contextPath = path.join(tempDir, "context.md");
+		await writeFile(sessionPath, '{"type":"session_init","task":"demo"}\n', "utf8");
+		await writeFile(contextPath, "Parent session context\n- constraint A\n- constraint B\n", "utf8");
 
+		vi.spyOn(SessionManager, "open").mockResolvedValue({
+			getHeader: () => ({ id: "omp-session-1497" }),
+			getEntries: () => [
+				{
+					type: "session_init",
+					task: "Investigate the delegated worker",
+					systemPrompt: "system prompt",
+					tools: ["read", "grep", "submit_result"],
+					contextFile: contextPath,
+					mcpServers: ["augment", "grafana"],
+					mcpAllowlist: ["augment", "grafana"],
+				},
+				{ type: "model_change", model: "gpt-5.4" },
+			],
+			buildSessionContext: () => ({
+				messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				thinkingLevel: "high",
+				models: {},
+				injectedTtsrRules: [],
+				mode: "none",
+				modeData: undefined,
+			}),
+		} as any);
+
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		const transcript = await mode.loadSubagentTranscript({ id: "rich-subagent", sessionPath } as SubagentViewRef);
+
+		expect(transcript?.sessionId).toBe("omp-session-1497");
+		expect(transcript?.assignment).toContain("Investigate the delegated worker");
+		expect(transcript?.parentContext).toContain("constraint A");
+		expect(transcript?.contextFilePath).toBe(contextPath);
+		expect(transcript?.toolNames).toEqual(["read", "grep", "submit_result"]);
+		expect(transcript?.mcpServers).toEqual(["augment", "grafana"]);
+	});
+
+	test("renderSubagentTranscriptLines includes parent context and assignment before transcript messages", () => {
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.uiHelpers = {
+			renderSessionContextToLines: vi.fn(() => ["assistant: finished verification"]),
+		};
+
+		const lines = mode.renderSubagentTranscriptLines(
+			{
+				source: "/tmp/subagent.jsonl",
+				content: "",
+				sessionContext: {
+					messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+				},
+				parentContext: "Parent constraints\n- never use inline prompts",
+				assignment: "Verify the nested worker flow",
+				delegationHistory: ["↳ (23) code-reviewer | Review the verifier patch"],
+			},
+			100,
+		);
+
+		expect(lines.join("\n")).toContain("Parent Session Context");
+		expect(lines.join("\n")).toContain("never use inline prompts");
+		expect(lines.join("\n")).toContain("Assignment");
+		expect(lines.join("\n")).toContain("Verify the nested worker flow");
+		expect(lines.join("\n")).toContain("Delegations");
+		expect(lines.join("\n")).toContain("code-reviewer");
+		expect(lines.join("\n")).toContain("assistant: finished verification");
+	});
+
+	test("renderSubagentSession forwards elapsed and session metadata into the viewer content", async () => {
+		const setContent = vi.fn();
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.subagentCycleIndex = 0;
+		mode.subagentNestedCycleIndex = -1;
+		mode.subagentNestedArrowMode = false;
+		mode.subagentSessionViewer = { setContent };
+		mode.statusLine = { setHookStatus: vi.fn() };
+		mode.ui = { requestRender: vi.fn(), terminal: { rows: 40, columns: 120 } };
+		mode.keybindings = { getDisplayString: vi.fn(() => "Ctrl+X") };
+		mode.inputController = { cycleAgentMode: vi.fn(async () => undefined) };
+
+		const selected = makeRef("22-VerifyPhase07", {
+			agent: "plan-verifier",
+			description: "Verify phase 7",
+			status: "running",
+			elapsedMs: 65_000,
+			outcome: { status: "fail", label: "review", summary: "Blocking findings remain" },
+		});
+		const groups = [makeGroup(selected.id, [selected])];
+
+		await mode.renderSubagentSession(
+			selected,
+			{
+				source: "/tmp/22-VerifyPhase07.jsonl",
+				content: "",
+				model: "gpt-5.4",
+				tokens: 20_052,
+				sessionId: "1497dbcec67ecb20",
+				toolNames: ["read", "grep", "submit_result"],
+				mcpServers: ["augment", "grafana"],
+				mcpAllowlist: ["augment"],
+				parentContext: "Never use inline prompts",
+				assignment: "Verify phase 7 nested worker",
+				delegationHistory: ["↳ (23) code-reviewer | Review the verifier patch"],
+				skillsUsed: [],
+			},
+			groups,
+		);
+
+		expect(setContent).toHaveBeenCalledTimes(1);
+		const payload = setContent.mock.calls[0]?.[0];
+		expect(payload.metadata).toMatchObject({
+			subagentId: "22-VerifyPhase07",
+			sessionId: "1497dbcec67ecb20",
+			elapsedMs: 65_000,
+			outcome: { status: "fail", label: "review", summary: "Blocking findings remain" },
+			toolNames: ["read", "grep", "submit_result"],
+			mcpServers: ["augment", "grafana"],
+			mcpAllowlist: ["augment"],
+			canStop: true,
+		});
+		expect(payload.headerLines.join("\n")).toContain("Task 1/1");
+		expect(payload.headerLines.join("\n")).toContain("Nested 0/0 descendants");
+		expect(payload.headerLines.join("\n")).not.toContain("Nested nested");
+		expect(payload.headerLines.join("\n")).toContain("Source /tmp/22-VerifyPhase07.jsonl");
+	});
 });

@@ -227,6 +227,14 @@ export class InputController {
 
 	constructor(private ctx: InteractiveModeContext) {}
 
+	#cancelRunningBackgroundJobs(): boolean {
+		const cancelled = this.ctx.session.cancelRunningAsyncJobs();
+		if (cancelled <= 0) return false;
+		const noun = cancelled === 1 ? "background job" : "background jobs";
+		this.ctx.showStatus(`Cancelled ${cancelled} ${noun}.`);
+		return true;
+	}
+
 	setupKeyHandlers(): void {
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
@@ -240,20 +248,25 @@ export class InputController {
 			}
 			if (this.ctx.loadingAnimation) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
+				this.#cancelRunningBackgroundJobs();
 			} else if (this.ctx.session.isBashRunning) {
 				this.ctx.session.abortBash();
+				this.#cancelRunningBackgroundJobs();
 			} else if (this.ctx.isBashMode) {
 				this.ctx.editor.setText("");
 				this.ctx.isBashMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isPythonRunning) {
 				this.ctx.session.abortPython();
+				this.#cancelRunningBackgroundJobs();
 			} else if (this.ctx.isPythonMode) {
 				this.ctx.editor.setText("");
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.#isAskModeActive()) {
 				void this.#restoreAskMode();
+			} else if (this.#cancelRunningBackgroundJobs()) {
+				return;
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-escape with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");

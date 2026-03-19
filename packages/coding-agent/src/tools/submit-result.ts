@@ -8,6 +8,8 @@ import { dereferenceJsonSchema, sanitizeSchemaForStrictMode } from "@oh-my-pi/pi
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
+import type { SubagentOutcome } from "../task/subagent-outcome";
+import { normalizeSubagentOutcome } from "../task/subagent-outcome";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from ".";
 import { jtdToJsonSchema } from "./jtd-to-json-schema";
@@ -16,6 +18,7 @@ export interface SubmitResultDetails {
 	data: unknown;
 	status: "success" | "aborted";
 	error?: string;
+	outcome?: SubagentOutcome;
 }
 
 const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
@@ -70,10 +73,51 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 			Type.Object(
 				{
 					result: Type.Union([
-						Type.Object({ data: dataSchema }, { description: "Successfully completed the task" }),
+						Type.Object(
+							{
+								data: dataSchema,
+								outcome: Type.Optional(
+									Type.Object(
+										{
+											status: Type.Union([
+												Type.Literal("pass"),
+												Type.Literal("fail"),
+												Type.Literal("go"),
+												Type.Literal("no_go"),
+											]),
+											label: Type.Optional(Type.String()),
+											summary: Type.Optional(Type.String()),
+										},
+										{
+											additionalProperties: false,
+											description: "Optional deterministic verdict for audit surfaces and gating UIs",
+										},
+									),
+								),
+							},
+							{ additionalProperties: false, description: "Successfully completed the task" },
+						),
 						Type.Object({
 							error: Type.String({ description: "Error message when the task cannot be completed" }),
-						}),
+							outcome: Type.Optional(
+								Type.Object(
+									{
+										status: Type.Union([
+											Type.Literal("pass"),
+											Type.Literal("fail"),
+											Type.Literal("go"),
+											Type.Literal("no_go"),
+										]),
+										label: Type.Optional(Type.String()),
+										summary: Type.Optional(Type.String()),
+									},
+									{
+										additionalProperties: false,
+										description: "Optional deterministic verdict for audit surfaces and gating UIs",
+									},
+								),
+							),
+						}, { additionalProperties: false }),
 					]),
 				},
 				{
@@ -166,6 +210,7 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 		const resultRecord = rawResult as Record<string, unknown>;
 		const errorMessage = typeof resultRecord.error === "string" ? resultRecord.error : undefined;
 		const data = resultRecord.data;
+		const outcome = normalizeSubagentOutcome(resultRecord.outcome);
 
 		if (errorMessage !== undefined && data !== undefined) {
 			throw new Error("result cannot contain both data and error");
@@ -197,7 +242,7 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 					: "Result submitted.";
 		return {
 			content: [{ type: "text", text: responseText }],
-			details: { data, status, error: errorMessage },
+			details: { data, status, error: errorMessage, outcome },
 		};
 	}
 }
@@ -214,6 +259,7 @@ subprocessToolRegistry.register<SubmitResultDetails>("submit_result", {
 			data: record.data,
 			status,
 			error: typeof record.error === "string" ? record.error : undefined,
+			outcome: normalizeSubagentOutcome(record.outcome),
 		};
 	},
 	shouldTerminate: event => !event.isError,

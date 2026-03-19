@@ -1,3 +1,5 @@
+import type { SubagentOutcome } from "../../../task/subagent-outcome";
+
 export interface SidebarTokenSection {
 	contextUsedPercent: number;
 	tokensUsed: number;
@@ -21,13 +23,14 @@ export interface SidebarTodoItem {
 	status: "pending" | "in_progress" | "completed" | "abandoned";
 }
 
-export type SidebarSubagentStatus = "running" | "completed" | "failed";
+export type SidebarSubagentStatus = "running" | "completed" | "failed" | "user_stopped";
 
 interface SidebarSubagentRowBase {
 	id: string;
 	agentName: string;
 	status: SidebarSubagentStatus;
 	tokens?: number;
+	outcome?: SubagentOutcome;
 }
 
 export interface SidebarSubagentChildRow extends SidebarSubagentRowBase {

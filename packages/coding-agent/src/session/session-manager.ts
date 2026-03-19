@@ -146,6 +146,14 @@ export interface SessionInitEntry extends SessionEntryBase {
 	task: string;
 	/** Tools available to the agent */
 	tools: string[];
+	/** Optional parent session context file path referenced by the system prompt */
+	contextFile?: string;
+	/** OMP session id for this delegated subagent */
+	sessionId?: string;
+	/** MCP servers connected for this delegated subagent session */
+	mcpServers?: string[];
+	/** MCP allowlist applied for this delegated subagent session */
+	mcpAllowlist?: string[];
 	/** Output schema if structured output was requested */
 	outputSchema?: unknown;
 }
@@ -1889,7 +1897,16 @@ export class SessionManager {
 	}
 
 	/** Append session init metadata (for subagent debugging/replay). Returns entry id. */
-	appendSessionInit(init: { systemPrompt: string; task: string; tools: string[]; outputSchema?: unknown }): string {
+	appendSessionInit(init: {
+		systemPrompt: string;
+		task: string;
+		tools: string[];
+		contextFile?: string;
+		sessionId?: string;
+		mcpServers?: string[];
+		mcpAllowlist?: string[];
+		outputSchema?: unknown;
+	}): string {
 		const entry: SessionInitEntry = {
 			type: "session_init",
 			id: generateId(this.#byId),

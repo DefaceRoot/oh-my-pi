@@ -21,31 +21,33 @@ import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 import { RolesConfig } from "../config/roles-config";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
+import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
-import { resolveSubagentRole } from "./model-role";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
+import { isUserStoppedAbortReason } from "./subagent-stop";
 import { renderTemplate } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
 	type TaskParams,
 	type TaskSchema,
+	type TaskSubagentStopRequest,
 	type TaskToolDetails,
 	taskSchema,
 	taskSchemaNoIsolation,
@@ -97,16 +99,53 @@ function createScopedMcpManager(
 		getToolsForServers?: (serverNames: readonly string[]) => unknown[];
 		getTools: () => unknown[];
 		waitForConnection: (name: string) => Promise<unknown>;
+		getConnectedServers?: () => string[];
+		getServerPrompts?: (name: string) => unknown[] | undefined;
+		getServerInstructions?: (serverNames?: readonly string[]) => Map<string, string>;
+		setOnToolsChanged?: (handler: (tools: unknown[]) => void) => void;
+		setOnPromptsChanged?: (handler: (serverName: string) => void) => void;
+		setOnResourcesChanged?: (handler: (serverName: string, uri: string) => void) => void;
 	};
-	const scopedTools =
-		typeof managerLike.getToolsForServers === "function"
-			? managerLike.getToolsForServers(allowedServers)
-			: managerLike.getTools().filter(tool => {
-					const serverName = getMcpServerName(tool);
-					return serverName ? allowed.has(serverName) : false;
-				});
+	const getScopedTools = (): unknown[] => {
+		if (typeof managerLike.getToolsForServers === "function") {
+			return managerLike.getToolsForServers(allowedServers);
+		}
+		return managerLike.getTools().filter(tool => {
+			const serverName = getMcpServerName(tool);
+			return serverName ? allowed.has(serverName) : false;
+		});
+	};
+	const getScopedServerNames = (requestedServerNames?: readonly string[]): string[] => {
+		if (!requestedServerNames) return [...allowedServers];
+		return requestedServerNames.filter(name => allowed.has(name));
+	};
 	return {
-		getTools: () => scopedTools as any,
+		getTools: () => getScopedTools() as any,
+		getConnectedServers: () =>
+			(managerLike.getConnectedServers?.() ?? [...allowedServers]).filter(name => allowed.has(name)),
+		getServerPrompts: name => (allowed.has(name) ? managerLike.getServerPrompts?.(name) : undefined),
+		getServerInstructions: requestedServerNames =>
+			managerLike.getServerInstructions?.(getScopedServerNames(requestedServerNames)) ?? new Map<string, string>(),
+		setOnToolsChanged: handler => {
+			managerLike.setOnToolsChanged?.(tools => {
+				handler(
+					tools.filter(tool => {
+						const serverName = getMcpServerName(tool);
+						return serverName ? allowed.has(serverName) : false;
+					}),
+				);
+			});
+		},
+		setOnPromptsChanged: handler => {
+			managerLike.setOnPromptsChanged?.(serverName => {
+				if (allowed.has(serverName)) handler(serverName);
+			});
+		},
+		setOnResourcesChanged: handler => {
+			managerLike.setOnResourcesChanged?.((serverName, uri) => {
+				if (allowed.has(serverName)) handler(serverName, uri);
+			});
+		},
 		waitForConnection: async (name: string) => {
 			if (!allowed.has(name)) {
 				throw new Error(`MCP server not allowed for subagent: ${name}`);
@@ -294,9 +333,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
-			progressByTaskId.set(renderedTask.id, {
+			progressByTaskId.set(uniqueIds[index], {
 				index,
-				id: renderedTask.id,
+				id: uniqueIds[index],
 				agent: params.agent,
 				agentSource: fallbackAgentSource,
 				status: "pending",
@@ -310,6 +349,26 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			});
 		}
 
+		const mergeDefined = <T extends object>(target: T, source: Partial<T>): T => {
+			for (const [key, value] of Object.entries(source)) {
+				if (value !== undefined) {
+					(target as Record<string, unknown>)[key] = structuredClone(value);
+				}
+			}
+			return target;
+		};
+
+		const mergeTaskProgress = (taskId: string, incoming?: Partial<AgentProgress>): AgentProgress | undefined => {
+			const existing = progressByTaskId.get(taskId);
+			if (!existing || !incoming) return existing;
+			const next = mergeDefined(structuredClone(existing), incoming);
+			next.id = taskId;
+			next.index = existing.index;
+			next.task = incoming.task ?? existing.task;
+			next.description = incoming.description ?? existing.description;
+			progressByTaskId.set(taskId, next);
+			return next;
+		};
 		const startedJobs: Array<{ jobId: string; taskId: string }> = [];
 		const failedSchedules: string[] = [];
 		let completedJobs = 0;
@@ -342,16 +401,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		for (let i = 0; i < taskItems.length; i++) {
 			const taskItem = taskItems[i];
+			const uniqueId = uniqueIds[i];
 			if (signal?.aborted) {
 				failedSchedules.push(`${taskItem.id}: cancelled before scheduling`);
-				const progress = progressByTaskId.get(taskItem.id);
-				if (progress) {
-					progress.status = "aborted";
-				}
+				mergeTaskProgress(uniqueId, { status: "aborted", lastUpdatedMs: Date.now() });
 				continue;
 			}
 
-			const uniqueId = uniqueIds[i];
 			const singleParams: TaskParams = { ...params, tasks: [taskItem] };
 			const label = uniqueId;
 			try {
@@ -360,38 +416,71 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					label,
 					async ({ signal: runSignal, reportProgress }) => {
 						const startedAt = Date.now();
-						const progress = progressByTaskId.get(taskItem.id);
 						await semaphore.acquire();
 						if (runSignal.aborted) {
 							semaphore.release();
-							if (progress) {
-								progress.status = "aborted";
-							}
+							mergeTaskProgress(uniqueId, { status: "aborted", startedAt, lastUpdatedMs: startedAt });
 							throw new Error("Aborted before execution");
 						}
-						if (progress) {
-							progress.status = "running";
-						}
+						mergeTaskProgress(uniqueId, { status: "running", startedAt, lastUpdatedMs: startedAt });
+						const forwardProgressUpdate: AgentToolUpdateCallback<TaskToolDetails> = async update => {
+							const liveProgress =
+								update.details?.progress?.find(candidate => candidate.id === uniqueId) ??
+								update.details?.progress?.[0];
+							if (liveProgress) {
+								mergeTaskProgress(uniqueId, liveProgress);
+							}
+							const text =
+								update.content.find(part => part.type === "text")?.text ??
+								`Running background task ${taskItem.id}...`;
+							await reportProgress(
+								text,
+								buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<
+									string,
+									unknown
+								>,
+							);
+						};
 						await reportProgress(
 							`Running background task ${taskItem.id}...`,
 							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
 						);
 						try {
-							const result = await this.#executeSync(_toolCallId, singleParams, runSignal, undefined, [
-								uniqueId,
-							]);
+							const result = await this.#executeSync(
+								_toolCallId,
+								singleParams,
+								runSignal,
+								forwardProgressUpdate,
+								[uniqueId],
+							);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 							const singleResult = result.details?.results[0];
-							if (progress) {
-								progress.status = singleResult?.aborted
-									? "aborted"
-									: (singleResult?.exitCode ?? 0) === 0
-										? "completed"
-										: "failed";
-								progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
-								progress.tokens = singleResult?.tokens ?? 0;
-								progress.extractedToolData = singleResult?.extractedToolData;
-							}
+							const finalStatus = singleResult?.aborted
+								? "aborted"
+								: (singleResult?.exitCode ?? 0) === 0
+									? "completed"
+									: "failed";
+							mergeTaskProgress(uniqueId, {
+								status: finalStatus,
+								durationMs: singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt),
+								tokens: singleResult?.tokens,
+								startedAt: singleResult?.startedAt ?? startedAt,
+								lastUpdatedMs: singleResult?.lastUpdatedMs ?? Date.now(),
+								provider: singleResult?.provider,
+								model: singleResult?.model,
+								modelOverride: singleResult?.modelOverride,
+								sessionId: singleResult?.sessionId,
+								parentAgentName: singleResult?.parentAgentName,
+								thinkingLevel: singleResult?.thinkingLevel,
+								tokenCapacity: singleResult?.tokenCapacity,
+								toolNames: singleResult?.toolNames,
+								mcpServers: singleResult?.mcpServers,
+								mcpAllowlist: singleResult?.mcpAllowlist,
+								lastIntent: singleResult?.lastIntent,
+								abortReason: singleResult?.abortReason,
+								outcome: singleResult?.outcome,
+								extractedToolData: singleResult?.extractedToolData,
+							});
 							completedJobs += 1;
 							if (singleResult && ((singleResult.aborted ?? false) || singleResult.exitCode !== 0)) {
 								failedJobs += 1;
@@ -415,10 +504,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							}
 							return finalText;
 						} catch (error) {
-							if (progress) {
-								progress.status = "failed";
-								progress.durationMs = Math.max(0, Date.now() - startedAt);
-							}
+							const failedStatus = runSignal.aborted ? "aborted" : "failed";
+							mergeTaskProgress(uniqueId, {
+								status: failedStatus,
+								durationMs: Math.max(0, Date.now() - startedAt),
+								lastUpdatedMs: Date.now(),
+							});
 							completedJobs += 1;
 							failedJobs += 1;
 							const remaining = taskItems.length - completedJobs;
@@ -450,9 +541,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								(details as TaskToolDetails | undefined) ??
 								buildAsyncDetails("running", startedJobs[0]?.jobId ?? label);
 							onUpdate?.({ content: [{ type: "text", text }], details: progressDetails });
-							// Store progress snapshot on the job for await-tool visibility
 							if (progressDetails?.progress) {
-								manager.updateProgress(label, { progress: progressDetails.progress } as Record<string, unknown>);
+								manager.updateProgress(label, { progress: progressDetails.progress } as Record<
+									string,
+									unknown
+								>);
 							}
 						},
 					},
@@ -461,10 +554,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				failedSchedules.push(`${taskItem.id}: ${message}`);
-				const progress = progressByTaskId.get(taskItem.id);
-				if (progress) {
-					progress.status = "failed";
-				}
+				mergeTaskProgress(uniqueId, { status: "failed", lastUpdatedMs: Date.now() });
 			}
 		}
 
@@ -549,7 +639,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					}
 				}
 			}
-			statusLines.push("", "Use `await` tool with these job IDs to check again, or set another `timeout` on the next task call.");
+			statusLines.push(
+				"",
+				"Use `await` tool with these job IDs to check again, or set another `timeout` on the next task call.",
+			);
 			return {
 				content: [{ type: "text", text: statusLines.join("\n") }],
 				details: {
@@ -813,6 +906,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				},
 			});
 		};
+		let disposeStopListener: (() => void) | undefined;
 
 		try {
 			// Check self-recursion prevention
@@ -864,6 +958,21 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				};
 			}
 
+			const subtaskAbortControllers = new Map<string, AbortController>();
+			const abortSubtask = (taskId: string | undefined, reason: string): boolean => {
+				if (!taskId) return false;
+				const controller = subtaskAbortControllers.get(taskId);
+				if (!controller || controller.signal.aborted) return false;
+				controller.abort(reason);
+				return true;
+			};
+			disposeStopListener = this.session.eventBus?.on(TASK_SUBAGENT_STOP_REQUEST_CHANNEL, payload => {
+				if (!payload || typeof payload !== "object") return;
+				const request = payload as TaskSubagentStopRequest;
+				const handled = abortSubtask(request.id, request.reason);
+				request.respond?.(handled);
+			});
+
 			// Write parent conversation context for subagents
 			await fs.mkdir(effectiveArtifactsDir, { recursive: true });
 			const compactContext = this.session.getCompactContext?.();
@@ -888,9 +997,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			// Build full prompts with context prepended
 			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(context, t));
 			const availableSkills = [...(this.session.skills ?? [])];
-			const contextFiles = this.session.contextFiles?.filter(
-				file => path.basename(file.path).toLowerCase() !== "agents.md",
-			);
+			const contextFiles = this.session.contextFiles;
 			const promptTemplates = this.session.promptTemplates;
 
 			// Initialize progress for all tasks
@@ -915,169 +1022,178 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			emitProgress();
 
 			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
-				if (!isIsolated) {
-					return runSubprocess({
-						cwd: this.session.cwd,
-						agent,
-						task: task.task,
-						description: task.description,
-						index,
-						id: task.id,
-						taskDepth,
-						modelOverride,
-						thinkingLevel: thinkingLevelOverride,
-						outputSchema: effectiveOutputSchema,
-						sessionFile,
-						persistArtifacts: !!artifactsDir,
-						artifactsDir: effectiveArtifactsDir,
-						contextFile: contextFilePath,
-						enableLsp: false,
-						signal,
-						eventBus: this.session.eventBus,
-						onProgress: progress => {
-							progressMap.set(index, {
-								...structuredClone(progress),
-							});
-							emitProgress();
-						},
-						authStorage: this.session.authStorage,
-						modelRegistry: this.session.modelRegistry,
-						settings: this.session.settings,
-						mcpManager: subagentMcpManager,
-						contextFiles,
-						skills: availableSkills,
-						promptTemplates,
-					});
-				}
-
-				const taskStart = Date.now();
-				let isolationDir: string | undefined;
+				const taskAbortController = new AbortController();
+				subtaskAbortControllers.set(task.id, taskAbortController);
+				const taskSignal = signal
+					? AbortSignal.any([signal, taskAbortController.signal])
+					: taskAbortController.signal;
 				try {
-					if (!repoRoot || !baseline) {
-						throw new Error("Isolated task execution not initialized.");
+					if (!isIsolated) {
+						return runSubprocess({
+							cwd: this.session.cwd,
+							agent,
+							task: task.task,
+							description: task.description,
+							index,
+							id: task.id,
+							taskDepth,
+							modelOverride,
+							thinkingLevel: thinkingLevelOverride,
+							outputSchema: effectiveOutputSchema,
+							sessionFile,
+							persistArtifacts: !!artifactsDir,
+							artifactsDir: effectiveArtifactsDir,
+							contextFile: contextFilePath,
+							enableLsp: false,
+							signal: taskSignal,
+							eventBus: this.session.eventBus,
+							onProgress: progress => {
+								progressMap.set(index, {
+									...structuredClone(progress),
+								});
+								emitProgress();
+							},
+							authStorage: this.session.authStorage,
+							modelRegistry: this.session.modelRegistry,
+							settings: this.session.settings,
+							mcpManager: subagentMcpManager,
+							contextFiles,
+							skills: availableSkills,
+							promptTemplates,
+						});
 					}
-					const taskBaseline = structuredClone(baseline);
 
-					if (effectiveIsolationMode === "fuse-overlay") {
-						isolationDir = await ensureFuseOverlay(repoRoot, task.id);
-					} else if (effectiveIsolationMode === "fuse-projfs") {
-						isolationDir = await ensureProjfsOverlay(repoRoot, task.id);
-					} else {
-						isolationDir = await ensureWorktree(repoRoot, task.id);
-						await applyBaseline(isolationDir, taskBaseline);
-					}
+					const taskStart = Date.now();
+					let isolationDir: string | undefined;
+					try {
+						if (!repoRoot || !baseline) {
+							throw new Error("Isolated task execution not initialized.");
+						}
+						const taskBaseline = structuredClone(baseline);
 
-					const result = await runSubprocess({
-						cwd: this.session.cwd,
-						worktree: isolationDir,
-						agent,
-						task: task.task,
-						description: task.description,
-						index,
-						id: task.id,
-						taskDepth,
-						modelOverride,
-						thinkingLevel: thinkingLevelOverride,
-						outputSchema: effectiveOutputSchema,
-						sessionFile,
-						persistArtifacts: !!artifactsDir,
-						artifactsDir: effectiveArtifactsDir,
-						contextFile: contextFilePath,
-						enableLsp: false,
-						signal,
-						eventBus: this.session.eventBus,
-						onProgress: progress => {
-							progressMap.set(index, {
-								...structuredClone(progress),
-							});
-							emitProgress();
-						},
-						authStorage: this.session.authStorage,
-						modelRegistry: this.session.modelRegistry,
-						settings: this.session.settings,
-						mcpManager: subagentMcpManager,
-						contextFiles,
-						skills: availableSkills,
-						promptTemplates,
-					});
-					if (mergeMode === "branch" && result.exitCode === 0) {
-						try {
-							const commitMsg =
-								commitStyle === "ai" && this.session.modelRegistry
-									? async (diff: string) => {
-											const commitModel = this.session.settings.getModelRole("commit");
-											return generateCommitMessage(
-												diff,
-												this.session.modelRegistry!,
-												commitModel,
-												this.session.getSessionId?.() ?? undefined,
-											);
-										}
-									: undefined;
-							const commitResult = await commitToBranch(
-								isolationDir,
-								taskBaseline,
-								task.id,
-								task.description,
-								commitMsg,
-							);
-							return {
-								...result,
-								branchName: commitResult?.branchName,
-								nestedPatches: commitResult?.nestedPatches,
-							};
-						} catch (mergeErr) {
-							// Agent succeeded but branch commit failed — clean up stale branch
-							const branchName = `omp/task/${task.id}`;
-							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
-							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-							return { ...result, error: `Merge failed: ${msg}` };
-						}
-					}
-					if (result.exitCode === 0) {
-						try {
-							const delta = await captureDeltaPatch(isolationDir, taskBaseline);
-							const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
-							await Bun.write(patchPath, delta.rootPatch);
-							return {
-								...result,
-								patchPath,
-								nestedPatches: delta.nestedPatches,
-							};
-						} catch (patchErr) {
-							const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
-							return { ...result, error: `Patch capture failed: ${msg}` };
-						}
-					}
-					return result;
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					return {
-						index,
-						id: task.id,
-						agent: agent.name,
-						agentSource: agent.source,
-						task: task.task,
-						description: task.description,
-						exitCode: 1,
-						output: "",
-						stderr: message,
-						truncated: false,
-						durationMs: Date.now() - taskStart,
-						tokens: 0,
-						modelOverride,
-						error: message,
-					};
-				} finally {
-					if (isolationDir) {
 						if (effectiveIsolationMode === "fuse-overlay") {
-							await cleanupFuseOverlay(isolationDir);
+							isolationDir = await ensureFuseOverlay(repoRoot, task.id);
 						} else if (effectiveIsolationMode === "fuse-projfs") {
-							await cleanupProjfsOverlay(isolationDir);
+							isolationDir = await ensureProjfsOverlay(repoRoot, task.id);
 						} else {
-							await cleanupWorktree(await getRepoRoot(isolationDir), isolationDir);
+							isolationDir = await ensureWorktree(repoRoot, task.id);
+							await applyBaseline(isolationDir, taskBaseline);
+						}
+
+						const result = await runSubprocess({
+							cwd: this.session.cwd,
+							worktree: isolationDir,
+							agent,
+							task: task.task,
+							description: task.description,
+							index,
+							id: task.id,
+							taskDepth,
+							modelOverride,
+							thinkingLevel: thinkingLevelOverride,
+							outputSchema: effectiveOutputSchema,
+							sessionFile,
+							persistArtifacts: !!artifactsDir,
+							artifactsDir: effectiveArtifactsDir,
+							contextFile: contextFilePath,
+							enableLsp: false,
+							signal: taskSignal,
+							eventBus: this.session.eventBus,
+							onProgress: progress => {
+								progressMap.set(index, {
+									...structuredClone(progress),
+								});
+								emitProgress();
+							},
+							authStorage: this.session.authStorage,
+							modelRegistry: this.session.modelRegistry,
+							settings: this.session.settings,
+							mcpManager: subagentMcpManager,
+							contextFiles,
+							skills: availableSkills,
+							promptTemplates,
+						});
+						if (mergeMode === "branch" && result.exitCode === 0) {
+							try {
+								const commitMsg =
+									commitStyle === "ai" && this.session.modelRegistry
+										? async (diff: string) => {
+												const commitModel = this.session.settings.getModelRole("commit");
+												return generateCommitMessage(
+													diff,
+													this.session.modelRegistry!,
+													commitModel,
+													this.session.getSessionId?.() ?? undefined,
+												);
+											}
+										: undefined;
+								const commitResult = await commitToBranch(
+									isolationDir,
+									taskBaseline,
+									task.id,
+									task.description,
+									commitMsg,
+								);
+								return {
+									...result,
+									branchName: commitResult?.branchName,
+									nestedPatches: commitResult?.nestedPatches,
+								};
+							} catch (mergeErr) {
+								// Agent succeeded but branch commit failed — clean up stale branch
+								const branchName = `omp/task/${task.id}`;
+								await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
+								const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+								return { ...result, error: `Merge failed: ${msg}` };
+							}
+						}
+						if (result.exitCode === 0) {
+							try {
+								const delta = await captureDeltaPatch(isolationDir, taskBaseline);
+								const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
+								await Bun.write(patchPath, delta.rootPatch);
+								return {
+									...result,
+									patchPath,
+									nestedPatches: delta.nestedPatches,
+								};
+							} catch (patchErr) {
+								const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
+								return { ...result, error: `Patch capture failed: ${msg}` };
+							}
+						}
+						return result;
+					} catch (err) {
+						const message = err instanceof Error ? err.message : String(err);
+						return {
+							index,
+							id: task.id,
+							agent: agent.name,
+							agentSource: agent.source,
+							task: task.task,
+							description: task.description,
+							exitCode: 1,
+							output: "",
+							stderr: message,
+							truncated: false,
+							durationMs: Date.now() - taskStart,
+							tokens: 0,
+							modelOverride,
+							error: message,
+						};
+					} finally {
+						if (isolationDir) {
+							if (effectiveIsolationMode === "fuse-overlay") {
+								await cleanupFuseOverlay(isolationDir);
+							} else if (effectiveIsolationMode === "fuse-projfs") {
+								await cleanupProjfsOverlay(isolationDir);
+							} else {
+								await cleanupWorktree(await getRepoRoot(isolationDir), isolationDir);
+							}
 						}
 					}
+				} finally {
+					subtaskAbortControllers.delete(task.id);
 				}
 			};
 
@@ -1277,7 +1393,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 			const summaries = results.map(r => {
 				const status = r.aborted
-					? "cancelled"
+					? isUserStoppedAbortReason(r.abortReason)
+						? "user stopped"
+						: "cancelled"
 					: r.exitCode === 0 && r.error
 						? "merge failed"
 						: r.exitCode === 0
@@ -1329,6 +1447,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			if (shouldCleanupTempArtifacts) {
 				await fs.rm(tempArtifactsDir, { recursive: true, force: true });
 			}
+			disposeStopListener?.();
 
 			return {
 				content: [{ type: "text", text: summary }],
@@ -1341,6 +1460,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				},
 			};
 		} catch (err) {
+			disposeStopListener?.();
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: {

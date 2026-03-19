@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { Type } from "@sinclair/typebox";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import { Type } from "@sinclair/typebox";
 
-const capturedCalls: Array<{ agent: string; mcpManager: unknown }> = [];
+const capturedCalls: Array<{ agent: string; mcpManager: unknown; contextFiles: unknown }> = [];
 
 const stubResult: SingleResult = {
 	index: 0,
@@ -21,7 +21,11 @@ const stubResult: SingleResult = {
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		const agent = opts.agent as { name?: string };
-		capturedCalls.push({ agent: agent.name ?? "unknown", mcpManager: opts.mcpManager });
+		capturedCalls.push({
+			agent: agent.name ?? "unknown",
+			mcpManager: opts.mcpManager,
+			contextFiles: opts.contextFiles,
+		});
 		return { ...stubResult, agent: agent.name ?? "unknown" };
 	},
 }));
@@ -31,6 +35,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
 		agents: [
 			{ name: "designer", description: "designer", source: "bundled", model: "default", systemPrompt: "" },
 			{ name: "grafana", description: "grafana", source: "bundled", model: "default", systemPrompt: "" },
+			{ name: "ask-explore", description: "ask-explore", source: "bundled", model: "default", systemPrompt: "" },
 		],
 		projectAgentsDir: null,
 	}),
@@ -54,12 +59,23 @@ function createFakeMcpTool(name: string, serverName: string) {
 	};
 }
 
+const parentInstructions = new Map<string, string>([
+	["augment", "Use augment for semantic code retrieval."],
+	["chrome-devtools", "Verify visible browser outcomes after each interaction."],
+	["grafana", "Prefer summary-oriented Grafana tools first."],
+]);
+
 const parentMcpManager = {
 	getTools: () => [
 		createFakeMcpTool("mcp_augment_codebase_retrieval", "augment"),
 		createFakeMcpTool("mcp_chrome_devtools_click", "chrome-devtools"),
 		createFakeMcpTool("mcp_grafana_list_datasources", "grafana"),
 	],
+	getServerInstructions: (allowedServerNames?: readonly string[]) => {
+		if (!allowedServerNames) return new Map(parentInstructions);
+		const allowed = new Set(allowedServerNames);
+		return new Map(Array.from(parentInstructions.entries()).filter(([name]) => allowed.has(name)));
+	},
 	waitForConnection: async () => ({ name: "mock-connection" }),
 };
 
@@ -84,10 +100,19 @@ function createSession(overrides: Record<string, unknown> = {}) {
 function managerToolNames(value: unknown): string[] {
 	const manager = value as { getTools?: () => Array<{ name: string }> };
 	if (!manager?.getTools) return [];
-	return manager.getTools().map(tool => tool.name).sort();
+	return manager
+		.getTools()
+		.map(tool => tool.name)
+		.sort();
 }
 
-describe("Phase 3 RED: subagent MCP filtering", () => {
+function managerInstructionNames(value: unknown): string[] {
+	const manager = value as { getServerInstructions?: () => Map<string, string> };
+	if (!manager?.getServerInstructions) return [];
+	return Array.from(manager.getServerInstructions().keys()).sort();
+}
+
+describe("subagent MCP filtering", () => {
 	beforeEach(() => {
 		capturedCalls.length = 0;
 	});
@@ -105,20 +130,48 @@ describe("Phase 3 RED: subagent MCP filtering", () => {
 			"mcp_augment_codebase_retrieval",
 			"mcp_chrome_devtools_click",
 		]);
+		expect(managerInstructionNames(capturedCalls[0]?.mcpManager)).toEqual(["augment", "chrome-devtools"]);
 	});
 
 	test("passes augment + grafana MCP tools to grafana subagent", async () => {
 		const tool = await TaskTool.create(createSession());
-
 		await tool.execute("call-grafana", {
 			agent: "grafana",
 			tasks: [{ id: "GrafanaTask", description: "grafana", assignment: "noop" }],
 		});
-
 		expect(capturedCalls).toHaveLength(1);
 		expect(managerToolNames(capturedCalls[0]?.mcpManager)).toEqual([
 			"mcp_augment_codebase_retrieval",
 			"mcp_grafana_list_datasources",
 		]);
+		expect(managerInstructionNames(capturedCalls[0]?.mcpManager)).toEqual(["augment", "grafana"]);
+	});
+
+	test("passes no MCP tools to ask-explore subagent", async () => {
+		const tool = await TaskTool.create(createSession());
+		await tool.execute("call-ask-explore", {
+			agent: "ask-explore",
+			tasks: [{ id: "AskExploreTask", description: "ask-explore", assignment: "noop" }],
+		});
+
+		expect(capturedCalls).toHaveLength(1);
+		expect(managerToolNames(capturedCalls[0]?.mcpManager)).toEqual([]);
+		expect(managerInstructionNames(capturedCalls[0]?.mcpManager)).toEqual([]);
+	});
+
+	test("passes project context files including AGENTS.md to subagents", async () => {
+		const contextFiles = [
+			{ path: "/tmp/test-cwd/AGENTS.md", content: "PROJECT_SENTINEL" },
+			{ path: "/tmp/test-cwd/docs/extra.md", content: "EXTRA_SENTINEL" },
+		];
+		const tool = await TaskTool.create(createSession({ contextFiles }));
+
+		await tool.execute("call-designer-context", {
+			agent: "designer",
+			tasks: [{ id: "DesignerContext", description: "designer", assignment: "noop" }],
+		});
+
+		expect(capturedCalls).toHaveLength(1);
+		expect(capturedCalls[0]?.contextFiles).toEqual(contextFiles);
 	});
 });

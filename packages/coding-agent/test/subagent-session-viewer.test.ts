@@ -20,6 +20,7 @@ function createViewer(
 		onNavigateRoot: vi.fn(),
 		onNavigateNested: vi.fn(),
 		onCycleAgentMode: vi.fn(),
+		onStop: vi.fn(),
 		...overrides,
 	});
 }
@@ -149,7 +150,7 @@ describe("SubagentSessionViewerComponent", () => {
 		}
 	});
 
-	test("renders metadata hierarchy with icon and label cues", () => {
+	test("renders metadata hierarchy with separate provider and exact token count", () => {
 		const viewer = createViewer();
 		setViewerContent(viewer, {
 			headerLines: ["session header"],
@@ -158,22 +159,55 @@ describe("SubagentSessionViewerComponent", () => {
 			metadata: {
 				agentName: "explore-agent",
 				role: "explorer",
+				provider: "anthropic",
 				model: "claude-sonnet-4-20250514",
 				tokens: 12450,
 				tokenCapacity: 200000,
 				status: "running",
 				thinkingLevel: "medium",
-			},
+			} as any,
 		});
 		const text = renderText(viewer, 100);
 		expect(text).toContain("Subagent: explore-agent");
 		expect(text).toContain("Status ● RUNNING");
 		expect(text).toContain("Role explorer");
+		expect(text).toContain("Provider anthropic");
 		expect(text).toContain("Model claude-sonnet-4-20250514");
-		expect(text).toContain("Tokens 12.4k");
+		expect(text).toContain("Tokens 12,450");
 		expect(text).not.toContain("12.4k/200.0k");
 		expect(text).toContain("Thinking medium");
 		expect(text).toContain("session header");
+	});
+
+	test("renders richer session metadata and stop controls for running subagents", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["session header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: {
+				agentName: "plan-verifier",
+				subagentId: "22-VerifyPhase07",
+				sessionId: "1497dbcec67ecb20",
+				role: "plan-verifier",
+				provider: "openai-codex",
+				model: "gpt-5.4",
+				tokens: 20052,
+				status: "running",
+				thinkingLevel: "high",
+				mcpServers: ["augment", "grafana"],
+				toolNames: ["read", "grep", "submit_result"],
+				canStop: true,
+			},
+		});
+		const text = renderText(viewer, 120);
+
+		expect(text).toContain("Subagent #22");
+		expect(text).toContain("22-VerifyPhase07");
+		expect(text).toContain("OMP Session 1497dbcec67ecb20");
+		expect(text).toContain("MCP augment, grafana");
+		expect(text).toContain("Tools 3");
+		expect(text).toContain("S stop");
 	});
 
 	test("renders cancelled status label consistently", () => {
@@ -186,6 +220,65 @@ describe("SubagentSessionViewerComponent", () => {
 		});
 		const text = renderText(viewer, 80);
 		expect(text).toContain("⊘ CANCELLED");
+	});
+
+	test("renders user stopped status label distinctly", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: { agentName: "agent", status: "user_stopped" },
+		});
+		const text = renderText(viewer, 80);
+		expect(text).toContain("USER STOPPED");
+	});
+
+	test("renders elapsed and outcome metadata when available", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: {
+				agentName: "lint",
+				status: "completed",
+				elapsedMs: 65_000,
+				outcome: {
+					status: "pass",
+					label: "lint",
+					summary: "No lint violations found",
+				},
+			} as any,
+		});
+
+		const text = renderText(viewer, 100);
+		expect(text).toContain("Elapsed 1m5s");
+		expect(text).toContain("Outcome PASS");
+		expect(text).toContain("No lint violations found");
+	});
+
+	test("routes stop hotkey only when stop is available", () => {
+		const onStop = vi.fn();
+		const viewer = createViewer({ onStop });
+
+		setViewerContent(viewer, {
+			headerLines: ["header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: { agentName: "agent", status: "running", canStop: true },
+		});
+		viewer.handleInput("s");
+		expect(onStop).toHaveBeenCalledTimes(1);
+
+		setViewerContent(viewer, {
+			headerLines: ["header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: { agentName: "agent", status: "completed", canStop: false },
+		});
+		viewer.handleInput("s");
+		expect(onStop).toHaveBeenCalledTimes(1);
 	});
 
 	test("passes viewport width into transcript renderer", () => {
@@ -227,7 +320,6 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(raw).toContain(transcriptLine);
 		expect(Bun.stripANSI(raw)).toContain("tool call output");
 	});
-
 
 	test("remains legible at narrow widths", () => {
 		const viewer = createViewer();

@@ -7,16 +7,13 @@ import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverride } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
-import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { Skill } from "../extensibility/skills";
-import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
@@ -30,6 +27,8 @@ import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getDirectUsageTokens } from "../utils/usage-tokens";
+import { deriveSubagentOutcomeFromReviewData, type SubagentOutcome } from "./subagent-outcome";
+import { registerSubagentRuntime, unregisterSubagentRuntime } from "./subagent-runtime-registry";
 import { validateSuccessToolRequirements } from "./success-evidence";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
@@ -43,10 +42,18 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
 
-const MCP_CALL_TIMEOUT_MS = 60_000;
 const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
 
-/** Agent event types to forward for progress tracking. */
+function normalizeModelPatterns(value: string | string[] | undefined): string[] {
+	if (!value) return [];
+	if (Array.isArray(value)) {
+		return value.map(entry => entry.trim()).filter(Boolean);
+	}
+	return value
+		.split(",")
+		.map(entry => entry.trim())
+		.filter(Boolean);
+}
 const agentEventTypes = new Set<AgentEvent["type"]>([
 	"agent_start",
 	"agent_end",
@@ -62,49 +69,6 @@ const agentEventTypes = new Set<AgentEvent["type"]>([
 
 const isAgentEvent = (event: AgentSessionEvent): event is AgentEvent =>
 	agentEventTypes.has(event.type as AgentEvent["type"]);
-
-function normalizeModelPatterns(value: string | string[] | undefined): string[] {
-	if (!value) return [];
-	if (Array.isArray(value)) {
-		return value.map(entry => entry.trim()).filter(Boolean);
-	}
-	return value
-		.split(",")
-		.map(entry => entry.trim())
-		.filter(Boolean);
-}
-
-function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
-	if (signal?.aborted) {
-		return Promise.reject(new ToolAbortError());
-	}
-
-	const { promise: wrappedPromise, resolve, reject } = Promise.withResolvers<T>();
-	let settled = false;
-	const timeoutId = setTimeout(() => {
-		if (settled) return;
-		settled = true;
-		reject(new Error(`MCP tool call timed out after ${timeoutMs}ms`));
-	}, timeoutMs);
-
-	const onAbort = () => {
-		if (settled) return;
-		settled = true;
-		clearTimeout(timeoutId);
-		reject(new ToolAbortError());
-	};
-
-	if (signal) {
-		signal.addEventListener("abort", onAbort, { once: true });
-	}
-
-	promise.then(resolve, reject).finally(() => {
-		if (signal) signal.removeEventListener("abort", onAbort);
-		clearTimeout(timeoutId);
-	});
-
-	return wrappedPromise;
-}
 
 function getReportFindingKey(value: unknown): string | null {
 	if (!value || typeof value !== "object") return null;
@@ -163,6 +127,8 @@ export interface ExecutorOptions {
 	skills?: Skill[];
 	promptTemplates?: PromptTemplate[];
 	mcpManager?: MCPManager;
+	/** Allowed MCP server names for subagent to load (when parent manager doesn't have them) */
+	mcpAllowlist?: readonly string[];
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
@@ -255,6 +221,7 @@ export interface SubmitResultItem {
 	data?: unknown;
 	status?: "success" | "aborted";
 	error?: string;
+	outcome?: SubagentOutcome;
 }
 
 interface FinalizeSubprocessOutputArgs {
@@ -374,58 +341,10 @@ function firstNumberField(record: Record<string, unknown>, keys: string[]): numb
 	return undefined;
 }
 
-/**
- * Create proxy tools that reuse the parent's MCP connections.
- */
-function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
-	return mcpManager.getTools().map(tool => {
-		const mcpTool = tool as { mcpToolName?: string; mcpServerName?: string };
-		return {
-			name: tool.name,
-			label: tool.label ?? tool.name,
-			description: tool.description ?? "",
-			parameters: tool.parameters as TSchema,
-			execute: async (_toolCallId, params, _onUpdate, _ctx, signal) => {
-				if (signal?.aborted) {
-					throw new ToolAbortError();
-				}
-				const serverName = mcpTool.mcpServerName ?? "";
-				const mcpToolName = mcpTool.mcpToolName ?? "";
-				try {
-					const result = await withAbortTimeout(
-						(async () => {
-							const connection = await mcpManager.waitForConnection(serverName);
-							return callTool(connection, mcpToolName, params as Record<string, unknown>, { signal });
-						})(),
-						MCP_CALL_TIMEOUT_MS,
-						signal,
-					);
-					return {
-						content: (result.content ?? []).map(item =>
-							item.type === "text"
-								? { type: "text" as const, text: item.text ?? "" }
-								: { type: "text" as const, text: JSON.stringify(item) },
-						),
-						details: { serverName, mcpToolName, isError: result.isError },
-					};
-				} catch (error) {
-					if (error instanceof ToolAbortError) {
-						throw error;
-					}
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `MCP error: ${error instanceof Error ? error.message : String(error)}`,
-							},
-						],
-						details: { serverName, mcpToolName, isError: true },
-					};
-				}
-			},
-		};
-	});
+function resolveSubmitResultOutcome(item: SubmitResultItem | undefined): SubagentOutcome | undefined {
+	return item?.outcome ?? deriveSubagentOutcomeFromReviewData(item?.data);
 }
+
 
 function createSubagentSettings(baseSettings: Settings): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
@@ -454,6 +373,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 	} = options;
 	const startTime = Date.now();
+	let lastActivityMs = startTime;
 
 	// Initialize progress
 	const progress: AgentProgress = {
@@ -470,7 +390,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		toolCount: 0,
 		tokens: 0,
 		durationMs: 0,
+		startedAt: startTime,
+		lastUpdatedMs: startTime,
 		modelOverride,
+	};
+	const syncProgressModel = (activeModel: { provider: string; id: string } | null | undefined): void => {
+		progress.provider = activeModel?.provider;
+		progress.model = activeModel?.id;
 	};
 	const executedToolNames = new Set<string>();
 
@@ -489,6 +415,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			truncated: false,
 			durationMs: 0,
 			tokens: 0,
+			startedAt: startTime,
+			lastUpdatedMs: startTime,
 			modelOverride,
 			error: "Cancelled before start",
 			aborted: true,
@@ -557,6 +485,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	type AbortReason = "signal" | "terminate";
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
+	let explicitAbortReasonText: string | undefined;
 	const listenerController = new AbortController();
 	const listenerSignal = listenerController.signal;
 	const abortController = new AbortController();
@@ -583,7 +512,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	};
 	let hasUsage = false;
 
-	const requestAbort = (reason: AbortReason) => {
+	const requestAbort = (reason: AbortReason, reasonText?: string) => {
+		if (reasonText?.trim()) {
+			explicitAbortReasonText = reasonText.trim();
+		}
 		if (abortSent) {
 			if (reason === "signal" && abortReason !== "signal") {
 				abortReason = "signal";
@@ -608,6 +540,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const resolveSignalAbortReason = (): string => {
+		if (explicitAbortReasonText) {
+			return explicitAbortReasonText;
+		}
 		const reason = signal?.reason;
 		if (reason instanceof Error) {
 			const message = reason.message.trim();
@@ -624,6 +559,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const emitProgressNow = () => {
 		progress.durationMs = Date.now() - startTime;
+		progress.lastUpdatedMs = lastActivityMs;
 		onProgress?.({ ...progress });
 		if (options.eventBus) {
 			options.eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
@@ -729,6 +665,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const processEvent = (event: AgentEvent) => {
 		if (resolved) return;
 
+
 		if (options.eventBus) {
 			options.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 				index,
@@ -739,8 +676,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 		}
 
+
 		const now = Date.now();
+		lastActivityMs = now;
 		let flushProgress = false;
+
 
 		switch (event.type) {
 			case "message_start":
@@ -828,6 +768,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								existing.push(data);
 							}
 							progress.extractedToolData[event.toolName] = existing;
+							if (event.toolName === "submit_result") {
+								progress.outcome = resolveSubmitResultOutcome(data as SubmitResultItem);
+							}
 						}
 					}
 
@@ -982,7 +925,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? await SessionManager.open(sessionFile)
 				: SessionManager.inMemory(worktree ?? cwd);
 
-			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
+			const inheritedMcpTools = options.mcpManager?.getTools() ?? [];
 			const enableMCP = !options.mcpManager;
 
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
@@ -1016,10 +959,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
-				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				eventBus: options.eventBus,
+				mcpAllowlist: options.mcpAllowlist,
+				mcpManager: options.mcpManager,
+				customTools: inheritedMcpTools.length > 0 ? inheritedMcpTools : undefined,
 			});
 
 			activeSession = session;
+			syncProgressModel(session.model);
+			progress.sessionId = session.sessionId;
+			progress.thinkingLevel = effectiveThinkingLevel;
+			progress.tokenCapacity = session.model.contextWindow ?? session.model.maxTokens;
+			scheduleProgress(true);
+
 
 			const subagentToolNames = session.getActiveToolNames();
 			const parentOwnedToolNames = new Set(["todo_write"]);
@@ -1027,11 +979,34 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (filteredSubagentTools.length !== subagentToolNames.length) {
 				await session.setActiveToolsByName(filteredSubagentTools);
 			}
+			const activeToolNames = session.getActiveToolNames();
+			const mcpServers = Array.from(
+				new Set(
+					(options.mcpManager as { getConnectedServers?: () => string[] } | undefined)?.getConnectedServers?.() ?? [],
+				),
+			).sort((left, right) => left.localeCompare(right));
+			const mcpAllowlist = [...(options.mcpAllowlist ?? [])].sort((left, right) => left.localeCompare(right));
+			progress.toolNames = activeToolNames;
+			progress.mcpServers = mcpServers.length > 0 ? mcpServers : undefined;
+			progress.mcpAllowlist = mcpAllowlist.length > 0 ? mcpAllowlist : undefined;
+			registerSubagentRuntime({
+				id,
+				sessionId: session.sessionId,
+				sessionPath: sessionFile ?? undefined,
+				stop: async reason => {
+					requestAbort("signal", reason);
+					return true;
+				},
+			});
 
 			session.sessionManager.appendSessionInit({
 				systemPrompt: session.agent.state.systemPrompt,
 				task,
-				tools: session.getActiveToolNames(),
+				tools: activeToolNames,
+				contextFile: options.contextFile,
+				sessionId: session.sessionId,
+				mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
+				mcpAllowlist: mcpAllowlist.length > 0 ? mcpAllowlist : undefined,
 				outputSchema,
 			});
 
@@ -1076,6 +1051,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							const key = await session.modelRegistry.getApiKey(model);
 							if (!key) return false;
 							await session.setModel(model);
+							syncProgressModel(session.model);
+							lastActivityMs = Date.now();
+							scheduleProgress(true);
 							return true;
 						},
 						getThinkingLevel: () => session.thinkingLevel,
@@ -1232,6 +1210,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					// Ignore cleanup errors
 				}
 			}
+			unregisterSubagentRuntime(id);
 		}
 
 		return {
@@ -1299,6 +1278,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const lastSubmitResult = submitResultItems?.[submitResultItems.length - 1];
 	const submitResultAbortReason =
 		lastSubmitResult?.status === "aborted" ? lastSubmitResult.error || "Subagent aborted task" : undefined;
+	const outcome = resolveSubmitResultOutcome(lastSubmitResult);
 	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
 	const successEvidenceFailure =
 		exitCode === 0 && !abortedViaSubmitResult
@@ -1340,6 +1320,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : "Subagent aborted task"))
 		: undefined;
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
+	progress.abortReason = finalAbortReason;
+	progress.outcome = outcome;
 	scheduleProgress(true);
 
 	return {
@@ -1356,10 +1338,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		truncated,
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
+		startedAt: progress.startedAt,
+		lastUpdatedMs: progress.lastUpdatedMs,
+		provider: progress.provider,
+		model: progress.model,
 		modelOverride,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
+		sessionId: progress.sessionId,
+		thinkingLevel: progress.thinkingLevel,
+		tokenCapacity: progress.tokenCapacity,
+		toolNames: progress.toolNames,
+		mcpServers: progress.mcpServers,
+		mcpAllowlist: progress.mcpAllowlist,
+		outcome,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,

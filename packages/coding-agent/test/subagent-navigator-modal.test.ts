@@ -56,12 +56,14 @@ function createModal(
 	overrides?: {
 		onSelectionChange?: (s: SubagentNavigatorSelection) => void;
 		onOpenSelection?: (s: SubagentNavigatorSelection) => void;
+		onStopSelection?: (s: SubagentNavigatorSelection) => void;
 		onClose?: () => void;
 	},
 ): SubagentNavigatorModal {
 	return new SubagentNavigatorModal(groups, selection, {
 		onSelectionChange: overrides?.onSelectionChange ?? vi.fn(),
 		onOpenSelection: overrides?.onOpenSelection ?? vi.fn(),
+		onStopSelection: overrides?.onStopSelection ?? vi.fn(),
 		onClose: overrides?.onClose ?? vi.fn(),
 	});
 }
@@ -104,6 +106,7 @@ describe("SubagentNavigatorModal", () => {
 			expect(text).toContain("#");
 			expect(text).toContain("Title");
 			expect(text).toContain("Status");
+			expect(text).toContain("Result");
 			expect(text).toContain("Role");
 			expect(text).toContain("Model");
 			expect(text).toContain("Last Active");
@@ -144,29 +147,34 @@ describe("SubagentNavigatorModal", () => {
 	});
 
 	describe("list rows", () => {
-		test("renders index, title, status, role, model, last-active, and tokens", () => {
+		test("renders exact token counts and strips provider prefixes from model cells", () => {
 			const now = Date.now();
 			const refs = [
 				makeRef("explore-001", {
 					description: "Build runbook dashboard",
 					agent: "explore",
-					model: "claude-sonnet-4-20250514",
+					model: "anthropic/claude-sonnet-4-20250514",
 					status: "running",
 					lastUpdatedMs: now - 12_000,
-					tokens: 12_400,
+					tokens: 12_450,
 				}),
 			];
 			const modal = createModal([makeGroup("explore-001", refs)]);
-			const lines = renderLines(modal, 120);
+			const lines = renderLines(modal, 140);
 			const text = lines.join("\n");
 
 			expect(text).toContain("Build runbook dashboard");
 			expect(text).toContain("RUNNING");
 			expect(text).toContain("explore");
-			expect(text).toContain("claude-sonnet-4-202505");
+			expect(text).toContain("claude-sonnet-4-20250514");
+			expect(text).not.toContain("anthropic/claude-sonnet-4-20250514");
 			expect(text).toContain("12s ago");
-			expect(text).toContain("12.4k");
-			expect(lines.some(line => /│\s*1\s*│\s*Build runbook dashboard\s*│\s*●\s+RUNNING\s*│\s*explore/.test(line))).toBe(true);
+			expect(text).toContain("12,450");
+			expect(
+				lines.some(line =>
+					/│\s*1\s*│\s*Build runbook dashboard\s*│\s*●\s+RUNNING\s*│\s*---\s*│\s*explore/.test(line),
+				),
+			).toBe(true);
 		});
 
 		test("renders color-coded statuses for root and nested rows", () => {
@@ -186,7 +194,6 @@ describe("SubagentNavigatorModal", () => {
 			expect(rawText).toContain(`${theme.getFgAnsi("warning")}PENDING`);
 			expect(rawText).toContain(`${theme.getFgAnsi("muted")}CANCELED`);
 		});
-
 
 		test("renders missing last-active values as --- without breaking alignment", () => {
 			const refs = [makeRef("agent-1", { lastUpdatedMs: undefined, tokens: 42 })];
@@ -248,27 +255,78 @@ describe("SubagentNavigatorModal", () => {
 			expect(text).toContain("↳ ");
 			expect(separators.length).toBeGreaterThanOrEqual(2);
 		});
-	});
 
-		test("renders a status summary footer for visible parent and nested agents", () => {
+		test("renders selected-subagent metadata strip with OMP session and MCP servers", () => {
 			const refs = [
-				makeRef("agent-running", { status: "running" }),
-				makeRef("agent-complete", { status: "completed", parentId: "agent-running", rootId: "agent-running" }),
-				makeRef("agent-failed-a", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
-				makeRef("agent-failed-b", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
-				makeRef("agent-pending", { status: "pending", parentId: "agent-running", rootId: "agent-running" }),
-				makeRef("agent-cancelled", { status: "cancelled", parentId: "agent-running", rootId: "agent-running" }),
+				makeRef("verify-001", {
+					agent: "plan-verifier",
+					description: "Verify phase 7",
+					sessionId: "1497dbcec67ecb20",
+					mcpServers: ["augment", "grafana"],
+					elapsedMs: 65_000,
+					outcome: {
+						status: "fail",
+						label: "review",
+						summary: "Blocking findings remain",
+					},
+				}),
 			];
-			const modal = createModal([makeGroup("agent-running", refs)]);
+			const modal = createModal([makeGroup("verify-001", refs)]);
 			const text = renderText(modal, 140);
 
-			expect(text).toContain("1 running");
-			expect(text).toContain("1 done");
-			expect(text).toContain("2 failed");
-			expect(text).toContain("1 pending");
-			expect(text).toContain("1 canceled");
+			expect(text).toContain("Selected");
+			expect(text).toContain("OMP 1497dbcec67ecb20");
+			expect(text).toContain("MCP augment, grafana");
+			expect(text).toContain("Elapsed 1m5s");
+			expect(text).toContain("Result FAIL");
+			expect(text).toContain("Blocking findings remain");
+			expect(text).toContain("S stop");
 		});
 
+		test("does not paint the selected-session summary strip with the table selection background", () => {
+			const refs = [
+				makeRef("verify-001", {
+					agent: "plan-verifier",
+					description: "Verify phase 7",
+				}),
+			];
+			const modal = createModal([makeGroup("verify-001", refs)]);
+			const rawLines = renderRawLines(modal, 140);
+			const summaryLines = rawLines.slice(1, 3);
+
+			expect(summaryLines.some(line => line.includes(theme.getBgAnsi("selectedBg")))).toBe(false);
+		});
+
+		test("renders user stopped status distinctly in rows and summary", () => {
+			const refs = [
+				makeRef("verify-001", { status: "user_stopped" as SubagentStatus }),
+				makeRef("lint-002", { status: "completed", parentId: "verify-001", rootId: "verify-001" }),
+			];
+			const modal = createModal([makeGroup("verify-001", refs)]);
+			const text = renderText(modal, 140);
+
+			expect(text).toContain("USER STOPPED");
+		});
+	});
+
+	test("renders a status summary footer for visible parent and nested agents", () => {
+		const refs = [
+			makeRef("agent-running", { status: "running" }),
+			makeRef("agent-complete", { status: "completed", parentId: "agent-running", rootId: "agent-running" }),
+			makeRef("agent-failed-a", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
+			makeRef("agent-failed-b", { status: "failed", parentId: "agent-running", rootId: "agent-running" }),
+			makeRef("agent-pending", { status: "pending", parentId: "agent-running", rootId: "agent-running" }),
+			makeRef("agent-cancelled", { status: "cancelled", parentId: "agent-running", rootId: "agent-running" }),
+		];
+		const modal = createModal([makeGroup("agent-running", refs)]);
+		const text = renderText(modal, 140);
+
+		expect(text).toContain("1 running");
+		expect(text).toContain("1 done");
+		expect(text).toContain("2 failed");
+		expect(text).toContain("1 pending");
+		expect(text).toContain("1 canceled");
+	});
 
 	describe("initial selection", () => {
 		test("defaults to the most recently active entry when no selection is provided", () => {
@@ -352,6 +410,17 @@ describe("SubagentNavigatorModal", () => {
 			modal.handleInput("\x1b");
 			modal.handleInput("\x18");
 			expect(onClose).toHaveBeenCalledTimes(3);
+		});
+
+		test("s requests stop for the current selection", () => {
+			const { groups } = singleGroupSetup();
+			const onStopSelection = vi.fn();
+			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 }, { onStopSelection });
+
+			modal.handleInput("s");
+
+			expect(onStopSelection).toHaveBeenCalledTimes(1);
+			expect(onStopSelection).toHaveBeenCalledWith({ groupIndex: 0, nestedIndex: -1 });
 		});
 
 		test("Tab does not switch into a detail pane", () => {

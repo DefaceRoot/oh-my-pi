@@ -165,7 +165,10 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
-
+	/** Allowed MCP server names for this session (when undefined, uses role-based defaults) */
+	mcpAllowlist?: readonly string[];
+	/** Reuse an already-connected MCP manager instead of discovering servers for this session. */
+	mcpManager?: MCPManager;
 	/** Enable LSP integration (tool, formatting, diagnostics, warmup). Default: true */
 	enableLsp?: boolean;
 	/** Skip Python kernel availability check and prelude warmup */
@@ -535,9 +538,21 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
  * These are re-created whenever prompts change (setOnPromptsChanged callback).
  */
 function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
+	const managerLike = manager as Partial<MCPManager> & {
+		getConnectedServers?: () => string[];
+		getServerPrompts?: (name: string) => Array<{ name: string; description?: string }> | undefined;
+		executePrompt?: (
+			serverName: string,
+			promptName: string,
+			args?: Record<string, string>,
+		) => Promise<{ messages: Array<{ content: unknown[] | unknown }> } | null>;
+	};
+	if (typeof managerLike.getConnectedServers !== "function" || typeof managerLike.getServerPrompts !== "function") {
+		return [];
+	}
 	const commands: LoadedCustomCommand[] = [];
-	for (const serverName of manager.getConnectedServers()) {
-		const prompts = manager.getServerPrompts(serverName);
+	for (const serverName of managerLike.getConnectedServers()) {
+		const prompts = managerLike.getServerPrompts(serverName);
 		if (!prompts?.length) continue;
 		for (const prompt of prompts) {
 			const commandName = `${serverName}:${prompt.name}`;
@@ -549,6 +564,7 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
 					name: commandName,
 					description: prompt.description ?? `MCP prompt from ${serverName}`,
 					async execute(args: string[]) {
+						if (typeof managerLike.executePrompt !== "function") return "";
 						const promptArgs: Record<string, string> = {};
 						for (const arg of args) {
 							const eqIdx = arg.indexOf("=");
@@ -556,17 +572,21 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
 								promptArgs[arg.slice(0, eqIdx)] = arg.slice(eqIdx + 1);
 							}
 						}
-						const result = await manager.executePrompt(serverName, prompt.name, promptArgs);
+						const result = await managerLike.executePrompt(serverName, prompt.name, promptArgs);
 						if (!result) return "";
 						const parts: string[] = [];
 						for (const msg of result.messages) {
 							const contentItems = Array.isArray(msg.content) ? msg.content : [msg.content];
-							for (const item of contentItems) {
-								if (item.type === "text") {
+							for (const rawItem of contentItems) {
+								const item = rawItem as {
+									type?: string;
+									text?: string;
+									resource?: { text?: string };
+								};
+								if (item.type === "text" && item.text) {
 									parts.push(item.text);
-								} else if (item.type === "resource") {
-									const resource = item.resource;
-									if (resource.text) parts.push(resource.text);
+								} else if (item.type === "resource" && item.resource?.text) {
+									parts.push(item.resource.text);
 								}
 							}
 						}
@@ -677,14 +697,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
 	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
+	// Use explicit mcpAllowlist from options if provided, otherwise fall back to role-based defaults
 	const sessionMcpDiscoveryAllowlist =
-		(options.taskDepth ?? 0) > 0
+		options.mcpAllowlist ??
+		((options.taskDepth ?? 0) > 0
 			? startupRoleMcpAllowlist
 			: Array.from(
 					new Set(
 						(["default", "orchestrator", "plan", "ask"] as const).flatMap(role => getRoleMcpAllowlist(role)),
 					),
-				);
+				));
 	const mcpServerNameByToolName = new Map<string, string>();
 
 	const modelApiKeyAvailability = new Map<string, boolean>();
@@ -983,10 +1005,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasWebSearchBuiltin = startupBuiltinToolNames.includes("web_search");
 	const hasBrowserBuiltin = startupBuiltinToolNames.includes("browser");
 	// Discover MCP tools from .mcp.json files
-	let mcpManager: MCPManager | undefined;
+	let mcpManager: MCPManager | undefined = options.mcpManager;
 	const enableMCP = options.enableMCP ?? true;
+	const shouldDiscoverMCP = enableMCP && !mcpManager;
 	const customTools: CustomTool[] = [];
-	if (enableMCP) {
+	if (mcpManager) {
+		toolSession.mcpManager = mcpManager;
+	}
+	if (shouldDiscoverMCP) {
 		const mcpResult = await logger.timeAsync("discoverAndLoadMCPTools", () =>
 			discoverAndLoadMCPTools(cwd, {
 				onConnecting: serverNames => {
@@ -1305,10 +1331,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolContextStore.setToolNames(toolNames);
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 		const currentMode = normalizeMainRole(sessionManager.getLastModelChangeRole());
-		const currentRoleMcpAllowlist = getRoleMcpAllowlist(currentMode);
+		const promptMcpAllowlist = options.mcpAllowlist ?? getRoleMcpAllowlist(currentMode);
 
 		// Build combined append prompt: memory instructions + MCP server instructions
-		const serverInstructions = mcpManager?.getServerInstructions(currentRoleMcpAllowlist);
+		const serverInstructions = mcpManager?.getServerInstructions(promptMcpAllowlist);
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		if (serverInstructions && serverInstructions.size > 0) {
 			const MAX_INSTRUCTIONS_LENGTH = 4000;
@@ -1374,12 +1400,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		? roleAwareRequested
 		: roleAwareRequested.filter(name => name !== "exit_plan_mode");
 
-	// Custom tools and extension-registered tools are always included regardless of toolNames filter,
-	// except MCP tools which remain role-scoped.
+	// Custom tools and extension-registered tools are always included regardless of toolNames filter.
+	// Inherited MCP tools remain available in subagent sessions when no explicit allowlist was supplied.
+	const explicitMcpAllowlist = options.mcpAllowlist;
+	const allowlistedMcpServers = explicitMcpAllowlist ? new Set(explicitMcpAllowlist) : undefined;
+	const includeInheritedMcpTools = (options.taskDepth ?? 0) > 0 && explicitMcpAllowlist === undefined;
 	const alwaysInclude: string[] = [
 		...(options.customTools?.map(t => (isCustomTool(t) ? t.name : t.name)) ?? []),
 		...registeredTools.map(t => t.definition.name),
-	].filter(name => !name.startsWith("mcp_"));
+	].filter(name => {
+		if (!toolRegistry.has(name)) return false;
+		if (!name.startsWith("mcp_")) return true;
+		if (allowlistedMcpServers) {
+			const tool = toolRegistry.get(name);
+			const mcpServerName = mcpServerNameByToolName.get(name) ?? (tool ? getMcpServerNameForTool(tool) : undefined);
+			return mcpServerName !== undefined && allowlistedMcpServers.has(mcpServerName);
+		}
+		return includeInheritedMcpTools;
+	});
 	for (const name of alwaysInclude) {
 		if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
 			initialToolNames.push(name);
@@ -1608,13 +1646,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Wire MCP manager callbacks to session for reactive tool updates
 	if (mcpManager) {
-		mcpManager.setOnToolsChanged(tools => {
+		const promptCommands = buildMCPPromptCommands(mcpManager);
+		if (promptCommands.length > 0) {
+			session.setMCPPromptCommands(promptCommands);
+		}
+		mcpManager.setOnToolsChanged?.(tools => {
 			void session.refreshMCPTools(tools);
 		});
 		// Wire prompt refresh → rebuild MCP prompt slash commands
-		mcpManager.setOnPromptsChanged(serverName => {
-			const promptCommands = buildMCPPromptCommands(mcpManager);
-			session.setMCPPromptCommands(promptCommands);
+		mcpManager.setOnPromptsChanged?.(serverName => {
+			const updatedPromptCommands = buildMCPPromptCommands(mcpManager);
+			session.setMCPPromptCommands(updatedPromptCommands);
 			logger.debug("MCP prompt commands refreshed", { path: `mcp:${serverName}` });
 		});
 		const notificationDebounceTimers = new Map<string, Timer>();
@@ -1623,7 +1665,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			notificationDebounceTimers.clear();
 		};
 		postmortem.register("mcp-notification-cleanup", clearDebounceTimers);
-		mcpManager.setOnResourcesChanged((serverName, uri) => {
+		mcpManager.setOnResourcesChanged?.((serverName, uri) => {
 			logger.debug("MCP resources changed", { path: `mcp:${serverName}`, uri });
 			if (!settings.get("mcp.notifications")) return;
 			const debounceMs = (settings.get("mcp.notificationDebounceMs") as number) ?? 500;

@@ -2,6 +2,9 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { parseModelString } from "../../config/model-resolver";
+import { deriveSubagentOutcomeFromReviewData, normalizeSubagentOutcome } from "../../task/subagent-outcome";
+import { isUserStoppedAbortReason } from "../../task/subagent-stop";
 import type { SingleResult } from "../../task/types";
 import { getDirectUsageTokens } from "../../utils/usage-tokens";
 import { extractAssignmentPreview, extractTaskContextPreview } from "./task-preview";
@@ -220,8 +223,9 @@ export class SubagentIndex {
 		if (agent) existing.agent = agent;
 		const description = this.#readString(record.description);
 		if (description) existing.description = description;
-		const model = this.#formatSubagentModel(record.modelOverride);
-		if (model) existing.model = model;
+		const modelMetadata = this.#readSubagentModel(record);
+		if (modelMetadata.provider) existing.provider = modelMetadata.provider;
+		if (modelMetadata.model) existing.model = modelMetadata.model;
 
 		const usageTokens = getDirectUsageTokens(record.usage);
 		const explicitTokens = this.#readNumber(record.tokens);
@@ -255,6 +259,21 @@ export class SubagentIndex {
 		if (sessionId) existing.sessionId = sessionId;
 		const parentAgentName = this.#readString(record.parentAgentName) ?? this.#readString(record.parentAgent);
 		if (parentAgentName) existing.parentAgentName = parentAgentName;
+		const abortReason = this.#readString(record.abortReason);
+		if (abortReason) existing.abortReason = abortReason;
+		if (existing.status === "cancelled" && isUserStoppedAbortReason(abortReason)) {
+			existing.status = "user_stopped";
+		}
+		const toolNames = this.#readStringArray(record.toolNames ?? record.tools);
+		if (toolNames) existing.toolNames = toolNames;
+		const mcpServers = this.#readStringArray(record.mcpServers);
+		if (mcpServers) existing.mcpServers = mcpServers;
+		const mcpAllowlist = this.#readStringArray(record.mcpAllowlist);
+		if (mcpAllowlist) existing.mcpAllowlist = mcpAllowlist;
+		const outcome =
+			normalizeSubagentOutcome(record.outcome) ??
+			this.#readOutcomeFromExtractedToolData(record.extractedToolData);
+		if (outcome) existing.outcome = outcome;
 
 		const lastUpdatedMs =
 			this.#readNumber(record.lastUpdatedMs) ??
@@ -264,7 +283,7 @@ export class SubagentIndex {
 		if (lastUpdatedMs !== undefined) {
 			existing.lastUpdatedMs = Math.max(existing.lastUpdatedMs ?? 0, lastUpdatedMs);
 		}
-		existing.lastSeenOrder = this.#seenOrder;
+		existing.lastSeenOrder ??= this.#seenOrder;
 
 		this.#taskRefs.set(id, existing);
 	}
@@ -277,14 +296,48 @@ export class SubagentIndex {
 			next.sessionPath ??= filesystemRef.sessionPath;
 			next.outputPath ??= filesystemRef.outputPath;
 			next.lastUpdatedMs = Math.max(next.lastUpdatedMs ?? 0, filesystemRef.mtimeMs);
-			next.lastSeenOrder = Math.max(next.lastSeenOrder ?? 0, filesystemRef.lastSeenOrder);
-			next.status ??= "completed";
+			next.lastSeenOrder = this.#mergeSeenOrder(next.lastSeenOrder, filesystemRef.lastSeenOrder);
+			// Note: Don't set status default here - let finalizeRef handle it
+			// to avoid overriding task ref status when merging
 			merged.set(filesystemRef.id, next);
 		}
-
 		for (const taskRef of this.#taskRefs.values()) {
 			const base = merged.get(taskRef.id) ?? this.#createBaseRef(taskRef.id);
-			const next = { ...base, ...taskRef };
+			// Merge carefully to preserve base values when taskRef has undefined
+			// (spread operator copies undefined as explicit values)
+			// Use explicit undefined checks for fields where 0 is a valid value
+			const next: SubagentViewRef = {
+				id: taskRef.id,
+				// Prefer task ref values, fall back to base for undefined
+				agent: taskRef.agent ?? base.agent,
+				description: taskRef.description ?? base.description,
+				provider: taskRef.provider ?? base.provider,
+				model: taskRef.model ?? base.model,
+				status: taskRef.status ?? base.status,
+				// Numeric fields need explicit undefined checks (0 is valid)
+				tokens: taskRef.tokens !== undefined ? taskRef.tokens : base.tokens,
+				contextPreview: taskRef.contextPreview ?? base.contextPreview,
+				assignmentPreview: taskRef.assignmentPreview ?? base.assignmentPreview,
+				thinkingLevel: taskRef.thinkingLevel ?? base.thinkingLevel,
+				tokenCapacity: taskRef.tokenCapacity !== undefined ? taskRef.tokenCapacity : base.tokenCapacity,
+				startedAt: taskRef.startedAt !== undefined ? taskRef.startedAt : base.startedAt,
+				elapsedMs: taskRef.elapsedMs !== undefined ? taskRef.elapsedMs : base.elapsedMs,
+				sessionId: taskRef.sessionId ?? base.sessionId,
+				parentAgentName: taskRef.parentAgentName ?? base.parentAgentName,
+				abortReason: taskRef.abortReason ?? base.abortReason,
+				toolNames: taskRef.toolNames ?? base.toolNames,
+				mcpServers: taskRef.mcpServers ?? base.mcpServers,
+				mcpAllowlist: taskRef.mcpAllowlist ?? base.mcpAllowlist,
+				outcome: taskRef.outcome ?? base.outcome,
+				// Always use task ref for these tracking fields
+				rootId: taskRef.rootId ?? base.rootId,
+				parentId: taskRef.parentId ?? base.parentId,
+				depth: taskRef.depth ?? base.depth,
+				// Paths: prefer base (filesystem discovery) unless task ref has explicit different path
+				sessionPath: taskRef.sessionPath ?? base.sessionPath,
+				outputPath: taskRef.outputPath ?? base.outputPath,
+			};
+			// Special handling for path conflicts: keep base paths if task ref paths are different
 			if (base.sessionPath && taskRef.sessionPath && base.sessionPath !== taskRef.sessionPath) {
 				next.sessionPath = base.sessionPath;
 			}
@@ -292,7 +345,7 @@ export class SubagentIndex {
 				next.outputPath = base.outputPath;
 			}
 			next.lastUpdatedMs = Math.max(taskRef.lastUpdatedMs ?? 0, next.lastUpdatedMs ?? 0) || undefined;
-			next.lastSeenOrder = Math.max(taskRef.lastSeenOrder ?? 0, next.lastSeenOrder ?? 0) || undefined;
+			next.lastSeenOrder = this.#mergeSeenOrder(next.lastSeenOrder, taskRef.lastSeenOrder);
 			merged.set(taskRef.id, next);
 		}
 
@@ -344,28 +397,49 @@ export class SubagentIndex {
 		return next;
 	}
 
+	#mergeSeenOrder(left?: number, right?: number): number | undefined {
+		const values = [left, right].filter(
+			(value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+		);
+		if (values.length === 0) return undefined;
+		return Math.min(...values);
+	}
+
 	#getRecencyScore(ref: SubagentViewRef): number {
-		return ref.lastUpdatedMs ?? ref.lastSeenOrder ?? 0;
+		return ref.startedAt ?? ref.lastUpdatedMs ?? ref.lastSeenOrder ?? 0;
+	}
+
+	#getLastActivityScore(ref: SubagentViewRef): number {
+		return ref.lastUpdatedMs ?? ref.lastSeenOrder ?? this.#getRecencyScore(ref);
+	}
+
+	#getGroupSortScore(group: SubagentViewGroup): number {
+		const rootRef = group.refs.find(ref => ref.id === group.rootId);
+		if (rootRef) return this.#getRecencyScore(rootRef);
+		let best = 0;
+		for (const ref of group.refs) {
+			best = Math.max(best, this.#getRecencyScore(ref));
+		}
+		return best;
 	}
 
 	#buildGroups(refs: SubagentViewRef[]): SubagentViewGroup[] {
 		const groups = new Map<string, SubagentViewGroup>();
 		for (const ref of refs) {
 			const rootId = ref.rootId ?? this.#getHierarchy(ref.id).rootId;
-			const recency = this.#getRecencyScore(ref);
+			const activityScore = this.#getLastActivityScore(ref);
 			const existing = groups.get(rootId);
 			if (!existing) {
-				groups.set(rootId, { rootId, refs: [ref], lastUpdatedMs: recency });
+				groups.set(rootId, { rootId, refs: [ref], lastUpdatedMs: activityScore });
 				continue;
 			}
 			existing.refs.push(ref);
-			existing.lastUpdatedMs = Math.max(existing.lastUpdatedMs, recency);
+			existing.lastUpdatedMs = Math.max(existing.lastUpdatedMs, activityScore);
 		}
 
 		const sorted = Array.from(groups.values()).sort((left, right) => {
-			if (right.lastUpdatedMs !== left.lastUpdatedMs) {
-				return right.lastUpdatedMs - left.lastUpdatedMs;
-			}
+			const sortDelta = this.#getGroupSortScore(right) - this.#getGroupSortScore(left);
+			if (sortDelta !== 0) return sortDelta;
 			return left.rootId.localeCompare(right.rootId);
 		});
 
@@ -511,12 +585,17 @@ export class SubagentIndex {
 		if (typeof status !== "string") {
 			return undefined;
 		}
+		// Map AgentProgress "aborted" to SubagentStatus "cancelled"
+		if (status === "aborted") {
+			return "cancelled";
+		}
 		if (
 			status === "running" ||
 			status === "completed" ||
 			status === "failed" ||
 			status === "pending" ||
-			status === "cancelled"
+			status === "cancelled" ||
+			status === "user_stopped"
 		) {
 			return status;
 		}
@@ -525,7 +604,7 @@ export class SubagentIndex {
 
 	#inferStatusFromTaskResult(record: Record<string, unknown>): SubagentStatus | undefined {
 		if (record.aborted === true) {
-			return "cancelled";
+			return isUserStoppedAbortReason(this.#readString(record.abortReason)) ? "user_stopped" : "cancelled";
 		}
 		const exitCode = this.#readNumber(record.exitCode);
 		if (exitCode === undefined) {
@@ -534,14 +613,30 @@ export class SubagentIndex {
 		return exitCode === 0 ? "completed" : "failed";
 	}
 
+	#readSubagentModel(record: Record<string, unknown>): { provider?: string; model?: string } {
+		const explicitProvider = this.#readString(record.provider);
+		const modelValue = this.#readString(record.model) ?? this.#formatSubagentModel(record.modelOverride);
+		if (!modelValue) {
+			return { provider: explicitProvider };
+		}
+		const parsed = parseModelString(modelValue);
+		return {
+			provider: explicitProvider ?? parsed?.provider,
+			model: parsed?.id ?? modelValue,
+		};
+	}
+
+
 	#formatSubagentModel(modelOverride: unknown): string | undefined {
 		if (typeof modelOverride === "string" && modelOverride.trim().length > 0) {
-			return modelOverride;
+			return parseModelString(modelOverride)?.id ?? modelOverride;
 		}
 		if (!Array.isArray(modelOverride)) {
 			return undefined;
 		}
-		const values = modelOverride.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+		const values = modelOverride
+			.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+			.map(item => parseModelString(item)?.id ?? item.trim());
 		return values.length > 0 ? values.join(", ") : undefined;
 	}
 
@@ -563,5 +658,34 @@ export class SubagentIndex {
 
 	#readNumber(value: unknown): number | undefined {
 		return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	}
+
+	#readStringArray(value: unknown): string[] | undefined {
+		if (!Array.isArray(value)) return undefined;
+		const items = value
+			.filter((item): item is string => typeof item === "string")
+			.map(item => item.trim())
+			.filter(Boolean);
+		return items.length > 0 ? items : undefined;
+	}
+
+	#readOutcomeFromExtractedToolData(value: unknown) {
+		if (!value || typeof value !== "object") return undefined;
+		const extracted = value as Record<string, unknown>;
+		const submitResults = extracted.submit_result;
+		if (!Array.isArray(submitResults) || submitResults.length === 0) return undefined;
+		const lastSubmitResult = submitResults[submitResults.length - 1];
+		return (
+			normalizeSubagentOutcome(
+				lastSubmitResult && typeof lastSubmitResult === "object"
+					? (lastSubmitResult as Record<string, unknown>).outcome
+					: undefined,
+			) ??
+			deriveSubagentOutcomeFromReviewData(
+				lastSubmitResult && typeof lastSubmitResult === "object"
+					? (lastSubmitResult as Record<string, unknown>).data
+					: undefined,
+			)
+		);
 	}
 }

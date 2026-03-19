@@ -159,6 +159,7 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 			status: "completed",
 			tokens: 1999,
 			description: "Explore sidebar task",
+			outcome: { status: "pass", label: "lint" },
 		});
 		const failedChild = makeRef("0-Explore.0-Reviewer", {
 			rootId: "0-Explore",
@@ -167,6 +168,7 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 			agent: "code-reviewer",
 			status: "failed",
 			tokens: 1550,
+			outcome: { status: "fail", label: "review" },
 		});
 		const runningParent = makeRef("1-Research", {
 			agent: "research",
@@ -185,13 +187,49 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toMatchObject({ kind: "parent", id: "0-Explore", status: "failed", tokens: 1999 });
 		expect(rows[0]?.children).toEqual([
-			{ kind: "child", id: "0-Explore.0-Reviewer", agentName: "code-reviewer", status: "failed", tokens: 1550 },
+			{
+				kind: "child",
+				id: "0-Explore.0-Reviewer",
+				agentName: "code-reviewer",
+				status: "failed",
+				tokens: 1550,
+				outcome: { status: "fail", label: "review" },
+			},
 		]);
 		expect(rows[1]).toMatchObject({ kind: "parent", id: "1-Research", status: "running", tokens: 1000 });
 		expect(rendered).toContain("Subagents");
-		expect(rendered).toContain("✗ explore · 2.0k tok");
-		expect(rendered).toContain("└─ ✗ code-reviewer · 1.6k tok");
+		expect(rendered).toContain("✗ explore · 2.0k tok [PASS]");
+		expect(rendered).toContain("└─ ✗ code-reviewer · 1.6k tok [FAIL]");
 		expect(rendered).toContain("◐ research · 1.0k tok");
+		expect(statSyncSpy).not.toHaveBeenCalled();
+		expect(scanSyncSpy).not.toHaveBeenCalled();
+	});
+
+	test("buildSidebarSubagents keeps refs-only fallback ordering stable while tokens and status update", () => {
+		const older = makeRef("z-older", {
+			agent: "implement",
+			status: "running",
+			tokens: 1200,
+			startedAt: 1_000,
+			lastUpdatedMs: 9_000,
+			description: "Long-running worker",
+		});
+		const newer = makeRef("a-newer", {
+			agent: "research",
+			status: "running",
+			tokens: 2400,
+			startedAt: 2_000,
+			lastUpdatedMs: 3_000,
+			description: "Newer worker",
+		});
+		const mode = createModeWithSnapshot([older, newer], []) as any;
+
+		const rows = mode.buildSidebarSubagents();
+
+		expect(rows).toHaveLength(2);
+		expect(rows?.map((row: { id: string }) => row.id)).toEqual(["a-newer", "z-older"]);
+		expect(rows?.[0]).toMatchObject({ id: "a-newer", tokens: 2400, status: "running" });
+		expect(rows?.[1]).toMatchObject({ id: "z-older", tokens: 1200, status: "running" });
 		expect(statSyncSpy).not.toHaveBeenCalled();
 		expect(scanSyncSpy).not.toHaveBeenCalled();
 	});
