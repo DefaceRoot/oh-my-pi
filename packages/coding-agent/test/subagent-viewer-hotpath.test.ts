@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as nodeFs from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +9,18 @@ import type {
 	SubagentViewGroup,
 	SubagentViewRef,
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+function plain(text: string): string {
+	return text.replace(ANSI_PATTERN, "");
+}
+
+beforeAll(async () => {
+	await initTheme(false);
+});
 
 /**
  * Hot-path absence tests for the active viewer navigation path.
@@ -560,6 +571,7 @@ describe("InteractiveMode subagent token loading", () => {
 
 		expect(setContent).toHaveBeenCalledTimes(1);
 		const payload = setContent.mock.calls[0]?.[0];
+		const headerText = plain(payload.headerLines.join("\n"));
 		expect(payload.metadata).toMatchObject({
 			subagentId: "22-VerifyPhase07",
 			sessionId: "1497dbcec67ecb20",
@@ -570,9 +582,60 @@ describe("InteractiveMode subagent token loading", () => {
 			mcpAllowlist: ["augment"],
 			canStop: true,
 		});
-		expect(payload.headerLines.join("\n")).toContain("Task 1/1");
-		expect(payload.headerLines.join("\n")).toContain("Nested 0/0 descendants");
-		expect(payload.headerLines.join("\n")).not.toContain("Nested nested");
-		expect(payload.headerLines.join("\n")).toContain("Source /tmp/22-VerifyPhase07.jsonl");
+		expect(headerText).toContain("Task 1/1");
+		expect(headerText).toContain("Nested 0/0 descendants");
+		expect(headerText).not.toContain("Nested nested");
+		expect(headerText).toContain("Source /tmp/22-VerifyPhase07.jsonl");
+	});
+
+	test("renderSubagentSession uses neutral placeholders when agent metadata is missing", async () => {
+		const setContent = vi.fn();
+		const statusLine = { setHookStatus: vi.fn() };
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.subagentCycleIndex = 0;
+		mode.subagentNestedCycleIndex = 0;
+		mode.subagentNestedArrowMode = false;
+		mode.subagentSessionViewer = { setContent };
+		mode.statusLine = statusLine;
+		mode.ui = { requestRender: vi.fn(), terminal: { rows: 40, columns: 120 } };
+		mode.keybindings = { getDisplayString: vi.fn(() => "Ctrl+X") };
+		mode.inputController = { cycleAgentMode: vi.fn(async () => undefined) };
+
+		const rootRef = makeRef("0-LegacyRoot", {
+			agent: undefined,
+			description: "Legacy root assignment",
+			status: "running",
+		});
+		const selected = makeRef("0-LegacyRoot.0-LegacyChild", {
+			agent: undefined,
+			rootId: "0-LegacyRoot",
+			parentId: "0-LegacyRoot",
+			depth: 1,
+			description: "Legacy nested assignment",
+		});
+		const groups = [makeGroup("0-LegacyRoot", [rootRef, selected])];
+
+		await mode.renderSubagentSession(
+			selected,
+			{
+				source: "/tmp/legacy.jsonl",
+				content: "",
+				model: "gpt-5.4",
+				tokens: 1337,
+				skillsUsed: [],
+			},
+			groups,
+		);
+
+		expect(setContent).toHaveBeenCalledTimes(1);
+		const payload = setContent.mock.calls[0]?.[0];
+		const headerText = plain(payload.headerLines.join("\n"));
+		const statusText = plain(String(statusLine.setHookStatus.mock.calls.at(-1)?.[1] ?? ""));
+		expect(payload.metadata).toMatchObject({ agentName: "—", subagentId: "0-LegacyRoot.0-LegacyChild" });
+		expect(headerText).toContain("(0) — | Legacy root assignment");
+		expect(headerText).toContain("↳ (0) — | Legacy nested assignment");
+		expect(statusText).toContain("task 1/1");
+		expect(statusText).toContain("agent:1/1 —");
+		expect(statusText).not.toContain("agent:1/1 task");
 	});
 });

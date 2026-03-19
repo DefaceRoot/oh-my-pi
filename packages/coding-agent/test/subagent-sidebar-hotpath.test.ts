@@ -243,6 +243,42 @@ describe("sidebar hot path avoids sync FS when snapshot is populated", () => {
 		expect(statSyncSpy).not.toHaveBeenCalled();
 		expect(scanSyncSpy).not.toHaveBeenCalled();
 	});
+
+	test("buildSidebarSubagents uses neutral placeholders when agent metadata is missing", () => {
+		const rootRef = makeRef("0-Legacy", {
+			agent: undefined,
+			status: "running",
+			description: "Legacy root artifact missing agent metadata",
+		});
+		const childRef = makeRef("0-Legacy.0-Unknown", {
+			agent: undefined,
+			rootId: "0-Legacy",
+			parentId: "0-Legacy",
+			depth: 1,
+			description: "Legacy nested artifact missing agent metadata",
+		});
+		const mode = createModeWithSnapshot([rootRef, childRef], [makeGroup("0-Legacy", [rootRef, childRef])]) as any;
+
+		const rows = mode.buildSidebarSubagents();
+		const rendered = renderSidebar({ width: 120, subagents: rows }).map(plain).join("\n");
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ kind: "parent", id: "0-Legacy", agentName: "—", status: "running" });
+		expect(rows[0]?.children).toEqual([
+			{
+				kind: "child",
+				id: "0-Legacy.0-Unknown",
+				agentName: "—",
+				status: "completed",
+				tokens: 1200,
+			},
+		]);
+		expect(rendered).toContain("◐ — · 1.2k tok");
+		expect(rendered).toContain("└─ ✓ — · 1.2k tok");
+		expect(rendered).not.toMatch(/\btask\b/);
+		expect(statSyncSpy).not.toHaveBeenCalled();
+		expect(scanSyncSpy).not.toHaveBeenCalled();
+	});
 });
 
 describe("navigator open hot path avoids sync FS when snapshot is populated", () => {

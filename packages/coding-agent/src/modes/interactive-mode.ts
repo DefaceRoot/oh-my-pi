@@ -698,7 +698,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const children = this.getSubagentNestedRefs(group).map(ref => ({
 				kind: "child" as const,
 				id: ref.id,
-				agentName: ref.agent ?? "task",
+				agentName: this.getSubagentAgentLabel(ref.agent),
 				status: this.getSidebarSubagentStatus(ref, now),
 				tokens: ref.tokens,
 				outcome: ref.outcome,
@@ -712,7 +712,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			rows.push({
 				kind: "parent",
 				id: rootRef.id,
-				agentName: rootRef.agent ?? "task",
+				agentName: this.getSubagentAgentLabel(rootRef.agent),
 				status: parentStatus,
 				title: rootRef.description ?? rootRef.contextPreview,
 				tokens: rootRef.tokens,
@@ -2345,7 +2345,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const selector = isSelected ? theme.bold(theme.fg("accent", "▸")) : " ";
 			const branch = isRoot ? "" : "↳ ";
 			const ordinal = this.extractSubagentOrdinal(ref.id);
-			const agentName = this.clipPreview(ref.agent ?? (isRoot ? "task" : "subagent"), 24);
+			const agentName = this.clipPreview(this.getSubagentAgentLabel(ref.agent), 24);
 			const title = this.clipPreview(ref.description ?? this.extractSubagentTitleFromId(ref.id), 84);
 			const line = `${indent}${branch}(${ordinal}) ${agentName} | ${title}`;
 			const lineText = isSelected ? theme.fg("text", line) : theme.fg("dim", line);
@@ -2354,7 +2354,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const maxHierarchyLines = 12;
 		const visibleHierarchyLines = hierarchyLines.slice(0, maxHierarchyLines);
 		const hiddenHierarchyCount = Math.max(0, hierarchyLines.length - visibleHierarchyLines.length);
-		const agentLabel = selected.agent ?? "task";
+		const agentLabel = this.getSubagentAgentLabel(selected.agent);
 		const requestedModelMeta = splitSubagentModelLabel(selected.model);
 		const actualModelMeta = splitSubagentModelLabel(transcript.model);
 		const requestedModelLabel = requestedModelMeta.model;
@@ -2446,7 +2446,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				),
 			nestedArrowMode: this.subagentNestedArrowMode,
 			metadata: {
-				agentName: selected.agent ?? selected.id,
+				agentName: this.getSubagentAgentLabel(selected.agent),
 				subagentId: selected.id,
 				sessionId: transcript.sessionId ?? selected.sessionId,
 				role: selected.agent,
@@ -2554,6 +2554,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			return tail.slice(0, dashIndex);
 		}
 		return tail;
+	}
+
+	private getSubagentAgentLabel(agent?: string): string {
+		return agent ?? "—";
 	}
 
 	private extractSubagentTitleFromId(id: string): string {
