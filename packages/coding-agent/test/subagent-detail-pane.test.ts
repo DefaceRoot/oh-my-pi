@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import {
 	buildTokenGauge,
 	type DetailPaneAction,
+	detectAttributionAnomalies,
 	SubagentDetailPane,
 } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/subagent-detail-pane";
 import type { SubagentViewRef } from "@oh-my-pi/pi-coding-agent/modes/subagent-view/types";
@@ -851,6 +852,220 @@ describe("SubagentDetailPane", () => {
 				expect(pane.handleInput("q")).toBeUndefined();
 				expect(pane.handleInput("z")).toBeUndefined();
 			});
+		});
+	});
+
+	describe("cost attribution", () => {
+		test("renders cost attributed to delegation task ID", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskId: "task-7",
+					taskTitle: "Deploy widgets",
+					costUsd: 0.0342,
+					inputTokens: 8000,
+					outputTokens: 4000,
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Cost for");
+			expect(text).toContain("task-7");
+			expect(text).toContain("$0.034");
+		});
+
+		test("renders token breakdown in verbose mode", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskId: "task-3",
+					taskTitle: "Build module",
+					inputTokens: 15_000,
+					outputTokens: 5_000,
+					cacheReadTokens: 2_000,
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("in:15.0k");
+			expect(text).toContain("out:5.0k");
+			expect(text).toContain("cache-r:2.0k");
+		});
+
+		test("hides token breakdown in compact mode", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskId: "task-3",
+					taskTitle: "Build module",
+					inputTokens: 15_000,
+					outputTokens: 5_000,
+				}),
+			);
+			pane.setVerboseMode(false);
+			const text = renderText(pane);
+			expect(text).not.toContain("in:15.0k");
+			expect(text).not.toContain("out:5.0k");
+		});
+
+		test("renders plain Cost label when no task ID", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					branch: "main",
+					costUsd: 1.25,
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Cost:");
+			expect(text).toContain("$1.25");
+			expect(text).not.toContain("Cost for");
+		});
+
+		test("omits cost attribution when no cost or token breakdown", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskId: "task-1", taskTitle: "X" }));
+			const text = renderText(pane);
+			expect(text).not.toContain("Cost for");
+			expect(text).not.toContain("Cost:");
+		});
+
+		test("formats small costs with 4 decimal places", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskId: "task-1", taskTitle: "X", costUsd: 0.0012 }));
+			const text = renderText(pane);
+			expect(text).toContain("$0.0012");
+		});
+
+		test("formats large costs with 2 decimal places", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskId: "task-1", taskTitle: "X", costUsd: 12.5 }));
+			const text = renderText(pane);
+			expect(text).toContain("$12.50");
+		});
+
+		test("omits zero-value cache tokens from breakdown", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskId: "task-1",
+					taskTitle: "X",
+					inputTokens: 100,
+					outputTokens: 50,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("in:100");
+			expect(text).toContain("out:50");
+			expect(text).not.toContain("cache-r");
+			expect(text).not.toContain("cache-w");
+		});
+	});
+
+	describe("anomaly detection", () => {
+		test("warns when delegation has no tokens on completed agent", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				taskId: "task-1",
+				status: "completed",
+				tokens: undefined,
+			});
+			expect(anomalies).toContainEqual(
+				expect.objectContaining({ severity: "warning", message: expect.stringContaining("No token data") }),
+			);
+		});
+
+		test("warns when tokens exist but no delegation task ID", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				tokens: 5000,
+				status: "completed",
+			});
+			expect(anomalies).toContainEqual(
+				expect.objectContaining({ severity: "warning", message: expect.stringContaining("Unattributed") }),
+			);
+		});
+
+		test("errors when completed delegation shows zero tokens", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				taskId: "task-1",
+				status: "completed",
+				tokens: 0,
+			});
+			// Should emit exactly one anomaly (error), not also a "no token data" warning
+			expect(anomalies).toHaveLength(1);
+			expect(anomalies[0]!.severity).toBe("error");
+			expect(anomalies[0]!.message).toContain("Zero tokens");
+		});
+
+		test("warns on high token usage relative to capacity", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				taskId: "task-1",
+				tokens: 190_000,
+				tokenCapacity: 200_000,
+				status: "running",
+			});
+			expect(anomalies).toContainEqual(
+				expect.objectContaining({ severity: "warning", message: expect.stringContaining("95%") }),
+			);
+		});
+
+		test("no anomalies for healthy attributed delegation", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				taskId: "task-1",
+				tokens: 5000,
+				tokenCapacity: 200_000,
+				status: "completed",
+			});
+			expect(anomalies).toHaveLength(0);
+		});
+
+		test("no anomalies for running agent without delegation", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				status: "running",
+			});
+			expect(anomalies).toHaveLength(0);
+		});
+
+		test("no token-missing warning for running delegation", () => {
+			const anomalies = detectAttributionAnomalies({
+				id: "x",
+				taskId: "task-1",
+				status: "running",
+				tokens: undefined,
+			});
+			const messages = anomalies.map(a => a.message);
+			expect(messages).not.toContain(expect.stringContaining("No token data"));
+		});
+
+		test("anomaly indicators render in detail pane", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskId: "task-5",
+					taskTitle: "Deploy",
+					status: "completed",
+					tokens: 0,
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Zero tokens on completed delegation");
+		});
+
+		test("unattributed cost anomaly renders in detail pane", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					branch: "main",
+					tokens: 10_000,
+					status: "completed",
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Unattributed cost");
+		});
+
+		test("anomaly renders even when no delegation fields exist", () => {
+			// tokens+status present but zero delegation fields -> unattributed cost should still show
+			const pane = new SubagentDetailPane({ id: "orphan", tokens: 10_000, status: "completed" });
+			const text = renderText(pane);
+			expect(text).toContain("Unattributed cost");
+			// Delegation section should NOT render (no delegation fields)
+			expect(text).not.toContain("Delegation");
 		});
 	});
 });

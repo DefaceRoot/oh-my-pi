@@ -133,6 +133,7 @@ export class SubagentDetailPane extends Container {
 		this.#addTimingSection(ref);
 		this.#addSessionContextSection(ref);
 		this.#addDelegationSection(ref);
+		this.#addAnomalyIndicators(ref);
 		this.#addAssignmentSection(ref);
 	}
 
@@ -316,6 +317,9 @@ export class SubagentDetailPane extends Container {
 		// Quality indicator
 		this.#addQualityIndicator(ref);
 
+		// Cost attribution (within delegation context)
+		this.#addCostAttribution(ref);
+
 		// Help text for delegation-field interactions
 		const hints: string[] = [];
 		if (this.#copyableFields.length > 0) {
@@ -354,6 +358,56 @@ export class SubagentDetailPane extends Container {
 			this.addChild(
 				new Text(`  ${theme.fg("text", "Quality:")} ${theme.fg("warning", `\u25B2 ${warnText}`)}`, 1, 0),
 			);
+		}
+	}
+
+	#addCostAttribution(ref: SubagentViewRef): void {
+		const hasTokenBreakdown = ref.inputTokens !== undefined || ref.outputTokens !== undefined;
+		const hasCost = ref.costUsd !== undefined && ref.costUsd > 0;
+
+		if (!hasTokenBreakdown && !hasCost) return;
+
+		// Attribution label: tied to task ID when available
+		if (ref.taskId) {
+			this.addChild(
+				new Text(
+					`  ${theme.fg("text", "Cost for")} ${theme.fg("accent", ref.taskId)}${theme.fg("text", ":")}`,
+					1,
+					0,
+				),
+			);
+		} else {
+			this.addChild(new Text(`  ${theme.fg("text", "Cost:")}`, 1, 0));
+		}
+
+		// Cost in USD
+		if (hasCost) {
+			this.addChild(new Text(`    ${theme.fg("text", "$")}${theme.fg("text", formatCostUsd(ref.costUsd!))}`, 1, 0));
+		}
+
+		// Token breakdown (verbose)
+		if (hasTokenBreakdown && this.#verboseMode) {
+			const parts: string[] = [];
+			if (ref.inputTokens !== undefined) parts.push(`in:${formatTokenCount(ref.inputTokens)}`);
+			if (ref.outputTokens !== undefined) parts.push(`out:${formatTokenCount(ref.outputTokens)}`);
+			if (ref.cacheReadTokens !== undefined && ref.cacheReadTokens > 0)
+				parts.push(`cache-r:${formatTokenCount(ref.cacheReadTokens)}`);
+			if (ref.cacheWriteTokens !== undefined && ref.cacheWriteTokens > 0)
+				parts.push(`cache-w:${formatTokenCount(ref.cacheWriteTokens)}`);
+			if (parts.length > 0) {
+				this.addChild(new Text(`    ${theme.fg("dim", parts.join(" · "))}`, 1, 0));
+			}
+		}
+	}
+
+	#addAnomalyIndicators(ref: SubagentViewRef): void {
+		const anomalies = detectAttributionAnomalies(ref);
+		if (anomalies.length === 0) return;
+
+		for (const anomaly of anomalies) {
+			const color = anomaly.severity === "error" ? "error" : "warning";
+			const glyph = anomaly.severity === "error" ? "\u2717" : "\u25B2";
+			this.addChild(new Text(`  ${theme.fg(color, `${glyph} ${anomaly.message}`)}`, 1, 0));
 		}
 	}
 
@@ -423,4 +477,75 @@ function formatAge(lastUpdatedMs: number): string {
 	if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
 	if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
 	return `${Math.floor(diff / 3_600_000)}h ago`;
+}
+
+/** High usage threshold — tokens exceeding this fraction of capacity trigger a warning. */
+const HIGH_USAGE_THRESHOLD = 0.9;
+
+export interface AttributionAnomaly {
+	severity: "warning" | "error";
+	message: string;
+}
+
+/**
+ * Detect cost/token attribution anomalies for a subagent view ref.
+ * Anomalies surface when:
+ *  - Delegation exists but token data is absent (attribution gap)
+ *  - Tokens/cost exist but no delegation task ID (unattributed cost)
+ *  - Completed/failed agent has zero tokens (suspicious tracking)
+ *  - Token usage exceeds 90% of capacity (potential overrun)
+ */
+export function detectAttributionAnomalies(ref: SubagentViewRef): AttributionAnomaly[] {
+	const anomalies: AttributionAnomaly[] = [];
+	const hasDelegation = !!ref.taskId;
+	const hasTokens = ref.tokens !== undefined && ref.tokens > 0;
+	const hasCost = ref.costUsd !== undefined && ref.costUsd > 0;
+	const isTerminal = ref.status === "completed" || ref.status === "failed";
+
+	// Delegation present but no token data on a terminal agent
+	// (tokens: 0 is handled separately as a zero-token tracking gap)
+	if (hasDelegation && ref.tokens === undefined && isTerminal) {
+		anomalies.push({
+			severity: "warning",
+			message: "No token data for attributed delegation",
+		});
+	}
+
+	// Token/cost data present but no delegation task ID to attribute to
+	if ((hasTokens || hasCost) && !hasDelegation) {
+		anomalies.push({
+			severity: "warning",
+			message: "Unattributed cost — no delegation task ID",
+		});
+	}
+
+	// Completed agent shows zero tokens — possible tracking failure
+	if (hasDelegation && isTerminal && ref.tokens === 0) {
+		anomalies.push({
+			severity: "error",
+			message: "Zero tokens on completed delegation — tracking gap",
+		});
+	}
+
+	// High token usage relative to capacity
+	if (
+		hasTokens &&
+		ref.tokenCapacity !== undefined &&
+		ref.tokenCapacity > 0 &&
+		ref.tokens! / ref.tokenCapacity > HIGH_USAGE_THRESHOLD
+	) {
+		const pct = ((ref.tokens! / ref.tokenCapacity) * 100).toFixed(0);
+		anomalies.push({
+			severity: "warning",
+			message: `High token usage (${pct}% of capacity)`,
+		});
+	}
+
+	return anomalies;
+}
+
+function formatCostUsd(cost: number): string {
+	if (cost < 0.01) return cost.toFixed(4);
+	if (cost < 1) return cost.toFixed(3);
+	return cost.toFixed(2);
 }

@@ -339,6 +339,37 @@ export class SubagentIndex {
 		if (explicitTokens !== undefined || usageTokens !== undefined) {
 			existing.tokens = explicitTokens ?? usageTokens;
 		}
+		// Token breakdown and cost from usage record
+		if (record.usage && typeof record.usage === "object") {
+			const usageRecord = record.usage as Record<string, unknown>;
+			const inputTokens =
+				this.#readNumber(usageRecord.input) ??
+				this.#readNumber(usageRecord.input_tokens) ??
+				this.#readNumber(usageRecord.inputTokens);
+			if (inputTokens !== undefined) existing.inputTokens = inputTokens;
+			const outputTokens =
+				this.#readNumber(usageRecord.output) ??
+				this.#readNumber(usageRecord.output_tokens) ??
+				this.#readNumber(usageRecord.outputTokens);
+			if (outputTokens !== undefined) existing.outputTokens = outputTokens;
+			const cacheReadTokens =
+				this.#readNumber(usageRecord.cacheRead) ??
+				this.#readNumber(usageRecord.cache_read) ??
+				this.#readNumber(usageRecord.cacheReadTokens) ??
+				this.#readNumber(usageRecord.cache_read_tokens);
+			if (cacheReadTokens !== undefined) existing.cacheReadTokens = cacheReadTokens;
+			const cacheWriteTokens =
+				this.#readNumber(usageRecord.cacheWrite) ??
+				this.#readNumber(usageRecord.cache_write) ??
+				this.#readNumber(usageRecord.cacheWriteTokens) ??
+				this.#readNumber(usageRecord.cache_write_tokens);
+			if (cacheWriteTokens !== undefined) existing.cacheWriteTokens = cacheWriteTokens;
+			const costObj = usageRecord.cost;
+			if (costObj && typeof costObj === "object") {
+				const costTotal = this.#readNumber((costObj as Record<string, unknown>).total);
+				if (costTotal !== undefined && costTotal > 0) existing.costUsd = costTotal;
+			}
+		}
 
 		const task = this.#readString(record.task) ?? "";
 		const contextPreview = extractTaskContextPreview(task);
@@ -424,6 +455,11 @@ export class SubagentIndex {
 				status: taskRef.status ?? base.status,
 				// Numeric fields need explicit undefined checks (0 is valid)
 				tokens: taskRef.tokens !== undefined ? taskRef.tokens : base.tokens,
+				inputTokens: taskRef.inputTokens !== undefined ? taskRef.inputTokens : base.inputTokens,
+				outputTokens: taskRef.outputTokens !== undefined ? taskRef.outputTokens : base.outputTokens,
+				cacheReadTokens: taskRef.cacheReadTokens !== undefined ? taskRef.cacheReadTokens : base.cacheReadTokens,
+				cacheWriteTokens: taskRef.cacheWriteTokens !== undefined ? taskRef.cacheWriteTokens : base.cacheWriteTokens,
+				costUsd: taskRef.costUsd !== undefined ? taskRef.costUsd : base.costUsd,
 				contextPreview: taskRef.contextPreview ?? base.contextPreview,
 				assignmentPreview: taskRef.assignmentPreview ?? base.assignmentPreview,
 				thinkingLevel: taskRef.thinkingLevel ?? base.thinkingLevel,

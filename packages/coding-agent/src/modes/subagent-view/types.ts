@@ -11,6 +11,11 @@ export interface SubagentViewRef {
 	provider?: string;
 	model?: string;
 	tokens?: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	costUsd?: number;
 	contextPreview?: string;
 	rootId?: string;
 	parentId?: string;
