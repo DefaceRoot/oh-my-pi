@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { Settings } from "../../src/config/settings";
 import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
+import type { CreateAgentSessionResult } from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import type { AgentDefinition } from "../../src/task/types";
 
-const createAgentSessionMock = mock(async () => {
+const createAgentSessionMock = mock(async (): Promise<CreateAgentSessionResult> => {
 	throw new Error("createAgentSession mock not configured");
 });
 
@@ -112,7 +113,7 @@ describe("runSubprocess token usage semantics", () => {
 		createAgentSessionMock.mockReset();
 	});
 
-	test("uses latest assistant request tokens for result tokens despite repeated message_end", async () => {
+	test("deduplicates repeated assistant message_end usage for result tokens and usage", async () => {
 		const assistant = createAssistantMessage("latest", {
 			input: 5,
 			output: 4,
@@ -148,6 +149,64 @@ describe("runSubprocess token usage semantics", () => {
 		expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
 		expect(result.exitCode).toBe(0);
 		expect(result.tokens).toBe(12);
+		expect(result.usage).toMatchObject({
+			input: 5,
+			output: 4,
+			cacheRead: 2,
+			cacheWrite: 1,
+			totalTokens: 12,
+		});
+	});
+
+	test("retains distinct assistant turns even with identical usage values", async () => {
+		const firstAssistant = createAssistantMessage("first", {
+			input: 3,
+			output: 2,
+			cacheRead: 1,
+			cacheWrite: 4,
+			total_tokens: 10,
+		});
+		const secondAssistant = createAssistantMessage("second", {
+			input: 3,
+			output: 2,
+			cacheRead: 1,
+			cacheWrite: 4,
+			total_tokens: 10,
+		});
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex !== 1) return;
+			state.messages.push(firstAssistant, secondAssistant);
+			emit({ type: "message_end", message: firstAssistant });
+			emit({ type: "message_end", message: secondAssistant });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-identical-turns",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		createAgentSessionMock.mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-identical-turn-usage" });
+		expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+		expect(result.exitCode).toBe(0);
+		expect(result.tokens).toBe(10);
+		expect(result.usage).toMatchObject({
+			input: 6,
+			output: 4,
+			cacheRead: 2,
+			cacheWrite: 8,
+			totalTokens: 20,
+		});
 	});
 
 	test("accumulates cache usage breakdown from canonical alias variants", async () => {

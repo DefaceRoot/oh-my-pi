@@ -513,6 +513,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	let hasUsage = false;
+	const accountedAssistantUsageMessages = new WeakSet<object>();
 
 	const requestAbort = (reason: AbortReason, reasonText?: string) => {
 		if (reasonText?.trim()) {
@@ -832,40 +833,51 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					const messageUsageTokens = getTotalUsageTokens(messageUsage) ?? 0;
 					// Only count assistant messages (not tool results, etc.)
 					if (role === "assistant") {
-						const usageRecord = messageUsage as Record<string, unknown>;
-						const costRecord = (messageUsage as { cost?: Record<string, unknown> }).cost;
-						hasUsage = true;
-						accumulatedUsage.input +=
-							firstNumberField(usageRecord, ["input", "input_tokens", "inputTokens"]) ?? 0;
-						accumulatedUsage.output +=
-							firstNumberField(usageRecord, ["output", "output_tokens", "outputTokens"]) ?? 0;
-						accumulatedUsage.cacheRead +=
-							firstNumberField(usageRecord, [
-								"cacheRead",
-								"cache_read",
-								"cacheReadTokens",
-								"cache_read_tokens",
-								"cacheReadInputTokens",
-								"cache_read_input_tokens",
-							]) ?? 0;
-						accumulatedUsage.cacheWrite +=
-							firstNumberField(usageRecord, [
-								"cacheWrite",
-								"cache_write",
-								"cacheWriteTokens",
-								"cache_write_tokens",
-								"cacheCreationInputTokens",
-								"cache_creation_input_tokens",
-								"cacheWriteInputTokens",
-								"cache_write_input_tokens",
-							]) ?? 0;
-						accumulatedUsage.totalTokens += messageUsageTokens;
-						if (costRecord) {
-							accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
-							accumulatedUsage.cost.output += getNumberField(costRecord, "output") ?? 0;
-							accumulatedUsage.cost.cacheRead += getNumberField(costRecord, "cacheRead") ?? 0;
-							accumulatedUsage.cost.cacheWrite += getNumberField(costRecord, "cacheWrite") ?? 0;
-							accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
+						const assistantMessageKey =
+							event.message && typeof event.message === "object" ? event.message : undefined;
+						const shouldAccumulateUsage =
+							assistantMessageKey === undefined || !accountedAssistantUsageMessages.has(assistantMessageKey);
+
+						if (assistantMessageKey && shouldAccumulateUsage) {
+							accountedAssistantUsageMessages.add(assistantMessageKey);
+						}
+
+						if (shouldAccumulateUsage) {
+							const usageRecord = messageUsage as Record<string, unknown>;
+							const costRecord = (messageUsage as { cost?: Record<string, unknown> }).cost;
+							hasUsage = true;
+							accumulatedUsage.input +=
+								firstNumberField(usageRecord, ["input", "input_tokens", "inputTokens"]) ?? 0;
+							accumulatedUsage.output +=
+								firstNumberField(usageRecord, ["output", "output_tokens", "outputTokens"]) ?? 0;
+							accumulatedUsage.cacheRead +=
+								firstNumberField(usageRecord, [
+									"cacheRead",
+									"cache_read",
+									"cacheReadTokens",
+									"cache_read_tokens",
+									"cacheReadInputTokens",
+									"cache_read_input_tokens",
+								]) ?? 0;
+							accumulatedUsage.cacheWrite +=
+								firstNumberField(usageRecord, [
+									"cacheWrite",
+									"cache_write",
+									"cacheWriteTokens",
+									"cache_write_tokens",
+									"cacheCreationInputTokens",
+									"cache_creation_input_tokens",
+									"cacheWriteInputTokens",
+									"cache_write_input_tokens",
+								]) ?? 0;
+							accumulatedUsage.totalTokens += messageUsageTokens;
+							if (costRecord) {
+								accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
+								accumulatedUsage.cost.output += getNumberField(costRecord, "output") ?? 0;
+								accumulatedUsage.cost.cacheRead += getNumberField(costRecord, "cacheRead") ?? 0;
+								accumulatedUsage.cost.cacheWrite += getNumberField(costRecord, "cacheWrite") ?? 0;
+								accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
+							}
 						}
 						// Keep live token displays pinned to latest assistant request usage.
 						progress.tokens = messageUsageTokens;
@@ -985,7 +997,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			syncProgressModel(session.model);
 			progress.sessionId = session.sessionId;
 			progress.thinkingLevel = effectiveThinkingLevel;
-			progress.tokenCapacity = session.model.contextWindow ?? session.model.maxTokens;
+			progress.tokenCapacity = session.model?.contextWindow ?? session.model?.maxTokens ?? 0;
 			scheduleProgress(true);
 
 			const subagentToolNames = session.getActiveToolNames();
@@ -1015,8 +1027,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				},
 			});
 
+			const sessionInitExtra = { agentName: agent.name };
 			session.sessionManager.appendSessionInit({
-				agentName: agent.name,
+				...sessionInitExtra,
 				systemPrompt: session.agent.state.systemPrompt,
 				task,
 				tools: activeToolNames,

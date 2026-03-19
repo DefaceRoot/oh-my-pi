@@ -71,8 +71,7 @@ function parseDelegationContext(text: string | undefined): Partial<DelegationMet
 	if (!block) return {};
 
 	const metadata: Partial<DelegationMetadata> = {};
-	for (const rawLine of block.split(/?
-/)) {
+	for (const rawLine of block.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) continue;
 		const separatorIndex = line.indexOf(":");
@@ -231,21 +230,18 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 
 	const hasUsefulMetadata = Boolean(
 		metadata.parentRuntimeRole ||
-		metadata.workflowMode ||
-		metadata.worktreePath ||
-		metadata.repoRoot ||
-		metadata.branchName ||
-		metadata.baseBranch ||
-		metadata.planReference ||
-		metadata.planFilePath ||
-		metadata.planWorkspaceDir,
+			metadata.workflowMode ||
+			metadata.worktreePath ||
+			metadata.repoRoot ||
+			metadata.branchName ||
+			metadata.baseBranch ||
+			metadata.planReference ||
+			metadata.planFilePath ||
+			metadata.planWorkspaceDir,
 	);
 	if (!hasUsefulMetadata) return undefined;
 
-	const lines = [
-		"<delegation_context>",
-		`repository_cwd: ${JSON.stringify(metadata.repositoryCwd)}`,
-	];
+	const lines = ["<delegation_context>", `repository_cwd: ${JSON.stringify(metadata.repositoryCwd)}`];
 	if (metadata.parentRuntimeRole) {
 		lines.push(`parent_runtime_role: ${JSON.stringify(metadata.parentRuntimeRole)}`);
 	}
@@ -274,6 +270,5 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 		lines.push(`plan_workspace_dir: ${JSON.stringify(metadata.planWorkspaceDir)}`);
 	}
 	lines.push("</delegation_context>");
-	return lines.join("
-");
+	return lines.join("\n");
 }
