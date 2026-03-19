@@ -184,7 +184,7 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			mcp: ["augment", "chrome-devtools"],
 		},
 		grafana: {
-			mcp: ["augment", "grafana"],
+			mcp: ["augment", "chrome-devtools", "grafana"],
 		},
 		research: {
 			mcp: ["augment", "better-context"],

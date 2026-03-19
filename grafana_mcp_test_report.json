@@ -1,0 +1,410 @@
+{
+  "test_summary": {
+    "server_name": "grafana",
+    "server_version": "v0.11.3",
+    "transport": "stdio (uvx mcp-grafana)",
+    "grafana_url": "http://monocle-testing-c2:3000 (unreachable from test environment)",
+    "test_date": "2026-03-18",
+    "total_tools": 51,
+    "tests_passed": 1,
+    "tests_failed": 50,
+    "failure_reason": "Grafana backend unreachable - connection refused. 1 tool (generate_deeplink) works offline."
+  },
+  "detailed_results": {
+    "generate_deeplink": {
+      "status": "SUCCESS",
+      "description": "Generates deeplink URLs without requiring Grafana backend connectivity",
+      "test_cases": [
+        {
+          "parameters": {"resourceType": "dashboard", "dashboardUid": "test"},
+          "result": "http://localhost:3000/d/test"
+        },
+        {
+          "parameters": {"resourceType": "panel", "dashboardUid": "test", "panelId": 1},
+          "result": "http://localhost:3000/d/test?viewPanel=1"
+        },
+        {
+          "parameters": {"resourceType": "explore", "datasourceUid": "test"},
+          "result": "http://localhost:3000/explore?left=%7B%22datasource%22%3A%22test%22%7D"
+        }
+      ]
+    }
+  },
+  "tools_discovered": [
+    {
+      "name": "alerting_manage_routing",
+      "category": "Alerting",
+      "description": "Manage notification policies, contact points, and time intervals",
+      "operations": ["get_notification_policies", "get_contact_points", "get_contact_point", "get_time_intervals", "get_time_interval"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "alerting_manage_rules",
+      "category": "Alerting", 
+      "description": "Manage Grafana alert rules with full CRUD capabilities",
+      "operations": ["list", "get", "versions", "create", "update", "delete"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "create_annotation",
+      "category": "Annotations",
+      "description": "Create a new annotation on a dashboard or panel",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "create_folder",
+      "category": "Folders",
+      "description": "Create a Grafana folder with optional UID and parent",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "create_incident",
+      "category": "Incident Management",
+      "description": "Create a new Grafana incident (requires title, severity, room prefix)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "fetch_pyroscope_profile",
+      "category": "Profiling",
+      "description": "Fetch a profile from Pyroscope datasource in DOT format",
+      "requires": ["data_source_uid", "profile_type"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "find_error_pattern_logs",
+      "category": "Sift Investigation",
+      "description": "Search Loki logs for elevated error patterns vs last day's average",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "find_slow_requests",
+      "category": "Sift Investigation",
+      "description": "Search Tempo datasources for slow requests",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "generate_deeplink",
+      "category": "Navigation",
+      "description": "Generate deeplink URLs for dashboards, panels, or Explore queries",
+      "resource_types": ["dashboard", "panel", "explore"],
+      "test_status": "PASSED",
+      "test_result": "SUCCESS - Tool works offline by generating URLs from configured GRAFANA_URL",
+      "examples": {
+        "dashboard": "http://localhost:3000/d/test",
+        "panel": "http://localhost:3000/d/test?viewPanel=1",
+        "explore": "http://localhost:3000/explore?left=%7B%22datasource%22%3A%22test%22%7D"
+      }
+    },
+    {
+      "name": "get_alert_group",
+      "category": "OnCall",
+      "description": "Get specific alert group from Grafana OnCall by ID",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_annotation_tags",
+      "category": "Annotations",
+      "description": "Returns annotation tags with optional filtering",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_annotations",
+      "category": "Annotations",
+      "description": "Fetch Grafana annotations using filters (dashboard UID, time range, tags)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_assertions",
+      "category": "Assertions",
+      "description": "Get assertion summary for an entity with time range",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_current_oncall_users",
+      "category": "OnCall",
+      "description": "Get users currently on-call for a schedule",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_dashboard_by_uid",
+      "category": "Dashboards",
+      "description": "Retrieve complete dashboard by UID (panels, variables, settings)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_dashboard_panel_queries",
+      "category": "Dashboards",
+      "description": "Retrieve panel queries from a Grafana dashboard",
+      "supports": ["Prometheus", "Loki", "CloudWatch", "SQL", "etc."],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_dashboard_property",
+      "category": "Dashboards",
+      "description": "Get specific dashboard parts using JSONPath expressions",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_dashboard_summary",
+      "category": "Dashboards",
+      "description": "Get compact dashboard summary (title, panel count, variables, metadata)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_datasource",
+      "category": "Datasources",
+      "description": "Retrieve detailed information about a datasource by UID or name",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_incident",
+      "category": "Incident Management",
+      "description": "Get a single incident by ID with full details",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_oncall_shift",
+      "category": "OnCall",
+      "description": "Get detailed information for a specific shift by ID",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_panel_image",
+      "category": "Rendering",
+      "description": "Render dashboard panel or full dashboard as PNG (requires Image Renderer plugin)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_sift_analysis",
+      "category": "Sift Investigation",
+      "description": "Retrieve a specific analysis from an investigation by UUID",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "get_sift_investigation",
+      "category": "Sift Investigation",
+      "description": "Retrieve existing Sift investigation by UUID",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_alert_groups",
+      "category": "OnCall",
+      "description": "List alert groups from Grafana OnCall with filtering",
+      "filters": ["id", "routeId", "integrationId", "state", "teamId", "time range", "labels", "name"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_datasources",
+      "category": "Datasources",
+      "description": "List all configured datasources in Grafana",
+      "supports_filtering": ["type", "pagination"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_incidents",
+      "category": "Incident Management",
+      "description": "List Grafana incidents with status filtering",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_loki_label_names",
+      "category": "Loki",
+      "description": "List all available label names (keys) in Loki logs",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_loki_label_values",
+      "category": "Loki",
+      "description": "Retrieve all unique values for a specific label name in Loki",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_oncall_schedules",
+      "category": "OnCall",
+      "description": "List Grafana OnCall schedules with optional team filtering",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_oncall_teams",
+      "category": "OnCall",
+      "description": "List teams configured in Grafana OnCall",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_oncall_users",
+      "category": "OnCall",
+      "description": "List users from Grafana OnCall (separate from Grafana users)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_prometheus_label_names",
+      "category": "Prometheus",
+      "description": "List label names in a Prometheus datasource with filtering",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_prometheus_label_values",
+      "category": "Prometheus",
+      "description": "Get values for a specific label name in Prometheus",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_prometheus_metric_metadata",
+      "category": "Prometheus",
+      "description": "List Prometheus metric metadata (experimental endpoint)",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_prometheus_metric_names",
+      "category": "Prometheus",
+      "description": "List metric names in Prometheus with regex filtering",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_pyroscope_label_names",
+      "category": "Profiling",
+      "description": "List available label names in Pyroscope profiles",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_pyroscope_label_values",
+      "category": "Profiling",
+      "description": "List label values for a particular label name in Pyroscope",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_pyroscope_profile_types",
+      "category": "Profiling",
+      "description": "List all available profile types in Pyroscope datasource",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "list_sift_investigations",
+      "category": "Sift Investigation",
+      "description": "Retrieve list of Sift investigations with optional limit",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "query_loki_logs",
+      "category": "Loki",
+      "description": "Execute LogQL query against Loki datasource",
+      "supports": ["range", "instant"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "query_loki_patterns",
+      "category": "Loki",
+      "description": "Retrieve detected log patterns from L datasource",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "query_loki_stats",
+      "category": "Loki",
+      "description": "Get statistics about log streams matching a selector",
+      "returns": ["streams", "chunks", "entries", "bytes"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "query_prometheus",
+      "category": "Prometheus",
+      "description": "Query Prometheus using PromQL expression",
+      "query_types": ["instant", "range"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "query_prometheus_histogram",
+      "category": "Prometheus",
+      "description": "Query Prometheus histogram percentiles with automatic quantile generation",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "search_dashboards",
+      "category": "Dashboards",
+      "description": "Search for Grafana dashboards by query string",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "search_folders",
+      "category": "Folders",
+      "description": "Search for Grafana folders by query string",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "update_annotation",
+      "category": "Annotations",
+      "description": "Update properties of an annotation by ID",
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    },
+    {
+      "name": "update_dashboard",
+      "category": "Dashboards",
+      "description": "Create or update dashboard (full JSON or patch operations)",
+      "operations": ["replace", "add", "remove"],
+      "test_status": "FAILED",
+      "error": "Connection refused to Grafana backend"
+    }
+  ],
+  "categories": {
+    "Dashboards": 6,
+    "Datasources": 2,
+    "Prometheus": 6,
+    "Loki": 5,
+    "Alerting": 2,
+    "OnCall": 7,
+    "Incident Management": 3,
+    "Annotations": 4,
+    "Folders": 2,
+    "Sift Investigation": 5,
+    "Profiling": 4,
+    "Rendering": 1,
+    "Navigation": 1,
+    "Assertions": 1
+  }
+}

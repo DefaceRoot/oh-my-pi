@@ -1,0 +1,284 @@
+{
+  "timestamp": "2026-03-18T16:48:51.256Z",
+  "server": {
+    "name": "chrome-devtools-mcp",
+    "version": "latest",
+    "protocol": "2024-11-05"
+  },
+  "summary": {
+    "total": 38,
+    "passed": 37,
+    "failed": 0,
+    "skipped": 1,
+    "conditional": 0
+  },
+  "byCategory": {
+    "navigation": {
+      "total": 7,
+      "passed": 7,
+      "failed": 0,
+      "conditional": 0
+    },
+    "input": {
+      "total": 9,
+      "passed": 9,
+      "failed": 0,
+      "conditional": 0
+    },
+    "debugging": {
+      "total": 9,
+      "passed": 9,
+      "failed": 0,
+      "conditional": 0
+    },
+    "network": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "conditional": 0
+    },
+    "emulation": {
+      "total": 7,
+      "passed": 7,
+      "failed": 0,
+      "conditional": 0
+    },
+    "performance": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "conditional": 0
+    }
+  },
+  "details": [
+    {
+      "tool": "list_pages",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "new_page",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "navigate_page",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "navigate_page_reload",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "select_page",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "close_page",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "wait_for",
+      "category": "navigation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "click",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "dblclick",
+      "category": "input",
+      "status": "skipped",
+      "reason": "Tool not found in server schema"
+    },
+    {
+      "tool": "fill",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "fill_form",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "hover",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "press_key",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "type_text",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "drag",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "upload_file",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "handle_dialog",
+      "category": "input",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "take_snapshot",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "take_snapshot_verbose",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "take_screenshot",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "take_screenshot_fullpage",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "evaluate_script",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "evaluate_script_with_args",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "list_console_messages",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "get_console_message",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "lighthouse_audit",
+      "category": "debugging",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "list_network_requests",
+      "category": "network",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "get_network_request",
+      "category": "network",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_viewport",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_network",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_cpu",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_colorScheme",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_geolocation",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "emulate_userAgent",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "resize_page",
+      "category": "emulation",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "performance_start_trace",
+      "category": "performance",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "performance_stop_trace",
+      "category": "performance",
+      "status": "passed",
+      "hasResult": true
+    },
+    {
+      "tool": "take_memory_snapshot",
+      "category": "performance",
+      "status": "passed",
+      "hasResult": true
+    }
+  ],
+  "serverErrors": "turning off usage statistics. process.env['CI'] || process.env['CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS'] is set.\nchrome-devtools-mcp exposes content of the browser instance to the MCP clients allowing them to inspect,\ndebug, and modify any data in the browser or DevTools.\nAvoid sharing sensitive or personal information that you do not want to share with MCP clients.\nPerformance tools may send trace URLs to the Google CrUX API to fetch real-user experience data. To disable, run with --no-performance-crux.\n"
+}

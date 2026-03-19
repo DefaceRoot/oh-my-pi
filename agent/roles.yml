@@ -303,6 +303,34 @@ roles:
     mcp: 
       - augment
     skills: all
+  plan-verifier: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+      - chrome-devtools
+    skills: all
 subagents: 
   designer: 
     mcp: 

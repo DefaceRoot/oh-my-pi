@@ -38,7 +38,8 @@
       ],
       "env": {
         "GRAFANA_URL": "!bash /home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/scripts/resolve-monocle-grafana-url.sh",
-        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "!bash /home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/scripts/resolve-monocle-grafana-token.sh"
+        "GRAFANA_USERNAME": "admin",
+        "GRAFANA_PASSWORD": "!bash /home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/scripts/resolve-monocle-grafana-password.sh"
       },
       "enabled": true,
       "timeout": 120000

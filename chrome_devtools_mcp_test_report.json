@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-03-18T16:45:57.435Z",
+  "server": "chrome-devtools-mcp@latest",
+  "summary": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "results": {
+    "passed": [
+      {
+        "tool": "list_pages"
+      },
+      {
+        "tool": "new_page"
+      },
+      {
+        "tool": "navigate_page"
+      },
+      {
+        "tool": "select_page"
+      },
+      {
+        "tool": "take_snapshot"
+      },
+      {
+        "tool": "evaluate_script"
+      },
+      {
+        "tool": "list_console_messages"
+      },
+      {
+        "tool": "emulate"
+      },
+      {
+        "tool": "resize_page"
+      },
+      {
+        "tool": "list_network_requests"
+      },
+      {
+        "tool": "performance_start_trace"
+      },
+      {
+        "tool": "performance_stop_trace"
+      }
+    ],
+    "failed": [],
+    "errors": []
+  }
+}

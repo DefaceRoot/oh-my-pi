@@ -101,7 +101,7 @@ const FALLBACK_AGENT_MCP_ALLOW: Record<string, string[] | null> = {
 	orchestrator: [],
 	implement: ["mcp_augment_", "mcp_better_context_"],
 	designer: ["mcp_augment_", "mcp_better_context_", "mcp_chrome_devtools_"],
-	grafana: ["mcp_grafana_"],
+	grafana: ["mcp_augment_", "mcp_chrome_devtools_", "mcp_grafana_"],
 	explore: ["mcp_augment_"],
 	research: ["mcp_augment_", "mcp_better_context_"],
 	"ask-explore": [],
