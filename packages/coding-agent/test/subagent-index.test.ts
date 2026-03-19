@@ -141,9 +141,8 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]).toMatchObject({
 			id: "2-Implement",
 			sessionId: "sess-child-1234567890",
-			parentSessionId: "sess-parent-abcdef",
 			mcpServers: ["augment", "github"],
-			tools: ["read", "grep", "submit_result"],
+			toolNames: ["read", "grep", "submit_result"],
 			abortReason: "User stopped from flight deck: duplicate workstream",
 		});
 	});
@@ -173,8 +172,7 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]?.contextPreview).not.toContain("Background");
 	});
 
-
-	test("ingestTaskResults derives tokens from usage excluding cache fields", () => {
+	test("ingestTaskResults includes cache usage in derived token totals", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
@@ -185,10 +183,10 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 150 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 180 });
 	});
 
-	test("ingestTaskResults prefers direct input/output over total token fields", () => {
+	test("ingestTaskResults prefers provider total token fields when present", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
@@ -206,15 +204,15 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 2 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 42 });
 	});
 
-	test("ingestTaskResults derives uncached tokens from totals when direct fields are missing", () => {
+	test("ingestTaskResults keeps provider totals when cache breakdown fields also exist", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
 			buildTaskResult({
-				id: "5-TotalMinusCache",
+				id: "5-TotalWithCache",
 				tokens: 999,
 				usage: {
 					cacheRead: 10,
@@ -225,12 +223,30 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalMinusCache", tokens: 65 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalWithCache", tokens: 80 });
+	});
+
+	test("ingestTaskResults derives totals from alternate provider field names", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "5-AltUsageFields",
+				usage: {
+					inputTokens: 10,
+					outputTokens: 8,
+					cacheReadInputTokens: 4_000,
+					cacheCreationInputTokens: 2_000,
+				} as unknown as SingleResult["usage"],
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-AltUsageFields", tokens: 6_018 });
 	});
 
 	test("ingestTaskResults keeps provider, model, and last-activity metadata from live updates", () => {
 		const index = new SubagentIndex({ artifactsDir });
-
 
 		index.ingestTaskResults([
 			{
@@ -241,7 +257,6 @@ describe("SubagentIndex", () => {
 				lastUpdatedMs: 1_739_603_401_234,
 			} as SingleResult,
 		]);
-
 
 		const snapshot = index.getSnapshot();
 		expect(snapshot.refs[0]).toMatchObject({
@@ -271,7 +286,6 @@ describe("SubagentIndex", () => {
 			abortReason: "User stopped: waiting on product decision",
 		});
 	});
-
 
 	test("live activity updates do not reshuffle running subagents that already have startedAt order", () => {
 		const index = new SubagentIndex({ artifactsDir });
@@ -506,5 +520,100 @@ describe("SubagentIndex", () => {
 		await firstReconcile;
 
 		expect(index.getSnapshot().refs.map(ref => ref.id)).toEqual(["new"]);
+	});
+});
+
+describe("SubagentIndex — filesystem agent hydration", () => {
+	let tempDir: string;
+	let artifactsDir: string;
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(os.tmpdir(), "omp-subagent-agent-"));
+		artifactsDir = path.join(tempDir, "artifacts");
+		await mkdir(artifactsDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { recursive: true, force: true });
+	});
+
+	test("reconcile hydrates agent from session_init agentName in JSONL", async () => {
+		const now = new Date("2025-06-01T00:00:00.000Z");
+		const jsonlPath = path.join(artifactsDir, "lint-001.jsonl");
+		await writeFile(jsonlPath, '{"type":"session_init","task":"run lint checks","agentName":"lint"}\n', "utf8");
+		await utimes(jsonlPath, now, now);
+
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.refs[0]?.agent).toBe("lint");
+		expect(snapshot.refs[0]?.id).toBe("lint-001");
+	});
+
+	test("reconcile leaves agent undefined when session_init has no agentName", async () => {
+		const now = new Date("2025-06-01T00:00:00.000Z");
+		const jsonlPath = path.join(artifactsDir, "old-001.jsonl");
+		// Old-format file without agentName field
+		await writeFile(jsonlPath, '{"type":"session_init","task":"legacy task"}\n', "utf8");
+		await utimes(jsonlPath, now, now);
+
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.refs[0]?.agent).toBeUndefined();
+	});
+
+	test("live task result agent takes priority over filesystem-hydrated agent", async () => {
+		const now = new Date("2025-06-01T00:00:00.000Z");
+		const jsonlPath = path.join(artifactsDir, "2-Commit.jsonl");
+		// Filesystem has incorrect/stale agentName
+		await writeFile(jsonlPath, '{"type":"session_init","task":"commit changes","agentName":"implement"}\n', "utf8");
+		await utimes(jsonlPath, now, now);
+
+		const index = new SubagentIndex({ artifactsDir });
+		await index.reconcile();
+
+		// Live task result has the correct agent
+		index.ingestTaskResults([buildTaskResult({ id: "2-Commit", agent: "commit" })]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.refs[0]?.agent).toBe("commit");
+	});
+
+	test("reconcile handles malformed first JSONL line without throwing", async () => {
+		const now = new Date("2025-06-01T00:00:00.000Z");
+		const jsonlPath = path.join(artifactsDir, "broken-001.jsonl");
+		await writeFile(jsonlPath, 'not-valid-json\n{"type":"session_init"}\n', "utf8");
+		await utimes(jsonlPath, now, now);
+
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		expect(snapshot.refs).toHaveLength(1);
+		expect(snapshot.refs[0]?.agent).toBeUndefined();
+	});
+
+	test("reconcile hydrates agents for multiple specialized children", async () => {
+		const now = new Date("2025-06-01T00:00:00.000Z");
+		const slugs = ["lint", "code-reviewer", "commit"];
+		for (const slug of slugs) {
+			const jsonlPath = path.join(artifactsDir, `1-${slug}.jsonl`);
+			await writeFile(
+				jsonlPath,
+				`{"type":"session_init","task":"task for ${slug}","agentName":"${slug}"}\n`,
+				"utf8",
+			);
+			await utimes(jsonlPath, now, now);
+		}
+
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		expect(snapshot.refs).toHaveLength(3);
+		const agentNames = snapshot.refs.map(r => r.agent).sort();
+		expect(agentNames).toEqual(["code-reviewer", "commit", "lint"]);
 	});
 });

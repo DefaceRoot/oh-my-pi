@@ -26,11 +26,11 @@ import type { ContextFileEntry } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
-import { getDirectUsageTokens } from "../utils/usage-tokens";
+import { getTotalUsageTokens } from "../utils/usage-tokens";
 import { deriveSubagentOutcomeFromReviewData, type SubagentOutcome } from "./subagent-outcome";
 import { registerSubagentRuntime, unregisterSubagentRuntime } from "./subagent-runtime-registry";
-import { validateSuccessToolRequirements } from "./success-evidence";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
+import { validateSuccessToolRequirements } from "./success-evidence";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -105,6 +105,7 @@ export interface ExecutorOptions {
 	cwd: string;
 	worktree?: string;
 	agent: AgentDefinition;
+	runtimeRole?: string;
 	task: string;
 	description?: string;
 	index: number;
@@ -345,13 +346,12 @@ function resolveSubmitResultOutcome(item: SubmitResultItem | undefined): Subagen
 	return item?.outcome ?? deriveSubagentOutcomeFromReviewData(item?.data);
 }
 
-
 function createSubagentSettings(baseSettings: Settings): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
 	}
-	return Settings.isolated({ ...snapshot, "async.enabled": false });
+	return Settings.isolated({ ...snapshot, "async.enabled": false, "compaction.autoContinue": false });
 }
 
 /**
@@ -493,8 +493,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
 	let submitResultCalled = false;
+	const MAX_ABORTED_CONTINUE_ATTEMPTS = 3;
 	const MAX_SUBMIT_RESULT_ERROR_ATTEMPTS = 12;
 	const SUBMIT_RESULT_ONLY_PROMPT_TIMEOUT_MS = 90_000;
+	const CONTINUE_AFTER_COMPACTION_PROMPT = "Continue if you have next steps.";
 	let submitResultOnlyMode = false;
 	let submitResultErrorAttempts = 0;
 	let submitResultErrorLoopDetected = false;
@@ -665,7 +667,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const processEvent = (event: AgentEvent) => {
 		if (resolved) return;
 
-
 		if (options.eventBus) {
 			options.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 				index,
@@ -676,11 +677,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 		}
 
-
 		const now = Date.now();
 		lastActivityMs = now;
 		let flushProgress = false;
-
 
 		switch (event.type) {
 			case "message_start":
@@ -830,7 +829,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// Extract and accumulate usage (prefer message.usage, fallback to event.usage)
 				const messageUsage = getMessageUsage(event.message) || (event as AgentEvent & { usage?: unknown }).usage;
 				if (messageUsage && typeof messageUsage === "object") {
-					const messageUsageTokens = getDirectUsageTokens(messageUsage) ?? 0;
+					const messageUsageTokens = getTotalUsageTokens(messageUsage) ?? 0;
 					// Only count assistant messages (not tool results, etc.)
 					if (role === "assistant") {
 						const usageRecord = messageUsage as Record<string, unknown>;
@@ -936,6 +935,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				modelRegistry,
 				settings: subagentSettings,
 				model,
+				role: options.runtimeRole ?? agent.name,
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,
@@ -972,7 +972,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			progress.tokenCapacity = session.model.contextWindow ?? session.model.maxTokens;
 			scheduleProgress(true);
 
-
 			const subagentToolNames = session.getActiveToolNames();
 			const parentOwnedToolNames = new Set(["todo_write"]);
 			const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
@@ -982,7 +981,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const activeToolNames = session.getActiveToolNames();
 			const mcpServers = Array.from(
 				new Set(
-					(options.mcpManager as { getConnectedServers?: () => string[] } | undefined)?.getConnectedServers?.() ?? [],
+					(options.mcpManager as { getConnectedServers?: () => string[] } | undefined)?.getConnectedServers?.() ??
+						[],
 				),
 			).sort((left, right) => left.localeCompare(right));
 			const mcpAllowlist = [...(options.mcpAllowlist ?? [])].sort((left, right) => left.localeCompare(right));
@@ -1000,6 +1000,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			session.sessionManager.appendSessionInit({
+				agentName: agent.name,
 				systemPrompt: session.agent.state.systemPrompt,
 				task,
 				tools: activeToolNames,
@@ -1100,11 +1101,24 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			await session.prompt(task);
 			await session.waitForIdle();
 
+			let abortedContinueCount = 0;
+			while (!submitResultCalled && !abortSignal.aborted) {
+				const lastAssistant = session.getLastAssistantMessage();
+				if (lastAssistant?.stopReason !== "aborted") break;
+				abortedContinueCount++;
+				if (abortedContinueCount > MAX_ABORTED_CONTINUE_ATTEMPTS) break;
+				await session.prompt(CONTINUE_AFTER_COMPACTION_PROMPT, {
+					synthetic: true,
+					expandPromptTemplates: false,
+					skipCompactionCheck: true,
+				});
+				await session.waitForIdle();
+			}
+
 			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
 
 			const initialAssistant = session.getLastAssistantMessage();
 			const shouldForceSubmitResultReminder = initialAssistant?.stopReason !== "error";
-
 			let retryCount = 0;
 			let previousTools: string[] | null = null;
 			try {
@@ -1281,9 +1295,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const outcome = resolveSubmitResultOutcome(lastSubmitResult);
 	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
 	const successEvidenceFailure =
-		exitCode === 0 && !abortedViaSubmitResult
-			? validateSuccessToolRequirements(agent, executedToolNames)
-			: null;
+		exitCode === 0 && !abortedViaSubmitResult ? validateSuccessToolRequirements(agent, executedToolNames) : null;
 	if (successEvidenceFailure) {
 		const warning = `SYSTEM WARNING: ${successEvidenceFailure}`;
 		rawOutput = rawOutput ? `${warning}\n\n${rawOutput}` : warning;

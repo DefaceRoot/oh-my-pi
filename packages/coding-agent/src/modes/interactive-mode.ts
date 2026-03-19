@@ -47,7 +47,7 @@ import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
 import { setTerminalTitle } from "../utils/title-generator";
-import { getDirectUsageTokens } from "../utils/usage-tokens";
+import { getTotalUsageTokens } from "../utils/usage-tokens";
 import {
 	ACTION_BUTTONS,
 	type ActionButtonUi,
@@ -615,7 +615,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	private buildSidebarTokenSection(): SidebarModel["tokens"] {
 		const contextUsage = this.session.getContextUsage();
 		const usageStats = this.sessionManager.getUsageStatistics();
-		const derivedTokens = usageStats.input + usageStats.output;
+		const derivedTokens = usageStats.input + usageStats.output + usageStats.cacheRead + usageStats.cacheWrite;
 		const costUsd = Number.isFinite(usageStats.cost) && usageStats.cost > 0 ? usageStats.cost : undefined;
 		const hasData = contextUsage !== undefined || derivedTokens > 0 || costUsd !== undefined;
 		if (!hasData) return undefined;
@@ -2621,7 +2621,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const message = record.message;
 			if (!message || typeof message !== "object") continue;
 			if ((message as { role?: unknown }).role !== "assistant") continue;
-			const usageTokens = getDirectUsageTokens((message as { usage?: unknown }).usage);
+			const usageTokens = getTotalUsageTokens((message as { usage?: unknown }).usage);
 			if (typeof usageTokens === "number") tokens += usageTokens;
 		}
 		return tokens;
@@ -2716,7 +2716,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			messages.push(message as AgentMessage);
 			if (role === "assistant") {
 				const usage = (message as { usage?: unknown }).usage;
-				const usageTokens = getDirectUsageTokens(usage);
+				const usageTokens = getTotalUsageTokens(usage);
 				if (typeof usageTokens === "number") {
 					tokens += usageTokens;
 				}
