@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ToolSession } from "..";
 import { resolveLocalUrlToPath } from "../internal-urls/local-protocol";
 import { resolveToCwd } from "../tools/path-utils";
+import { collectDelegationContext } from "./delegation-context";
 
 export type InputProfileMode = "minimal" | "standard" | "detailed";
 
@@ -90,7 +91,6 @@ export interface BuildToonDelegationInput {
 	options?: BuildToonDelegationOptions;
 }
 
-
 export interface DelegationQualityReport {
 	warnings: string[];
 	errors: string[];
@@ -141,7 +141,7 @@ function parseInheritedDelegationValue(rawValue: string): string | undefined {
 	}
 }
 
-function parseInheritedDelegationContext(text: string | undefined): InheritedDelegationContext {
+function parseLegacyXmlDelegationContext(text: string | undefined): Partial<InheritedDelegationContext> {
 	if (!text) return {};
 
 	let block: string | undefined;
@@ -150,7 +150,7 @@ function parseInheritedDelegationContext(text: string | undefined): InheritedDel
 	}
 	if (!block) return {};
 
-	const context: InheritedDelegationContext = {};
+	const context: Partial<InheritedDelegationContext> = {};
 	for (const rawLine of block.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) continue;
@@ -203,6 +203,119 @@ function parseInheritedDelegationContext(text: string | undefined): InheritedDel
 	}
 
 	return context;
+}
+
+// ─── TOON block parser for multi-hop inheritance ─────────────────────────────
+
+function extractLastToonDelegationBlock(text: string): string | undefined {
+	let lastIdx = -1;
+	const re = /^delegation:\s*$/gm;
+	for (const match of text.matchAll(re)) {
+		lastIdx = match.index ?? -1;
+	}
+	if (lastIdx < 0) return undefined;
+
+	const afterStart = text.slice(lastIdx);
+	const lines = afterStart.split("\n");
+	const blockLines: string[] = [lines[0] ?? "delegation:"];
+
+	for (let i = 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		// A non-blank line without leading whitespace ends the block
+		if (line.length > 0 && !/^\s/.test(line)) break;
+		blockLines.push(line);
+	}
+
+	return blockLines.join("\n").trim();
+}
+
+function parseToonBlockFields(toonBlock: string): Record<string, string> {
+	const result: Record<string, string> = {};
+	const lines = toonBlock.split("\n");
+	const stack: Array<{ indent: number; key: string }> = [];
+
+	for (const rawLine of lines) {
+		if (!rawLine.trim()) continue;
+		const indentSize = rawLine.length - rawLine.trimStart().length;
+		const line = rawLine.trim();
+
+		if (line === "delegation:") {
+			stack.length = 0;
+			continue;
+		}
+
+		// Skip array/tabular headers and list items
+		if (/\[\d*\]/.test(line.split(":")[0] ?? "")) continue;
+		if (line.startsWith("-")) continue;
+
+		const colonIdx = line.indexOf(":");
+		if (colonIdx <= 0) continue;
+
+		// Pop stack entries at same or higher indent level
+		while (stack.length > 0 && (stack[stack.length - 1]?.indent ?? 0) >= indentSize) {
+			stack.pop();
+		}
+
+		const key = line.slice(0, colonIdx).trim();
+		const rawValue = line.slice(colonIdx + 1).trim();
+		const currentPath = stack.length > 0 ? `${stack.map(s => s.key).join(".")}.${key}` : key;
+
+		if (rawValue) {
+			try {
+				const parsed = JSON.parse(rawValue);
+				if (typeof parsed === "string") result[currentPath] = parsed;
+				else if (typeof parsed === "number" || typeof parsed === "boolean") result[currentPath] = String(parsed);
+			} catch {
+				result[currentPath] = rawValue;
+			}
+		} else {
+			stack.push({ indent: indentSize, key });
+		}
+	}
+
+	return result;
+}
+
+function parseToonInheritedContext(text: string | undefined): Partial<InheritedDelegationContext> {
+	if (!text) return {};
+
+	const block = extractLastToonDelegationBlock(text);
+	if (!block) return {};
+
+	const fields = parseToonBlockFields(block);
+	const ctx: Partial<InheritedDelegationContext> = {};
+
+	const envelopeId = fields["envelope.id"];
+	if (envelopeId) ctx.envelope_id = envelopeId;
+	const repoRoot = fields["context.repo_root"];
+	if (repoRoot) ctx.repo_root = repoRoot;
+	const workflowMode = fields["context.workflow_mode"];
+	if (workflowMode) ctx.workflow_mode = workflowMode;
+	const planPath = fields["context.plan_path"];
+	if (planPath) ctx.plan_file_path = planPath;
+	const planWorkspaceDir = fields["context.plan_workspace_dir"];
+	if (planWorkspaceDir) ctx.plan_workspace_dir = planWorkspaceDir;
+	const branch = fields["context.git.branch"];
+	if (branch) ctx.branch_name = branch;
+	const baseBranch = fields["context.git.base_branch"];
+	if (baseBranch) ctx.base_branch = baseBranch;
+	const worktreePath = fields["context.worktree.path"];
+	if (worktreePath) ctx.worktree_path = worktreePath;
+	const delegatorRole = fields["roles.delegator"];
+	if (delegatorRole) ctx.parent_runtime_role = delegatorRole;
+
+	return ctx;
+}
+
+function parseInheritedDelegationContext(text: string | undefined): InheritedDelegationContext {
+	const legacy = parseLegacyXmlDelegationContext(text);
+	const toon = parseToonInheritedContext(text);
+	// TOON takes precedence over legacy XML for fields present in both
+	const merged: InheritedDelegationContext = { ...legacy };
+	for (const [k, v] of Object.entries(toon)) {
+		if (v !== undefined) (merged as Record<string, unknown>)[k] = v;
+	}
+	return merged;
 }
 
 const CONTRACT_VERSION = "omp-delegation/v1";
@@ -319,6 +432,7 @@ function normalizeRecordArray(
 
 interface PlanEnrichment {
 	planExcerpt?: string;
+	completedTasks?: Array<Record<string, unknown>>;
 	upstreamTasks?: Array<Record<string, unknown>>;
 	lessonsLearned?: string[];
 	intent?: string;
@@ -533,6 +647,44 @@ function extractUpstreamTasks(content: string): Array<Record<string, unknown>> |
 	return upstreamTasks.length > 0 ? upstreamTasks : undefined;
 }
 
+const PLAN_CHECKBOX_COMPLETE_RE = /^(?:[-*+])\s+\[x\]\s+(.+)$/i;
+
+const PROGRESS_WINDOW: Record<"standard" | "detailed", number> = {
+	standard: 5,
+	detailed: 10,
+};
+
+function extractCompletedTasksFromPlan(content: string, window: number): Array<Record<string, unknown>> | undefined {
+	const items: Array<Record<string, unknown>> = [];
+	for (const rawLine of content.replace(/\r\n?/g, "\n").split("\n")) {
+		const match = rawLine.trim().match(PLAN_CHECKBOX_COMPLETE_RE);
+		const summary = match?.[1] ? normalizeText(match[1]) : undefined;
+		if (summary) items.push({ summary, status: "completed" });
+	}
+	if (items.length === 0) return undefined;
+	// Take the most recent N items
+	return items.slice(-window);
+}
+
+function extractCompletedTasksFromTodos(
+	session: ToolSession,
+	window: number,
+): Array<Record<string, unknown>> | undefined {
+	const phases = session.getTodoPhases?.();
+	if (!phases || phases.length === 0) return undefined;
+	const completed: Array<Record<string, unknown>> = [];
+	for (const phase of phases) {
+		for (const item of phase.tasks) {
+			if (item.status === "completed") {
+				const summary = normalizeText(item.content);
+				if (summary) completed.push({ summary, status: "completed" });
+			}
+		}
+	}
+	if (completed.length === 0) return undefined;
+	return completed.slice(-window);
+}
+
 function extractLessonsLearned(content: string): string[] | undefined {
 	const items = collectListItems(content, "Lessons Learned");
 	if (!items) return undefined;
@@ -545,7 +697,11 @@ function extractLessonsLearned(content: string): string[] | undefined {
 	return lessonsLearned.length > 0 ? lessonsLearned : undefined;
 }
 
-async function loadPlanEnrichment(planPath: string, session: ToolSession): Promise<PlanEnrichment | undefined> {
+async function loadPlanEnrichment(
+	planPath: string,
+	session: ToolSession,
+	profile: "standard" | "detailed",
+): Promise<PlanEnrichment | undefined> {
 	let resolvedPath: string;
 	try {
 		resolvedPath = planPath.startsWith("local://")
@@ -566,13 +722,17 @@ async function loadPlanEnrichment(planPath: string, session: ToolSession): Promi
 	}
 
 	const normalizedContent = content.replace(/\r\n?/g, "\n");
-	const planExcerpt = collectSectionText(normalizedContent, "Plan Excerpt");
-	const intent = collectLeadText(normalizedContent, "Goals");
-	const upstreamTasks = extractUpstreamTasks(normalizedContent);
-	const lessonsLearned = extractLessonsLearned(normalizedContent);
+	const window = PROGRESS_WINDOW[profile];
+	const completedTasks = extractCompletedTasksFromPlan(normalizedContent, window);
+	// These fields are detailed-only
+	const planExcerpt = profile === "detailed" ? collectSectionText(normalizedContent, "Plan Excerpt") : undefined;
+	const intent = profile === "detailed" ? collectLeadText(normalizedContent, "Goals") : undefined;
+	const upstreamTasks = profile === "detailed" ? extractUpstreamTasks(normalizedContent) : undefined;
+	const lessonsLearned = profile === "detailed" ? extractLessonsLearned(normalizedContent) : undefined;
 
-	if (!planExcerpt && !intent && !upstreamTasks && !lessonsLearned) return undefined;
+	if (!completedTasks && !planExcerpt && !intent && !upstreamTasks && !lessonsLearned) return undefined;
 	return {
+		...(completedTasks ? { completedTasks } : {}),
 		...(planExcerpt ? { planExcerpt } : {}),
 		...(intent ? { intent } : {}),
 		...(upstreamTasks ? { upstreamTasks } : {}),
@@ -843,32 +1003,58 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 	const inheritedContext = parseInheritedDelegationContext(input.session.getCompactContext?.());
 	const runtimeRole = normalizeText(input.session.getRuntimeRole?.())?.toLowerCase();
 	const normalizedProfile = resolveInputProfileForDelegate(input.delegate, input.options?.profile);
-	const planPath = inheritedContext.plan_file_path ?? inheritedContext.plan_reference;
+
+	// Resolve plan path: compact context first, then session state (late plan binding)
+	let planPath = inheritedContext.plan_file_path ?? inheritedContext.plan_reference;
+	if (!planPath) {
+		const sessionCtx = collectDelegationContext(input.session);
+		if (sessionCtx.planFilePath) planPath = sessionCtx.planFilePath;
+	}
+
 	const runtimeGit = await resolveRuntimeGitMetadata([
 		inheritedContext.worktree_path,
 		inheritedContext.repo_root,
 		input.session.cwd,
 	]);
+
+	// Plan enrichment is loaded for standard and detailed profiles (not minimal)
 	const planEnrichment =
-		normalizedProfile === "detailed" && planPath ? await loadPlanEnrichment(planPath, input.session) : undefined;
+		normalizedProfile !== "minimal" && planPath
+			? await loadPlanEnrichment(planPath, input.session, normalizedProfile as "standard" | "detailed")
+			: undefined;
+
+	// Build progress: caller-provided overrides; plan and todos fill the gaps
 	let progress = normalizeProgress(input.options?.progress);
-	if (planEnrichment) {
-		let mergedProgress = progress ? { ...progress } : undefined;
-		let progressChanged = false;
-		if (planEnrichment.upstreamTasks && mergedProgress?.upstream_tasks === undefined) {
-			mergedProgress ??= {};
-			mergedProgress.upstream_tasks = planEnrichment.upstreamTasks;
-			progressChanged = true;
-		}
-		if (planEnrichment.lessonsLearned && mergedProgress?.lessons_learned === undefined) {
-			mergedProgress ??= {};
-			mergedProgress.lessons_learned = planEnrichment.lessonsLearned;
-			progressChanged = true;
-		}
-		if (progressChanged) {
-			progress = mergedProgress;
+	if (normalizedProfile !== "minimal") {
+		const progressWindow = PROGRESS_WINDOW[normalizedProfile as "standard" | "detailed"] ?? 5;
+		if (planEnrichment) {
+			let mergedProgress = progress ? { ...progress } : undefined;
+			let progressChanged = false;
+			if (planEnrichment.completedTasks && mergedProgress?.completed_tasks === undefined) {
+				mergedProgress ??= {};
+				mergedProgress.completed_tasks = planEnrichment.completedTasks;
+				progressChanged = true;
+			}
+			if (planEnrichment.upstreamTasks && mergedProgress?.upstream_tasks === undefined) {
+				mergedProgress ??= {};
+				mergedProgress.upstream_tasks = planEnrichment.upstreamTasks;
+				progressChanged = true;
+			}
+			if (planEnrichment.lessonsLearned && mergedProgress?.lessons_learned === undefined) {
+				mergedProgress ??= {};
+				mergedProgress.lessons_learned = planEnrichment.lessonsLearned;
+				progressChanged = true;
+			}
+			if (progressChanged) progress = mergedProgress;
+		} else if (!progress?.completed_tasks) {
+			// Non-plan workflow: populate completed_tasks from the session todo list
+			const todoTasks = extractCompletedTasksFromTodos(input.session, progressWindow);
+			if (todoTasks) {
+				progress = progress ? { ...progress, completed_tasks: todoTasks } : { completed_tasks: todoTasks };
+			}
 		}
 	}
+
 	const branch = inheritedContext.branch_name ?? runtimeGit?.branch;
 	const commit = runtimeGit?.commit;
 	const baseBranch = inheritedContext.base_branch ?? runtimeGit?.base_branch;
@@ -882,7 +1068,11 @@ async function buildMetadata(input: BuildToonDelegationInput, task: DelegationTa
 			: undefined;
 
 	const repoRoot = inheritedContext.repo_root ?? runtimeGit?.repo_root ?? path.resolve(input.session.cwd);
-	const workflowMode = inheritedContext.workflow_mode ?? runtimeRole ?? "unknown";
+	// Ask/default modes are authoritative: prefer runtime role over inherited workflow_mode
+	const workflowMode =
+		runtimeRole === "ask" || runtimeRole === "default"
+			? runtimeRole
+			: (inheritedContext.workflow_mode ?? runtimeRole ?? "unknown");
 	const delegator = runtimeRole ?? inheritedContext.parent_runtime_role ?? "unknown";
 	const parentEnvelopeId =
 		input.options?.parentEnvelopeId ?? inheritedContext.parent_envelope_id ?? inheritedContext.envelope_id;
@@ -963,11 +1153,7 @@ export async function validateDelegationQuality(
 	if (metadata.context.plan_path) {
 		const planPath = metadata.context.plan_path;
 		if (!planPath.startsWith("local://")) {
-			const resolvedPath = path.isAbsolute(planPath)
-				? planPath
-				: cwd
-					? path.join(cwd, planPath)
-					: planPath;
+			const resolvedPath = path.isAbsolute(planPath) ? planPath : cwd ? path.join(cwd, planPath) : planPath;
 			try {
 				await fsPromises.access(resolvedPath);
 			} catch {
@@ -991,9 +1177,11 @@ function validateToonRoundTrip(toon: string, metadata: DelegationMetadata): bool
 	}
 }
 
-function applyTokenBudgetTrim(
-	metadata: DelegationMetadata,
-): { metadata: DelegationMetadata; toon: string; trimmed: boolean } {
+function applyTokenBudgetTrim(metadata: DelegationMetadata): {
+	metadata: DelegationMetadata;
+	toon: string;
+	trimmed: boolean;
+} {
 	const initial = renderDelegationToon(metadata);
 	if (estimateTokenCount(initial) <= TOKEN_BUDGET) {
 		return { metadata, toon: initial, trimmed: false };
@@ -1020,7 +1208,8 @@ function applyTokenBudgetTrim(
 			...current.progress!,
 			completed_tasks: reduced.length > 0 ? reduced : undefined,
 		};
-		const hasOtherProgress = nextProgress.completed_tasks || nextProgress.upstream_tasks || nextProgress.lessons_learned;
+		const hasOtherProgress =
+			nextProgress.completed_tasks || nextProgress.upstream_tasks || nextProgress.lessons_learned;
 		current = { ...current, progress: hasOtherProgress ? nextProgress : undefined };
 		const toon = renderDelegationToon(current);
 		if (estimateTokenCount(toon) <= TOKEN_BUDGET) {

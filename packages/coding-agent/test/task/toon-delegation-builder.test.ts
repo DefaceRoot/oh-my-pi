@@ -77,6 +77,7 @@ type ToonDelegationBuilderModule = {
 				upstream_tasks?: unknown[];
 				lessons_learned?: string[];
 			};
+			retryContext?: Record<string, unknown>;
 		};
 	}) => ToonDelegationResult | Promise<ToonDelegationResult>;
 };
@@ -161,6 +162,23 @@ const BARE_PLAN_CONTENT = [
 	"",
 	"## Notes",
 	"No structured handoff metadata is available yet.",
+].join("\n");
+
+const PLAN_WITH_PROGRESS_CONTENT = [
+	"# Feature implementation",
+	"",
+	"## Goals",
+	"Deliver the end-to-end feature with tests and documentation.",
+	"",
+	"## Progress",
+	"- [x] Design the data schema",
+	"- [x] Write unit tests",
+	"- [x] Implement core logic",
+	"- [x] Wire up the API",
+	"- [x] Review and fix edge cases",
+	"- [x] Update documentation",
+	"- [ ] Deploy to staging",
+	"- [ ] Verify in production",
 ].join("\n");
 
 async function writePlanFixture(filePath: string, content: string): Promise<void> {
@@ -696,6 +714,378 @@ describe("TOON round-trip validation", () => {
 			expect(result.toon).toContain('contract_version: "omp-delegation/v1"');
 			expect(result.toon).toContain(`id: ${JSON.stringify(result.metadata.envelope.id)}`);
 			expect(result.toon).toContain(`title: ${JSON.stringify(result.metadata.task.title)}`);
+		});
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Unit 2.5: progress extraction from plan and todo list
+// ────────────────────────────────────────────────────────────────────
+
+describe("progress population - plan workflow", () => {
+	it("extracts completed tasks from plan checkboxes for detailed profile", async () => {
+		await withTempDir(async cwd => {
+			const planPath = path.join(cwd, "plan.md");
+			await writePlanFixture(planPath, PLAN_WITH_PROGRESS_CONTENT);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makePlanContext(cwd, planPath) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			const completedTasks = result.metadata.progress?.completed_tasks as
+				| Array<{ summary: string; status: string }>
+				| undefined;
+			// detailed: window=10; plan has 6 completed items
+			expect(completedTasks).toHaveLength(6);
+			expect(completedTasks).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ summary: "Design the data schema", status: "completed" }),
+					expect.objectContaining({ summary: "Update documentation", status: "completed" }),
+				]),
+			);
+		});
+	});
+
+	it("applies standard profile window of 5 to plan completed tasks", async () => {
+		await withTempDir(async cwd => {
+			const planPath = path.join(cwd, "plan.md");
+			await writePlanFixture(planPath, PLAN_WITH_PROGRESS_CONTENT);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makePlanContext(cwd, planPath) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			// standard: window=5; plan has 6 → last 5
+			expect(result.metadata.progress?.completed_tasks).toHaveLength(5);
+		});
+	});
+
+	it("omits completed_tasks for minimal profile", async () => {
+		await withTempDir(async cwd => {
+			const planPath = path.join(cwd, "plan.md");
+			await writePlanFixture(planPath, PLAN_WITH_PROGRESS_CONTENT);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makePlanContext(cwd, planPath) }),
+				delegate: "lint",
+				task: createSemanticTask(),
+			});
+			// minimal profile: no plan enrichment loaded
+			expect(result.metadata.progress?.completed_tasks).toBeUndefined();
+		});
+	});
+
+	it("does not count unchecked items as completed", async () => {
+		await withTempDir(async cwd => {
+			const planPath = path.join(cwd, "plan.md");
+			await writePlanFixture(planPath, PLAN_WITH_PROGRESS_CONTENT);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makePlanContext(cwd, planPath) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			const completedTasks = result.metadata.progress?.completed_tasks as Array<{ summary: string }> | undefined;
+			// "Deploy to staging" and "Verify in production" are unchecked - must not appear
+			const summaries = completedTasks?.map(t => t.summary) ?? [];
+			expect(summaries).not.toContain("Deploy to staging");
+			expect(summaries).not.toContain("Verify in production");
+		});
+	});
+});
+
+describe("progress population - non-plan workflow", () => {
+	it("extracts completed tasks from session todo list", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeImplementationContext(cwd),
+					getTodoPhases: () => [
+						{
+							id: "phase-1",
+							name: "Phase 1",
+							tasks: [
+								{ id: "task-1", content: "Research the API design", status: "completed" as const },
+								{ id: "task-2", content: "Write the schema", status: "completed" as const },
+								{ id: "task-3", content: "Implement the feature", status: "in_progress" as const },
+							],
+						},
+					],
+				}),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			const completedTasks = result.metadata.progress?.completed_tasks as
+				| Array<{ summary: string; status: string }>
+				| undefined;
+			expect(completedTasks).toHaveLength(2);
+			expect(completedTasks).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ summary: "Research the API design", status: "completed" }),
+					expect.objectContaining({ summary: "Write the schema", status: "completed" }),
+				]),
+			);
+		});
+	});
+
+	it("omits completed_tasks when all todos are pending or in_progress", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeImplementationContext(cwd),
+					getTodoPhases: () => [
+						{
+							id: "phase-1",
+							name: "Phase 1",
+							tasks: [
+								{ id: "task-1", content: "Pending task", status: "pending" as const },
+								{ id: "task-2", content: "In progress task", status: "in_progress" as const },
+							],
+						},
+					],
+				}),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.progress?.completed_tasks).toBeUndefined();
+		});
+	});
+
+	it("applies standard window of 5 to todo-derived completed tasks", async () => {
+		await withTempDir(async cwd => {
+			const manyTasks = Array.from({ length: 8 }, (_, i) => ({
+				id: `task-${i + 1}`,
+				content: `Completed task ${i + 1}`,
+				status: "completed" as const,
+			}));
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeImplementationContext(cwd),
+					getTodoPhases: () => [{ id: "phase-1", name: "Phase 1", tasks: manyTasks }],
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			// standard: window=5; 8 completed → last 5
+			expect(result.metadata.progress?.completed_tasks).toHaveLength(5);
+			const completedTasks = result.metadata.progress?.completed_tasks as Array<{ summary: string }> | undefined;
+			// Last 5 items are tasks 4-8
+			expect(completedTasks?.[0]).toMatchObject({ summary: "Completed task 4" });
+			expect(completedTasks?.[4]).toMatchObject({ summary: "Completed task 8" });
+		});
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Unit 2.5: retry context serialization
+// ────────────────────────────────────────────────────────────────────
+
+describe("retry context serialization", () => {
+	it("includes retry_context in TOON and metadata when provided", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const retryCtx = {
+				attempt: 2,
+				prior_failure: {
+					error_type: "test_failure",
+					failing_step: "bun test",
+					what_was_tried: "Ran unit tests for the feature",
+					diagnosis: "Type error in the transform pipeline",
+				},
+			};
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+				options: { retryContext: retryCtx },
+			});
+			expect(result.metadata.retry_context).toMatchObject(retryCtx);
+			expect(result.toon).toContain("retry_context:");
+			expect(result.toon).toContain('error_type: "test_failure"');
+		});
+	});
+
+	it("omits retry_context when not provided (first attempt)", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.retry_context).toBeUndefined();
+			expect(result.toon).not.toContain("retry_context:");
+		});
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Unit 2.6: TOON multi-hop inheritance
+// ────────────────────────────────────────────────────────────────────
+
+function makeToonCompactContext(toonBlock: string): string {
+	return `# Conversation Context\n\n## User\n\n${toonBlock}\n\n## Assistant\n\nI will work on this.`;
+}
+
+function makeParentToon(envelopeId: string, repoRoot: string, workflowMode = "plan_linked"): string {
+	return [
+		"delegation:",
+		'  contract_version: "omp-delegation/v1"',
+		"  envelope:",
+		`    id: ${JSON.stringify(envelopeId)}`,
+		'    created_at: "2026-03-19T00:00:00.000Z"',
+		"  input_policy:",
+		'    mode: "detailed"',
+		"  context:",
+		`    repo_root: ${JSON.stringify(repoRoot)}`,
+		`    workflow_mode: ${JSON.stringify(workflowMode)}`,
+		"  roles:",
+		'    delegator: "orchestrator"',
+		'    delegate: "implement"',
+		"  task:",
+		'    id: "parent-task"',
+		'    title: "Parent task"',
+		'    description: "Parent delegation work"',
+		"    constraints[0]:",
+		"    acceptance_criteria[0]:",
+	].join("\n");
+}
+
+describe("TOON multi-hop inheritance", () => {
+	it("parses parent TOON from compact context and links envelope via parent_envelope_id", async () => {
+		await withTempDir(async cwd => {
+			const parentEnvelopeId = "del_parent_abc123def";
+			const parentToon = makeParentToon(parentEnvelopeId, cwd);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeToonCompactContext(parentToon),
+				}),
+				delegate: "lint",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.envelope.parent_envelope_id).toBe(parentEnvelopeId);
+			expect(result.metadata.context.repo_root).toBe(cwd);
+		});
+	});
+
+	it("inherits workflow_mode from parent TOON context", async () => {
+		await withTempDir(async cwd => {
+			const parentToon = makeParentToon("del_xyz_hop_789abc", cwd, "plan_linked");
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => parentToon,
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			expect(result.metadata.context.workflow_mode).toBe("plan_linked");
+			expect(result.metadata.envelope.parent_envelope_id).toBe("del_xyz_hop_789abc");
+		});
+	});
+
+	it("uses last delegation block when multiple TOON blocks appear in compact context", async () => {
+		await withTempDir(async cwd => {
+			const firstToon = makeParentToon("del_first_000aaa111", cwd);
+			const secondToon = makeParentToon("del_second_bbb222cc", cwd);
+			const compactContext = `${firstToon}\n\n## Assistant\n\nHandled.\n\n## User\n\n${secondToon}`;
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => compactContext,
+				}),
+				delegate: "code-reviewer",
+				task: createSemanticTask(),
+			});
+			// Should use the last TOON block's envelope id
+			expect(result.metadata.envelope.parent_envelope_id).toBe("del_second_bbb222cc");
+		});
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Unit 2.6: late plan binding and ask/default delegation modes
+// ────────────────────────────────────────────────────────────────────
+
+describe("late plan binding", () => {
+	it("resolves plan path from active plan-mode session state when compact context has no plan", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath } = await createPlanFixtureSet(cwd);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeImplementationContext(cwd),
+					getPlanModeState: () => ({ enabled: true, planFilePath: richPlanPath }) as any,
+				}),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.context.plan_path).toBe(richPlanPath);
+			// With a rich plan, intent should be populated from plan Goals section
+			expect(result.metadata.task.intent).toBeTruthy();
+		});
+	});
+
+	it("plan path in compact context takes precedence over session state", async () => {
+		await withTempDir(async cwd => {
+			const { richPlanPath, barePlanPath } = await createPlanFixtureSet(cwd);
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makePlanContext(cwd, richPlanPath),
+					getPlanModeState: () => ({ enabled: true, planFilePath: barePlanPath }) as any,
+				}),
+				delegate: "implement",
+				task: createSemanticTask(),
+			});
+			// Compact context wins
+			expect(result.metadata.context.plan_path).toBe(richPlanPath);
+		});
+	});
+});
+
+describe("ask and default delegation modes", () => {
+	it("sets workflow_mode to ask when runtime role is ask", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => "",
+					getRuntimeRole: () => "ask",
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			expect(result.metadata.context.workflow_mode).toBe("ask");
+			expect(result.metadata.roles.delegator).toBe("ask");
+		});
+	});
+
+	it("sets workflow_mode to default when runtime role is default", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => "",
+					getRuntimeRole: () => "default",
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			expect(result.metadata.context.workflow_mode).toBe("default");
+			expect(result.metadata.roles.delegator).toBe("default");
+		});
+	});
+
+	it("ask mode overrides inherited workflow_mode from parent context", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => makeImplementationContext(cwd, { workflow_mode: "plan_linked" }),
+					getRuntimeRole: () => "ask",
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			// ask runtime role takes precedence over inherited plan_linked
+			expect(result.metadata.context.workflow_mode).toBe("ask");
 		});
 	});
 });
