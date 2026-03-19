@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+import { getLatestTodoPhasesFromEntries, withTodoPhasesPreserveData } from "../../src/tools/todo-write";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -102,5 +104,65 @@ describe("TodoWriteTool auto-start behavior", () => {
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
+	});
+});
+
+function createMessageEntry(id: string, message: Record<string, unknown>, parentId: string | null = null): SessionEntry {
+	return {
+		type: "message",
+		id,
+		parentId,
+		timestamp: new Date(0).toISOString(),
+		message,
+	} as SessionEntry;
+}
+
+function createCompactionEntry(
+	id: string,
+	preserveData: Record<string, unknown> | undefined,
+	parentId: string,
+): SessionEntry {
+	return {
+		type: "compaction",
+		id,
+		parentId,
+		timestamp: new Date(0).toISOString(),
+		summary: "summary",
+		firstKeptEntryId: parentId,
+		tokensBefore: 123,
+		preserveData,
+	} as SessionEntry;
+}
+
+describe("todo state compaction helpers", () => {
+	const phases: TodoPhase[] = [
+		{
+			id: "phase-1",
+			name: "Execution",
+			tasks: [{ id: "task-1", content: "keep task", status: "in_progress" }],
+		},
+	];
+
+	it("restores todo phases from compaction preserve data", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry("msg-1", { role: "user", content: "start" }),
+			createCompactionEntry("cmp-1", withTodoPhasesPreserveData(undefined, phases), "msg-1"),
+		];
+
+		expect(getLatestTodoPhasesFromEntries(entries)).toEqual(phases);
+	});
+
+	it("does not resurrect stale todo state from before compaction", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry("todo-1", {
+				role: "toolResult",
+				toolName: "todo_write",
+				details: { phases },
+				content: [{ type: "text", text: "updated todo" }],
+			}),
+			createCompactionEntry("cmp-1", undefined, "todo-1"),
+		];
+
+		expect(getLatestTodoPhasesFromEntries(entries)).toEqual([]);
 	});
 });

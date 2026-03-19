@@ -5,7 +5,7 @@ modelRoles:
   orchestrator: openai-codex/gpt-5.4:xhigh
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
-  implement: openai-codex/gpt-5.4-mini:xhigh
+  implement: github-copilot/gpt-5.3-codex:high
   explore: openai-codex/gpt-5.4-mini:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
@@ -13,7 +13,7 @@ modelRoles:
   research: kimi-code/kimi-k2.5:medium
   verifier: openai-codex/gpt-5.4:high
   worktree-setup: kimi-code/kimi-k2.5:medium
-  code-reviewer: openai-codex/gpt-5.2-codex:high
+  code-reviewer: openai-codex/gpt-5.3-codex:high
   plan-verifier: openai-codex/gpt-5.4:high
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview

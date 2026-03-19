@@ -37,6 +37,12 @@ export interface TodoWriteToolDetails {
 	storage: "session" | "memory";
 }
 
+interface TodoCompactionPreserveData {
+	phases: TodoPhase[];
+}
+
+const TODO_COMPACTION_PRESERVE_KEY = "todoWrite";
+
 // =============================================================================
 // Schema
 // =============================================================================
@@ -178,9 +184,39 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
 }
 
+function getTodoPhasesFromCompactionPreserveData(data: unknown): TodoPhase[] | null {
+	if (!data || typeof data !== "object") return null;
+	const phases = (data as TodoCompactionPreserveData).phases;
+	if (!Array.isArray(phases)) return null;
+	return clonePhases(phases as TodoPhase[]);
+}
+
+export function withTodoPhasesPreserveData(
+	preserveData: Record<string, unknown> | undefined,
+	phases: TodoPhase[],
+): Record<string, unknown> | undefined {
+	if (phases.length > 0) {
+		return {
+			...(preserveData ?? {}),
+			[TODO_COMPACTION_PRESERVE_KEY]: { phases: clonePhases(phases) } satisfies TodoCompactionPreserveData,
+		};
+	}
+
+	if (!preserveData || !(TODO_COMPACTION_PRESERVE_KEY in preserveData)) {
+		return preserveData;
+	}
+
+	const { [TODO_COMPACTION_PRESERVE_KEY]: _removed, ...rest } = preserveData;
+	return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
+		if (entry.type === "compaction") {
+			const preserved = getTodoPhasesFromCompactionPreserveData(entry.preserveData?.[TODO_COMPACTION_PRESERVE_KEY]);
+			return preserved ?? [];
+		}
 		if (entry.type !== "message") continue;
 
 		const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };

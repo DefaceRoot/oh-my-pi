@@ -117,6 +117,9 @@ export interface CreateAgentSessionOptions {
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
 
+	/** Session runtime role recorded in model/session metadata (for subagents and role-aware tooling). */
+	role?: string;
+
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
@@ -1571,9 +1574,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager.appendThinkingLevelChange(thinkingLevel);
 		}
 	} else {
-		// Save initial model and thinking level for new sessions so they can be restored on resume
+		// Save initial model, role, and thinking level for new sessions so they can be restored on resume
 		if (model) {
-			sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+			sessionManager.appendModelChange(`${model.provider}/${model.id}`, options.role);
 		}
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
 	}

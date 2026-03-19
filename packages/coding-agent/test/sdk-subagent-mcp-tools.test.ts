@@ -171,4 +171,30 @@ describe("createAgentSession MCP proxy tool exposure", () => {
 		expect(session.systemPrompt).toContain("Prefer summary-oriented Grafana tools first.");
 		expect(session.systemPrompt).not.toContain("### chrome-devtools");
 	});
+
+	test("records specialized subagent runtime roles in new sessions", async () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendModelChange("anthropic/claude-sonnet-4-5", "default");
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager,
+			settings: Settings.isolated({ "async.enabled": true }),
+			hasUI: false,
+			enableMCP: false,
+			enableLsp: false,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			skipPythonPreflight: true,
+			taskDepth: 1,
+			toolNames: ["read"],
+			...( { role: "code-reviewer" } as any),
+		});
+
+		expect(session.sessionManager.getLastModelChangeRole()).toBe("code-reviewer");
+	});
 });

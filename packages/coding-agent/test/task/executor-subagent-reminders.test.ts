@@ -355,7 +355,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
 	});
 
-	it("passes parent compaction settings into the subagent session snapshot", async () => {
+	it("passes parent compaction settings into the subagent session snapshot while disabling auto-continue", async () => {
 		vi.clearAllMocks();
 		const session = createMockSession(({ emit }) => {
 			emit({
@@ -394,6 +394,7 @@ describe("runSubprocess submit_result reminders", () => {
 		const subagentSettings = createAgentSessionMock.mock.calls[0]?.[0]?.settings as Settings | undefined;
 		expect(subagentSettings?.get("compaction.strategy")).toBe("handoff");
 		expect(subagentSettings?.get("compaction.thresholdPercent")).toBe(70);
+		expect(subagentSettings?.get("compaction.autoContinue")).toBe(false);
 	});
 
 	it("prefers explicit modelOverride thinking suffix over provided thinking level, including off", async () => {

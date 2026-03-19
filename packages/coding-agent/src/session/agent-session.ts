@@ -103,7 +103,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
+import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase, withTodoPhasesPreserveData } from "../tools/todo-write";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
@@ -341,6 +341,7 @@ export class AgentSession {
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
 	#autoCompactionAbortController: AbortController | undefined = undefined;
+	#thresholdCompactionAbortPending = false;
 
 	// Branch summarization state
 	#branchSummaryAbortController: AbortController | undefined = undefined;
@@ -781,6 +782,9 @@ export class AgentSession {
 						this.#pendingRewindReport = report;
 					}
 				}
+				const thresholdInterruptTask = this.#maybeInterruptForThresholdCompaction();
+				this.#trackPostPromptTask(thresholdInterruptTask);
+				await thresholdInterruptTask;
 			}
 		}
 
@@ -791,6 +795,8 @@ export class AgentSession {
 				.find((message): message is AssistantMessage => message.role === "assistant");
 			const msg = this.#lastAssistantMessage ?? fallbackAssistant;
 			this.#lastAssistantMessage = undefined;
+			const interruptedForThresholdCompaction = this.#thresholdCompactionAbortPending;
+			this.#thresholdCompactionAbortPending = false;
 			if (!msg) return;
 
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
@@ -808,7 +814,7 @@ export class AgentSession {
 				this.#checkpointState = undefined;
 				this.#pendingRewindReport = undefined;
 			}
-			const compactionTask = this.#checkCompaction(msg);
+			const compactionTask = this.#checkCompaction(msg, { includeAborted: interruptedForThresholdCompaction });
 			this.#trackPostPromptTask(compactionTask);
 			await compactionTask;
 			// Check for incomplete todos (unless there was an error or abort)
@@ -3160,6 +3166,7 @@ export class AgentSession {
 				details = result.details;
 				preserveData = { ...(preserveData ?? {}), ...(result.preserveData ?? {}) };
 			}
+			preserveData = withTodoPhasesPreserveData(preserveData, this.#todoPhases);
 
 			if (this.#compactionAbortController.signal.aborted) {
 				throw new Error("Compaction cancelled");
@@ -3508,6 +3515,20 @@ Be thorough - include exact file paths, function names, error messages, and tech
 	async #resolveCompactionContextTokens(): Promise<number> {
 		await this.#pruneToolOutputs();
 		return this.#estimateContextTokens().tokens;
+	}
+
+	async #maybeInterruptForThresholdCompaction(): Promise<void> {
+		if (this.#thresholdCompactionAbortPending) return;
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
+
+		const contextWindow = this.#resolveRuntimeContextWindow();
+		const estimatedTokens = this.#estimateContextTokens().tokens;
+		const projectedTokensAfterPruning = Math.max(0, estimatedTokens - DEFAULT_PRUNE_CONFIG.minimumSavings);
+		if (!shouldCompact(projectedTokensAfterPruning, contextWindow, compactionSettings)) return;
+
+		this.#thresholdCompactionAbortPending = true;
+		this.agent.abort();
 	}
 	#enforceRewindBeforeYield(): boolean {
 		if (!this.#checkpointState || this.#pendingRewindReport) {
@@ -4090,6 +4111,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 				details = compactResult.details;
 				preserveData = { ...(preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
 			}
+			preserveData = withTodoPhasesPreserveData(preserveData, this.#todoPhases);
 
 			if (this.#autoCompactionAbortController.signal.aborted) {
 				await this.#emitSessionEvent({

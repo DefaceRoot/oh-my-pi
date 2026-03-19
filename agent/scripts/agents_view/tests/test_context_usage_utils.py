@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from agents_view.model import AgentSession
 from agents_view.utils import (
     context_window_for_model,
+    extract_last_mc_role,
     parse_context_usage_from_jsonl_lines,
     parse_session_start_time,
     parse_token_usage_from_jsonl,
@@ -106,6 +107,70 @@ def test_parse_context_usage_ignores_aborted_messages() -> None:
     )
 
     assert pct == pytest.approx(0.001)
+
+
+def test_parse_context_usage_prefers_main_role_over_subagent() -> None:
+    lines = [
+        json.dumps(
+            {
+                "type": "model_change",
+                "model": "anthropic/claude-sonnet-4-6-20260205",
+                "role": "orchestrator",
+            }
+        ),
+        json.dumps(
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "usage": {
+                        "input": 500,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                    },
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "model_change",
+                "model": "openai-codex/gpt-5.3-codex",
+                "role": "subagent",
+            }
+        ),
+        json.dumps(
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "usage": {
+                        "input": 50_000,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                    },
+                },
+            }
+        ),
+    ]
+
+    pct = parse_context_usage_from_jsonl_lines(lines)
+
+    assert pct == pytest.approx(0.0005)
+
+def test_extract_last_mc_role_preserves_specialized_subagent_roles() -> None:
+    lines = [
+        json.dumps(
+            {
+                "type": "model_change",
+                "model": "openai-codex/gpt-5.2-codex",
+                "role": "code-reviewer",
+            }
+        )
+    ]
+
+    assert extract_last_mc_role(lines) == "code-reviewer"
 
 
 def test_parse_context_usage_prefers_main_role_over_subagent() -> None:

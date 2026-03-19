@@ -5,11 +5,11 @@ import { parseFrontmatter } from "../utils/frontmatter";
 import { loadBundledAgents } from "./agents";
 import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 
-function loadPlanVerifierAgent() {
-	const source = Bun.file("/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/plan-verifier.md");
+function loadProjectAgent(fileName: string) {
+	const source = Bun.file(`/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/${fileName}`);
 	return source.text().then(text => {
 		const parsed = parseAgentFields(parseFrontmatter(text).frontmatter);
-		if (!parsed) throw new Error("Expected plan-verifier agent to parse");
+		if (!parsed) throw new Error(`Expected ${fileName} agent to parse`);
 		return parsed;
 	});
 }
@@ -57,7 +57,7 @@ describe("resolveSubagentLaunchOverrides", () => {
 		const settings = Settings.isolated({ defaultThinkingLevel: "high" });
 		settings.setModelRole("default", "openai-codex/gpt-5.4");
 		settings.setModelRole("plan-verifier", "openai-codex/gpt-5.4");
-		const planVerifier = await loadPlanVerifierAgent();
+		const planVerifier = await loadProjectAgent("plan-verifier.md");
 
 		const result = resolveSubagentLaunchOverrides({
 			session: { settings },
@@ -69,5 +69,24 @@ describe("resolveSubagentLaunchOverrides", () => {
 
 		expect(result.modelOverride).toBe("openai-codex/gpt-5.4");
 		expect(result.thinkingLevelOverride).toBeUndefined();
+	});
+
+	it("uses the dedicated commit role model for commit agents", async () => {
+		const settings = Settings.isolated({ defaultThinkingLevel: "medium" });
+		settings.setModelRole("default", "openai-codex/gpt-5.4");
+		settings.setModelRole("implement", "openai-codex/gpt-5.4-mini");
+		settings.setModelRole("commit", "zai/glm-5:medium");
+		const commitAgent = await loadProjectAgent("commit.md");
+
+		const result = resolveSubagentLaunchOverrides({
+			session: { settings },
+			agentName: commitAgent.name,
+			agentModel: commitAgent.model,
+			agentThinkingLevel: commitAgent.thinkingLevel,
+			settingsModelOverride: undefined,
+		});
+
+		expect(result.modelOverride).toBe("zai/glm-5:medium");
+		expect(result.thinkingLevelOverride).toBe("medium");
 	});
 });

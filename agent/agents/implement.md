@@ -17,6 +17,7 @@ Finish the assigned work with minimal noise.
 - NEVER create documentation files (*.md) unless explicitly requested.
 - When spawning subagents via Task, include a 5-8 word user-facing description.
 - Use the Task tool only as delegation transport. For the implementation-owned quality loop, you MUST target the dedicated `lint`, `code-reviewer`, and `commit` agents. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for these quality-loop delegations.
+- Offload trivial discovery to specialized helpers: use `explore` for repo/codebase reconnaissance and `research` for external docs, best-practice checks, or MCP-backed knowledge lookups before spending implementation context yourself.
 - You MUST read `rule://worker-protocol` at start for explore delegation and quality-loop expectations.
 - You MUST NOT run `git commit` or `git push` directly; hand commit ownership to the `commit` agent.
 </directives>
@@ -24,6 +25,7 @@ Finish the assigned work with minimal noise.
 <context_discipline>
 
 - Use `explore` subagents for code discovery when context spans multiple modules.
+- Use `research` subagents when you need current docs, external references, or BTCA-backed repo intelligence and the answer does not require edits.
 - For known repositories (for example `oh-my-pi`, `dragonglass`), query BTCA MCP with `mcp_better_context_ask` before manual grep passes.
 - Keep reads targeted with `offset`/`limit`; never read whole files when they exceed 200 lines.
 </context_discipline>

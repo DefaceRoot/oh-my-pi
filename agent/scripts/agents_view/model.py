@@ -15,6 +15,22 @@ HARNESS_LABELS: dict[str, str] = {
     "opencode": "OpenCode",
 }
 
+ROLE_BADGES: dict[str, tuple[str, str]] = {
+    "default": ("◈ DEF ", "bold #539bf5"),
+    "implement": ("◈ IMPL", "bold #79c0ff"),
+    "explore": ("◈ EXPL", "bold #79c0ff"),
+    "research": ("◈ RSCH", "bold #79c0ff"),
+    "lint": ("◈ LINT", "bold #79c0ff"),
+    "code-reviewer": ("◈ REVW", "bold #79c0ff"),
+    "commit": ("◈ CMIT", "bold #79c0ff"),
+    "verifier": ("◈ VRFY", "bold #79c0ff"),
+    "plan-verifier": ("◈ PLNV", "bold #79c0ff"),
+    "designer": ("◈ DSGN", "bold #79c0ff"),
+    "grafana": ("◈ GRFN", "bold #79c0ff"),
+    "coderabbit": ("◈ CRBT", "bold #79c0ff"),
+}
+
+
 
 @dataclass
 class AgentSession:
@@ -35,7 +51,7 @@ class AgentSession:
     status: str = "unknown"  # "review"|"wait"|"waiting"|"running"|"idle"|"offline"|"unknown" + extended health statuses
     status_confidence: float = 1.0  # 0.0-1.0 confidence for status rendering
     ask_ts: Optional[float] = None  # set when status=="asking"; epoch of the ask tool_use
-    role: str = ""                  # "orchestrator" | "default" | "" (non-OMP / unknown)
+    role: str = ""                  # runtime role slug from model_change (main or specialized subagent role)
     model: str = ""                 # active model identifier (from model_change)
     quick_note: str = ""
     description: str = ""
@@ -176,6 +192,6 @@ class AgentSession:
         """Returns (label, style) for the ROLE column."""
         if self.role == "orchestrator":
             return ("⬡ ORCH", "bold #f0883e")   # orange
-        if self.role == "default":
-            return ("◈ DEF ", "bold #539bf5")   # blue (trailing space for width=7)
+        if self.role in ROLE_BADGES:
+            return ROLE_BADGES[self.role]
         return ("     ", "#444c56")              # empty dim for non-OMP / unset

@@ -82,11 +82,13 @@ def test_role_rich_all_paths() -> None:
     assert "DEF" in default_label
     assert default_style == "bold #539bf5"
 
+    lint = _session(role="lint")
+    assert lint.role_rich == ("◈ LINT", "bold #79c0ff")
+
     empty = _session(role="")
     empty_label, empty_style = empty.role_rich
     assert empty_style == "#444c56"
     assert empty_label.strip() == ""
-
 
 def test_render_context_bar_formats_and_caps_values() -> None:
     bar = _render_context_bar(0.52)

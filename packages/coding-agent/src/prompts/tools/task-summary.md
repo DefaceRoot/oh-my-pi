@@ -5,6 +5,7 @@
 <agent id="{{id}}" agent="{{agent}}">
 <status>{{status}}</status>
 {{#if meta}}<meta lines="{{meta.lineCount}}" size="{{meta.charSize}}" />{{/if}}
+{{#if abortReason}}<abort-reason>{{abortReason}}</abort-reason>{{/if}}
 {{#if truncated}}
 <preview full-path="agent://{{id}}">
 {{preview}}

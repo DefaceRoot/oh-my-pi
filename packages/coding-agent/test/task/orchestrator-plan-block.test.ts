@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { PLAN_MODE_SUBAGENT_TOOLS } from "../../src/task/plan-mode-tools";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 
 const runSubprocessAgents: string[] = [];
-
+let lastRunSubprocessAgent: Record<string, unknown> | null = null;
 const stubResult: SingleResult = {
 	index: 0,
 	id: "TestTask",
@@ -24,12 +25,15 @@ const availableAgents = ["explore", "research", "implement", "verifier", "codera
 		source: "bundled" as const,
 		model: "default",
 		systemPrompt: `You are ${name}.`,
+		tools: name === "explore" ? ["read"] : undefined,
+		spawns: name === "explore" ? "*" : undefined,
 	}),
 );
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		const agent = opts.agent as { name: string };
+		lastRunSubprocessAgent = opts.agent as Record<string, unknown>;
 		runSubprocessAgents.push(agent.name);
 		return { ...stubResult, agent: agent.name };
 	},
@@ -90,6 +94,7 @@ function collectText(result: Awaited<ReturnType<typeof executeWithAgent>>): stri
 describe("orchestrator implementation-boundary spawn policy", () => {
 	beforeEach(() => {
 		runSubprocessAgents.length = 0;
+		lastRunSubprocessAgent = null;
 	});
 
 	for (const restrictedAgent of ["lint", "code-reviewer", "commit"] as const) {
@@ -160,5 +165,19 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 			expect(text).not.toContain("orchestrator parent sessions");
 			expect(text).not.toContain("Delegate an 'implement' worker first");
 		}
+	});
+
+	test("launches plan-mode subagents with the effective agent definition", async () => {
+		await executeWithAgent("explore", {
+			hasUI: false,
+			getRuntimeRole: () => "implement",
+			getPlanModeState: () => ({ enabled: true }),
+		});
+
+		expect(runSubprocessAgents).toEqual(["explore"]);
+		expect(lastRunSubprocessAgent).not.toBeNull();
+		expect(lastRunSubprocessAgent?.tools).toEqual(PLAN_MODE_SUBAGENT_TOOLS);
+		expect(lastRunSubprocessAgent?.spawns).toBeUndefined();
+		expect(lastRunSubprocessAgent?.systemPrompt).toEqual(expect.stringContaining("You are explore."));
 	});
 });

@@ -1,6 +1,7 @@
 import type { ModelRole } from "../config/model-registry";
 
 const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
+	"commit",
 	"implement",
 	"explore",
 	"lint",

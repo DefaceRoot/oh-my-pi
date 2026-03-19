@@ -1031,7 +1031,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					if (!isIsolated) {
 						return runSubprocess({
 							cwd: this.session.cwd,
-							agent,
+							agent: effectiveAgent,
+							runtimeRole: effectiveAgent.name,
 							task: task.task,
 							description: task.description,
 							index,
@@ -1083,7 +1084,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const result = await runSubprocess({
 							cwd: this.session.cwd,
 							worktree: isolationDir,
-							agent,
+							agent: effectiveAgent,
+							runtimeRole: effectiveAgent.name,
 							task: task.task,
 							description: task.description,
 							index,
@@ -1416,6 +1418,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					agent: r.agent,
 					status,
 					id: r.id,
+					abortReason: r.aborted && r.abortReason?.trim() ? r.abortReason.trim() : undefined,
 					preview,
 					truncated,
 					meta: r.outputMeta

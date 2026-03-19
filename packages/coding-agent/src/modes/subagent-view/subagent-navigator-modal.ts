@@ -358,7 +358,7 @@ export class SubagentNavigatorModal extends Container {
 		lines.push(theme.bold(theme.fg("accent", `Selected ${this.#resolveTitle(ref)}`)));
 
 		const infoParts: string[] = [];
-		infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", ref.agent ?? "task")}`);
+		infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", ref.agent ?? "\u2014")}`);
 		infoParts.push(`${theme.fg("dim", "Status")} ${renderStatusCell(ref.status)}`);
 		if (ref.sessionId) {
 			infoParts.push(`${theme.fg("dim", "OMP")} ${theme.fg("text", ref.sessionId)}`);
@@ -409,7 +409,7 @@ export class SubagentNavigatorModal extends Container {
 		const title = padToWidth(truncateToWidth(titleText, cols.titleW), cols.titleW);
 		const status = padToWidth(truncateToWidth(renderStatusCell(entry.ref.status), cols.statusW), cols.statusW);
 		const result = padToWidth(truncateToWidth(formatOutcomeCell(entry.ref.outcome), cols.resultW), cols.resultW);
-		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "task", cols.roleW), cols.roleW);
+		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "\u2014", cols.roleW), cols.roleW);
 		const model = padToWidth(truncateToWidth(formatModelCell(entry.ref.model), cols.modelW), cols.modelW);
 		const lastActiveMs = entry.ref.lastUpdatedMs ?? this.#groups[entry.groupIdx]?.lastUpdatedMs;
 		const lastActiveLabel = formatLastActive(lastActiveMs);

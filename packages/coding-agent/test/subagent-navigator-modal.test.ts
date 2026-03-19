@@ -587,4 +587,70 @@ describe("SubagentNavigatorModal", () => {
 			expect(modal.getSelection()).toEqual({ groupIndex: 1, nestedIndex: -1 });
 		});
 	});
+	describe('role display and agent slug identity', () => {
+		test('row shows em-dash when ref.agent is undefined, not the string task', () => {
+			const refs = [makeRef('impl-001', { agent: undefined, description: 'Implement feature' })];
+			const modal = createModal([makeGroup('impl-001', refs)]);
+			const text = renderText(modal, 120);
+
+			expect(text).toContain('—');
+			expect(text).not.toMatch(/\btask\b/);
+		});
+
+		test('selection summary shows em-dash role when ref.agent is undefined', () => {
+			const refs = [makeRef('impl-001', { agent: undefined, description: 'Implement feature' })];
+			const modal = createModal([makeGroup('impl-001', refs)], { groupIndex: 0, nestedIndex: -1 });
+			const text = renderText(modal, 140);
+
+			// Should contain Role — (from the summary strip)
+			expect(text).toContain('Role');
+			expect(text).toContain('—');
+			expect(text).not.toMatch(/Role task/);
+		});
+
+		test('renders real configured slug for lint, code-reviewer, and commit children', () => {
+			const refs = [
+				makeRef('lint-001', { agent: 'lint', description: 'Run lint checks', status: 'completed' }),
+				makeRef('review-002', {
+					agent: 'code-reviewer',
+					description: 'Review changes',
+					status: 'completed',
+					parentId: 'lint-001',
+					rootId: 'lint-001',
+				}),
+				makeRef('commit-003', {
+					agent: 'commit',
+					description: 'Commit result',
+					status: 'completed',
+					parentId: 'lint-001',
+					rootId: 'lint-001',
+				}),
+			];
+			const modal = createModal([makeGroup('lint-001', refs)]);
+			const text = renderText(modal, 140);
+
+			expect(text).toContain('lint');
+			expect(text).toContain('code-reviewer');
+			expect(text).toContain('commit');
+			expect(text).not.toMatch(/\btask\b/);
+		});
+
+		test('rows use agent field as-is when present, no fallback injection', () => {
+			const refs = [
+				makeRef('explore-001', { agent: 'explore', description: 'Explore codebase' }),
+				makeRef('implement-002', {
+					agent: 'implement',
+					description: 'Implement changes',
+					parentId: 'explore-001',
+					rootId: 'explore-001',
+				}),
+			];
+			const modal = createModal([makeGroup('explore-001', refs)]);
+			const text = renderText(modal, 140);
+
+			expect(text).toContain('explore');
+			expect(text).toContain('implement');
+			expect(text).not.toContain('—');
+		});
+	});
 });

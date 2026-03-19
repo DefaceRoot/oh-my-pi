@@ -214,25 +214,35 @@ def parse_session_start_time(jsonl_path: str) -> Optional[float]:
     return None
 
 _ROLE_CANONICAL: frozenset[str] = frozenset({"default", "orchestrator"})
+_ROLE_TRANSIENT: frozenset[str] = frozenset({"temporary", "smol", "slow", "subagent"})
 
 
 def extract_last_mc_role(lines: list[str]) -> str | None:
     """Return the role encoded by the LAST model_change event in *lines*.
 
-    Mirrors OMP's ``getLastModelChangeRole()`` logic:
+    Mirrors OMP's ``getLastModelChangeRole()`` logic, while preserving
+    specialized worker roles emitted by delegated subagent sessions:
       - null/undefined role  → ``"default"``  (JS: ``role ?? "default"``)
       - canonical role       → ``"default"`` or ``"orchestrator"``
-      - transient/config     → ``""``  (``temporary`` / ``smol`` / ``slow`` / etc.)
+      - specialized role     → preserved normalized slug (for example ``"lint"``)
+      - transient/config     → ``""``  (``temporary`` / ``smol`` / ``slow`` / generic ``subagent``)
       - no model_change      → ``None``  (caller decides; typically leave blank)
     """
     for raw in reversed(lines):
         try:
             obj = json.loads(raw)
             if obj.get("type") == "model_change":
-                r = obj.get("role")
-                if r is None:
+                raw_role = obj.get("role")
+                if raw_role is None:
                     return "default"
-                return r if r in _ROLE_CANONICAL else ""
+                role = str(raw_role).strip().lower()
+                if not role:
+                    return ""
+                if role in _ROLE_TRANSIENT:
+                    return ""
+                if role in _ROLE_CANONICAL:
+                    return role
+                return role
         except json.JSONDecodeError:
             continue
     return None

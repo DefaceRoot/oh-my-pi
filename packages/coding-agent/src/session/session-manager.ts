@@ -156,6 +156,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	mcpAllowlist?: string[];
 	/** Output schema if structured output was requested */
 	outputSchema?: unknown;
+	/** Agent name (slug) that ran this delegated subagent session */
+	agentName?: string;
 }
 
 /** Mode change entry - tracks agent mode transitions (e.g. plan mode). */

@@ -236,4 +236,65 @@ describe("AgentSession compaction threshold enforcement", () => {
 			errorMessage: expect.any(String),
 		});
 	});
+	it("interrupts tool-driven turns when context crosses the threshold mid-turn", async () => {
+		session.settings.set("compaction.thresholdPercent", 10);
+		setContextWindow(4_000);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+		const abortSpy = vi.spyOn(session.agent, "abort").mockImplementation(() => {});
+		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff doc" });
+		const promptImpl = async (messages: unknown): Promise<void> => {
+			const promptMessages = Array.isArray(messages) ? [...messages] : [];
+			const toolResult = {
+				role: "toolResult" as const,
+				toolName: "read",
+				content: [{ type: "text" as const, text: "x".repeat(500_000) }],
+				isError: false,
+				timestamp: Date.now(),
+			};
+			session.agent.replaceMessages(promptMessages);
+			session.agent.appendMessage(toolResult);
+			session.agent.emitExternalEvent({ type: "message_end", message: toolResult });
+			await Promise.resolve();
+		};
+		session.agent.prompt = promptImpl as typeof session.agent.prompt;
+
+		await session.prompt("trigger tool-loop threshold maintenance");
+		await Bun.sleep(50);
+
+		const abortedAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "interrupted for compaction" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "aborted",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() + 1,
+		};
+		session.agent.appendMessage(abortedAssistant);
+		session.agent.emitExternalEvent({ type: "message_end", message: abortedAssistant });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [abortedAssistant] });
+		await compactionDone;
+
+		expect(abortSpy).toHaveBeenCalledTimes(1);
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(events).toContainEqual(expect.objectContaining({ type: "auto_compaction_start", reason: "threshold" }));
+	});
+
 });
