@@ -1,24 +1,24 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: anthropic/claude-opus-4-6:xhigh
+  default: openai-codex/gpt-5.4:high
   ask: kimi-code/kimi-k2-turbo-preview:high
-  orchestrator: anthropic/claude-opus-4-6:high
+  orchestrator: openai-codex/gpt-5.4:xhigh
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
-  implement: anthropic/claude-sonnet-4-6:high
-  explore: zai/glm-5:medium
+  implement: openai-codex/gpt-5.4-mini:xhigh
+  explore: openai-codex/gpt-5.4-mini:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
   research: kimi-code/kimi-k2.5:medium
-  verifier: google-antigravity/claude-opus-4-6-thinking:high
+  verifier: openai-codex/gpt-5.4:high
   worktree-setup: kimi-code/kimi-k2.5:medium
-  code-reviewer: anthropic/claude-opus-4-6:high
+  code-reviewer: openai-codex/gpt-5.2-codex:high
   plan-verifier: openai-codex/gpt-5.4:high
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
-  designer: anthropic/claude-opus-4-6:high
-  grafana: kimi-code/kimi-k2.5:high
+  designer: anthropic/claude-opus-4-6:xhigh
+  grafana: anthropic/claude-opus-4-6:high
 defaultThinkingLevel: high
 providers: 
   webSearch: auto
@@ -32,8 +32,13 @@ steeringMode: one-at-a-time
 task: 
   maxRecursionDepth: 3
   eager: false
+  isolation: 
+    commits: ai
+    merge: branch
+    mode: worktree
 stt: 
   enabled: true
+  inputDevice: alsa_input.usb-Cisco_System__Inc._Cisco_Webex_Desk_Camera_ATW25101013-03.analog-stereo
 disabledProviders: 
   - opencode
   - codex
@@ -78,7 +83,8 @@ async:
 lsp: 
   diagnosticsOnEdit: true
 browser: 
-  headless: true
+  headless: false
+  enabled: false
 exa: 
   enableResearcher: false
 symbolPreset: nerd
