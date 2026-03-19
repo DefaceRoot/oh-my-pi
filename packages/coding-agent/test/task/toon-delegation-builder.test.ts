@@ -19,6 +19,11 @@ type SemanticTask = {
 
 type ToonDelegationResult = {
 	toon: string;
+	validation_passed: boolean;
+	quality_report?: {
+		warnings: string[];
+		errors: string[];
+	};
 	metadata: {
 		contract_version: string;
 		envelope: {
@@ -67,6 +72,11 @@ type ToonDelegationBuilderModule = {
 		task: SemanticTask;
 		options?: {
 			profile?: InputProfileMode;
+			progress?: {
+				completed_tasks?: unknown[];
+				upstream_tasks?: unknown[];
+				lessons_learned?: string[];
+			};
 		};
 	}) => ToonDelegationResult | Promise<ToonDelegationResult>;
 };
@@ -142,7 +152,8 @@ const RICH_PLAN_CONTENT = [
 	"- Only surface dependencies when the plan names them.",
 	"- Prefer inherited intent over empty defaults.",
 	"- Do not invent pseudo-plan structure.",
-	"- Cap lessons learned to three entries.",
+	"- Cap lessons learned to five entries.",
+	"- This sixth entry must be excluded by the cap.",
 ].join("\n");
 
 const BARE_PLAN_CONTENT = [
@@ -518,7 +529,7 @@ describe("toon delegation builder", () => {
 		});
 	});
 
-	it("caps lessons learned to three entries and omits them when absent", async () => {
+	it("caps lessons learned to five entries and omits them when absent", async () => {
 		await withTempDir(async cwd => {
 			const { richPlanPath, barePlanPath } = await createPlanFixtureSet(cwd);
 			const richContext = makePlanContext(cwd, richPlanPath);
@@ -526,17 +537,165 @@ describe("toon delegation builder", () => {
 				cwd,
 				compactContext: richContext,
 			});
-			expect(detailedResult.metadata.progress?.lessons_learned).toEqual([
+			const lessons = detailedResult.metadata.progress?.lessons_learned;
+			expect(lessons).toHaveLength(5);
+			expect(lessons).toEqual([
 				"Keep plan excerpts short.",
 				"Only surface dependencies when the plan names them.",
 				"Prefer inherited intent over empty defaults.",
+				"Do not invent pseudo-plan structure.",
+				"Cap lessons learned to five entries.",
 			]);
+			// Sixth entry must be excluded by the cap
+			expect(lessons).not.toContain("This sixth entry must be excluded by the cap.");
 
 			const bareResult = await buildDelegation({
 				cwd,
 				compactContext: makePlanContext(cwd, barePlanPath),
 			});
 			expect(bareResult.metadata.progress?.lessons_learned).toBeUndefined();
+		});
+	});
+});
+
+describe("delegation quality linter", () => {
+	it("passes for a well-formed delegation", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask(),
+			});
+			expect(result.quality_report?.warnings).toEqual([]);
+			expect(result.quality_report?.errors).toEqual([]);
+		});
+	});
+
+	it("warns when task.description is under 20 characters", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask({ description: "Too short" }),
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("task.description is under 20 characters"))).toBe(true);
+		});
+	});
+
+	it("warns when task.constraints is empty", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask({ constraints: [] }),
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("task.constraints is empty or missing"))).toBe(true);
+		});
+	});
+
+	it("warns when task.acceptance_criteria is empty", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask({ acceptance_criteria: [] }),
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("task.acceptance_criteria is empty or missing"))).toBe(true);
+		});
+	});
+
+	it("errors when plan_path is set but file does not exist on disk", async () => {
+		await withTempDir(async cwd => {
+			const missingPlanPath = path.join(cwd, "nonexistent", "plan.md");
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makePlanContext(cwd, missingPlanPath),
+			});
+			const errors = result.quality_report?.errors ?? [];
+			expect(errors.some(e => e.includes("plan_path is set but file does not exist"))).toBe(true);
+		});
+	});
+});
+
+describe("token budget trimming", () => {
+	it("does not trim an envelope under the budget", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask(),
+			});
+			const tokenCount = Math.ceil(result.toon.length / 4);
+			expect(tokenCount).toBeLessThanOrEqual(2000);
+			const baseTask = createSemanticTask();
+			expect(result.metadata.task.title).toBe(baseTask.title);
+			expect(result.metadata.task.constraints).toEqual(baseTask.constraints);
+			expect(result.metadata.task.acceptance_criteria).toEqual(baseTask.acceptance_criteria);
+		});
+	});
+
+	it("preserves title, constraints, and acceptance_criteria when description must be truncated", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const longDescription = "A".repeat(8500);
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask({ description: longDescription }),
+			});
+			const baseTask = createSemanticTask();
+			expect(result.metadata.task.title).toBe(baseTask.title);
+			expect(result.metadata.task.constraints).toEqual(baseTask.constraints);
+			expect(result.metadata.task.acceptance_criteria).toEqual(baseTask.acceptance_criteria);
+			expect(result.metadata.task.description.length).toBeLessThanOrEqual(200);
+		});
+	});
+
+	it("removes lessons_learned before truncating description when over budget", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const longDescription = "A".repeat(8500);
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask({ description: longDescription }),
+				options: {
+					profile: "detailed",
+					progress: {
+						lessons_learned: ["Lesson A", "Lesson B", "Lesson C"],
+					},
+				},
+			});
+			expect(result.metadata.progress?.lessons_learned).toBeUndefined();
+		});
+	});
+});
+
+describe("TOON round-trip validation", () => {
+	it("sets validation_passed true for a well-formed envelope", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask(),
+			});
+			expect(result.validation_passed).toBe(true);
+		});
+	});
+
+	it("includes contract_version, envelope id, and task title in the TOON output", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask(),
+			});
+			expect(result.toon).toContain('contract_version: "omp-delegation/v1"');
+			expect(result.toon).toContain(`id: ${JSON.stringify(result.metadata.envelope.id)}`);
+			expect(result.toon).toContain(`title: ${JSON.stringify(result.metadata.task.title)}`);
 		});
 	});
 });

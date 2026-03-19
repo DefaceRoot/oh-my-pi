@@ -42,7 +42,7 @@ import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
 import { renderTemplate } from "./template";
-import { buildToonDelegation, type DelegationTask } from "./toon-delegation-builder";
+import { buildToonDelegation, type DelegationTask, type ToonDelegationResult } from "./toon-delegation-builder";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -263,6 +263,20 @@ function buildFallbackDelegationToon(session: ToolSession, delegate: string, tas
 	].join("\n");
 }
 
+async function writeDelegationSidecar(session: ToolSession, result: ToonDelegationResult): Promise<void> {
+	const artifactsDir = session.getArtifactsDir?.();
+	if (!artifactsDir) return;
+	const envelopeId = result.metadata.envelope.id;
+	const sidecarPath = path.join(artifactsDir, `${envelopeId}-delegation-meta.json`);
+	const sidecarData = {
+		...result.metadata,
+		quality_report: result.quality_report,
+		validation_passed: result.validation_passed,
+	};
+	await fs.mkdir(artifactsDir, { recursive: true });
+	await fs.writeFile(sidecarPath, JSON.stringify(sidecarData, null, 2));
+}
+
 async function renderTaskWithDelegationToon(
 	session: ToolSession,
 	delegate: string,
@@ -276,13 +290,14 @@ async function renderTaskWithDelegationToon(
 
 	let delegationContext: string;
 	try {
-		delegationContext = (
-			await buildToonDelegation({
-				session,
-				delegate,
-				task: buildDelegationTask(task),
-			})
-		).toon;
+		const result = await buildToonDelegation({
+			session,
+			delegate,
+			task: buildDelegationTask(task),
+		});
+		// Fire-and-forget sidecar write; failures are non-fatal
+		writeDelegationSidecar(session, result).catch(() => {});
+		delegationContext = result.toon;
 	} catch {
 		delegationContext = buildFallbackDelegationToon(session, delegate, task);
 	}

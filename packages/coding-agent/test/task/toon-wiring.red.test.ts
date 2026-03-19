@@ -294,3 +294,78 @@ describe("TaskTool TOON wiring", () => {
 		});
 	});
 });
+
+describe("delegation sidecar writing", () => {
+	beforeEach(() => {
+		// Reset shared state that may have been mutated by prior tests in other describe blocks
+		builderMode = "success";
+		buildToonCalls.length = 0;
+		runSubprocessCalls.length = 0;
+	});
+
+	test("writes delegation-meta sidecar when getArtifactsDir is available", async () => {
+		await withTempDir(async cwd => {
+			const artifactsDir = path.join(cwd, "artifacts");
+			const tool = await TaskTool.create(
+				{
+					...createSession(cwd, { asyncEnabled: false }),
+					getArtifactsDir: () => artifactsDir,
+				} as any,
+			);
+
+			await tool.execute("sidecar-call", {
+				agent: "explore",
+				tasks: [
+					{
+						id: "SidecarTask",
+						description: "Test sidecar write",
+						assignment:
+							"Target: verify sidecar.\nChange: confirm file written.\nEdge Cases: none.\nAcceptance: sidecar file exists.",
+					},
+				],
+			});
+
+			// Allow fire-and-forget promise to settle
+			await new Promise(r => setTimeout(r, 50));
+
+			const sidecarFiles = fs.readdirSync(artifactsDir).filter(f => f.endsWith("-delegation-meta.json"));
+			expect(sidecarFiles.length).toBeGreaterThanOrEqual(1);
+
+			const sidecarContent = JSON.parse(
+				fs.readFileSync(path.join(artifactsDir, sidecarFiles[0]!), "utf-8"),
+			);
+			expect(sidecarContent.contract_version).toBe("omp-delegation/v1");
+			expect(sidecarContent.envelope?.id).toBeTruthy();
+			expect(sidecarContent.task?.title).toBeTruthy();
+		});
+	});
+
+	test("sidecar write failure does not fail delegation", async () => {
+		await withTempDir(async cwd => {
+			// Return a path that cannot be written to (a file, not a dir)
+			const blockingFile = path.join(cwd, "blocked");
+			fs.writeFileSync(blockingFile, "x");
+			const tool = await TaskTool.create(
+				{
+					...createSession(cwd, { asyncEnabled: false }),
+					// Return path to a file instead of a dir so mkdir fails
+					getArtifactsDir: () => blockingFile,
+				} as any,
+			);
+
+			// Delegation should still succeed despite sidecar write failure
+			const result = await tool.execute("sidecar-fail-call", {
+				agent: "explore",
+				tasks: [
+					{
+						id: "SidecarFailTask",
+						description: "Test non-fatal sidecar failure",
+						assignment: "Target: confirm delegation proceeds.\nAcceptance: result returned.",
+					},
+				],
+			});
+			expect(result).toBeDefined();
+			expect(result.content[0]?.type).toBe("text");
+		});
+	});
+});

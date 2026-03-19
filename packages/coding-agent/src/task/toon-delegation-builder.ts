@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { ToolSession } from "..";
 import { resolveLocalUrlToPath } from "../internal-urls/local-protocol";
@@ -89,9 +90,17 @@ export interface BuildToonDelegationInput {
 	options?: BuildToonDelegationOptions;
 }
 
+
+export interface DelegationQualityReport {
+	warnings: string[];
+	errors: string[];
+}
+
 export interface ToonDelegationResult {
 	toon: string;
 	metadata: DelegationMetadata;
+	quality_report?: DelegationQualityReport;
+	validation_passed: boolean;
 }
 
 type PlainObject = Record<string, unknown>;
@@ -531,7 +540,7 @@ function extractLessonsLearned(content: string): string[] | undefined {
 	const lessonsLearned = items
 		.map(itemLines => normalizeText(itemLines.join(" ").replace(/\s+/g, " ")))
 		.filter((value): value is string => value !== undefined)
-		.slice(0, 3);
+		.slice(0, 5);
 
 	return lessonsLearned.length > 0 ? lessonsLearned : undefined;
 }
@@ -919,11 +928,152 @@ export function resolveInputProfile(delegate: string, override?: InputProfileMod
 	return resolveInputProfileForDelegate(delegate, override);
 }
 
+const TOKEN_BUDGET = 2000;
+
+export function estimateTokenCount(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+export async function validateDelegationQuality(
+	metadata: DelegationMetadata,
+	cwd?: string,
+): Promise<DelegationQualityReport> {
+	const warnings: string[] = [];
+	const errors: string[] = [];
+
+	if (metadata.task.description.length < 20) {
+		warnings.push("task.description is under 20 characters");
+	}
+	if (!metadata.task.constraints || metadata.task.constraints.length === 0) {
+		warnings.push("task.constraints is empty or missing");
+	}
+	if (!metadata.task.acceptance_criteria || metadata.task.acceptance_criteria.length === 0) {
+		warnings.push("task.acceptance_criteria is empty or missing");
+	}
+	if (metadata.context.plan_path && !metadata.context.plan_excerpt && metadata.input_policy.mode === "detailed") {
+		warnings.push("plan_path exists but plan_excerpt extraction failed [info]");
+	}
+	if (
+		metadata.input_policy.mode !== "minimal" &&
+		metadata.roles.delegate === "implement" &&
+		!metadata.output_contract
+	) {
+		warnings.push("output_contract missing for implement delegate");
+	}
+	if (metadata.context.plan_path) {
+		const planPath = metadata.context.plan_path;
+		if (!planPath.startsWith("local://")) {
+			const resolvedPath = path.isAbsolute(planPath)
+				? planPath
+				: cwd
+					? path.join(cwd, planPath)
+					: planPath;
+			try {
+				await fsPromises.access(resolvedPath);
+			} catch {
+				errors.push(`plan_path is set but file does not exist: ${planPath}`);
+			}
+		}
+	}
+
+	return { warnings, errors };
+}
+
+function validateToonRoundTrip(toon: string, metadata: DelegationMetadata): boolean {
+	try {
+		if (!toon.includes(`contract_version: "omp-delegation/v1"`)) return false;
+		if (!toon.includes(`id: ${JSON.stringify(metadata.envelope.id)}`)) return false;
+		if (!toon.includes(`title: ${JSON.stringify(metadata.task.title)}`)) return false;
+		if (!toon.includes("description:")) return false;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function applyTokenBudgetTrim(
+	metadata: DelegationMetadata,
+): { metadata: DelegationMetadata; toon: string; trimmed: boolean } {
+	const initial = renderDelegationToon(metadata);
+	if (estimateTokenCount(initial) <= TOKEN_BUDGET) {
+		return { metadata, toon: initial, trimmed: false };
+	}
+
+	let current = metadata;
+
+	// Step 1: Remove lessons_learned
+	if (current.progress?.lessons_learned) {
+		const nextProgress: DelegationProgress = { ...current.progress, lessons_learned: undefined };
+		const hasOtherProgress = nextProgress.completed_tasks || nextProgress.upstream_tasks;
+		current = { ...current, progress: hasOtherProgress ? nextProgress : undefined };
+		const toon = renderDelegationToon(current);
+		if (estimateTokenCount(toon) <= TOKEN_BUDGET) {
+			return { metadata: current, toon, trimmed: true };
+		}
+	}
+
+	// Step 2: Reduce completed_tasks window (oldest removed first)
+	while ((current.progress?.completed_tasks?.length ?? 0) > 0) {
+		const tasks = current.progress!.completed_tasks!;
+		const reduced = tasks.slice(1);
+		const nextProgress: DelegationProgress = {
+			...current.progress!,
+			completed_tasks: reduced.length > 0 ? reduced : undefined,
+		};
+		const hasOtherProgress = nextProgress.completed_tasks || nextProgress.upstream_tasks || nextProgress.lessons_learned;
+		current = { ...current, progress: hasOtherProgress ? nextProgress : undefined };
+		const toon = renderDelegationToon(current);
+		if (estimateTokenCount(toon) <= TOKEN_BUDGET) {
+			return { metadata: current, toon, trimmed: true };
+		}
+	}
+
+	// Step 3: Remove plan_excerpt
+	if (current.context.plan_excerpt) {
+		current = { ...current, context: { ...current.context, plan_excerpt: undefined } };
+		const toon = renderDelegationToon(current);
+		if (estimateTokenCount(toon) <= TOKEN_BUDGET) {
+			return { metadata: current, toon, trimmed: true };
+		}
+	}
+
+	// Step 4: Truncate task.description to first 200 characters
+	if (current.task.description.length > 200) {
+		current = { ...current, task: { ...current.task, description: current.task.description.slice(0, 200) } };
+	}
+	const finalToon = renderDelegationToon(current);
+	return { metadata: current, toon: finalToon, trimmed: true };
+}
+
 export async function buildToonDelegation(input: BuildToonDelegationInput): Promise<ToonDelegationResult> {
 	const task = normalizeTask(input.task);
 	const metadata = await buildMetadata(input, task);
+
+	// Quality linter runs before TOON serialization
+	const quality_report = await validateDelegationQuality(metadata, input.session.cwd);
+	for (const w of quality_report.warnings) {
+		console.warn(`[toon-delegation] warning: ${w}`);
+	}
+	for (const e of quality_report.errors) {
+		console.error(`[toon-delegation] error: ${e}`);
+	}
+
+	// Render, apply token budget trim, re-render if needed
+	const { metadata: finalMetadata, toon: finalToon, trimmed } = applyTokenBudgetTrim(metadata);
+	if (trimmed) {
+		console.warn(`[toon-delegation] envelope trimmed to fit ${TOKEN_BUDGET}-token budget`);
+	}
+
+	// Round-trip structural validation
+	const validation_passed = validateToonRoundTrip(finalToon, finalMetadata);
+	if (!validation_passed) {
+		console.warn("[toon-delegation] TOON round-trip validation failed");
+	}
+
 	return {
-		toon: renderDelegationToon(metadata),
-		metadata,
+		toon: finalToon,
+		metadata: finalMetadata,
+		quality_report,
+		validation_passed,
 	};
 }
