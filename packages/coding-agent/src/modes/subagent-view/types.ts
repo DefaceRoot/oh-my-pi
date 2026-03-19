@@ -30,6 +30,23 @@ export interface SubagentViewRef {
 	mcpServers?: string[];
 	mcpAllowlist?: string[];
 	outcome?: SubagentOutcome;
+
+	/** Delegation metadata — populated from JSON sidecar when available */
+	taskTitle?: string;
+	taskId?: string;
+	taskIntent?: string;
+	planPath?: string;
+	branch?: string;
+	repoRoot?: string;
+	worktreePath?: string;
+	delegatorRole?: string;
+	delegateRole?: string;
+	inputProfile?: string;
+	envelopeId?: string;
+	parentEnvelopeId?: string;
+	retryAttempt?: number;
+	qualityWarnings?: string[];
+	qualityErrors?: string[];
 }
 
 export interface SubagentViewGroup {
