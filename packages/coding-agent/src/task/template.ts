@@ -29,10 +29,17 @@ export function renderTemplate(
 ): RenderResult {
 	let { id, description, assignment } = task;
 	assignment = assignment.trim();
+	const directContext = context?.trim();
+	if (directContext?.startsWith("delegation:")) {
+		return { task: directContext, id, description };
+	}
+	const delegationContext = options.delegationContext?.trim();
+	if (delegationContext?.startsWith("delegation:")) {
+		return { task: delegationContext, id, description };
+	}
 	const background = buildBackground(context, options.delegationContext);
-
 	if (!background || !assignment) {
-		return { task: assignment || background!, id, description };
+		return { task: assignment || background || "", id, description };
 	}
 	return {
 		task: renderPromptTemplate(subagentUserPromptTemplate, { context: background, assignment }),

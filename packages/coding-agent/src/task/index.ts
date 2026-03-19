@@ -12,6 +12,7 @@
  *   - Progress tracking via JSON events
  *   - Session artifacts for debugging
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
@@ -31,6 +32,7 @@ import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
+import { collectDelegationContext } from "./delegation-context";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
@@ -40,11 +42,13 @@ import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
 import { renderTemplate } from "./template";
+import { buildToonDelegation, type DelegationTask } from "./toon-delegation-builder";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
+	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
 	type TaskSubagentStopRequest,
@@ -221,6 +225,71 @@ function renderDescription(
 	});
 }
 
+function buildDelegationTask(task: TaskItem): DelegationTask {
+	return {
+		id: task.id,
+		title: task.description.trim(),
+		description: task.assignment.trim(),
+		constraints: [],
+		acceptance_criteria: [],
+	};
+}
+
+function buildFallbackDelegationToon(session: ToolSession, delegate: string, task: TaskItem): string {
+	const inherited = collectDelegationContext(session);
+	const delegator = normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole ?? "unknown";
+	const repoRoot = inherited.repoRoot ?? session.cwd;
+	const envelopeSeed = [repoRoot, delegate, task.id, task.description, task.assignment].join("\n");
+	const envelopeId = `del_${createHash("sha256").update(envelopeSeed).digest("hex").slice(0, 12)}`;
+
+	return [
+		"delegation:",
+		'  contract_version: "omp-delegation/v1"',
+		"  envelope:",
+		`    id: ${JSON.stringify(envelopeId)}`,
+		...(inherited.parentEnvelopeId ? [`    parent_envelope_id: ${JSON.stringify(inherited.parentEnvelopeId)}`] : []),
+		`    created_at: ${JSON.stringify(new Date().toISOString())}`,
+		"  context:",
+		`    repo_root: ${JSON.stringify(repoRoot)}`,
+		"  roles:",
+		`    delegator: ${JSON.stringify(delegator)}`,
+		`    delegate: ${JSON.stringify(delegate)}`,
+		"  task:",
+		`    id: ${JSON.stringify(task.id)}`,
+		`    title: ${JSON.stringify(task.description.trim())}`,
+		`    description: ${JSON.stringify(task.assignment.trim())}`,
+		"    constraints: []",
+		"    acceptance_criteria: []",
+	].join("\n");
+}
+
+async function renderTaskWithDelegationToon(
+	session: ToolSession,
+	delegate: string,
+	task: TaskItem,
+	context?: string,
+): Promise<ReturnType<typeof renderTemplate>> {
+	const trimmedContext = context?.trim();
+	if (trimmedContext?.startsWith("delegation:")) {
+		return renderTemplate(trimmedContext, task);
+	}
+
+	let delegationContext: string;
+	try {
+		delegationContext = (
+			await buildToonDelegation({
+				session,
+				delegate,
+				task: buildDelegationTask(task),
+			})
+		).toon;
+	} catch {
+		delegationContext = buildFallbackDelegationToon(session, delegate, task);
+	}
+
+	return renderTemplate(delegationContext, task);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -329,7 +398,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
-		const renderedTasks = taskItems.map(taskItem => renderTemplate(params.context, taskItem));
+		const renderedTasks = await Promise.all(
+			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem)),
+		);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
@@ -408,7 +479,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				continue;
 			}
 
-			const singleParams: TaskParams = { ...params, tasks: [taskItem] };
+			const singleParams: TaskParams = { ...params, context: renderedTasks[i].task, tasks: [taskItem] };
 			const label = uniqueId;
 			try {
 				const jobId = manager.register(
@@ -982,7 +1053,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				await Bun.write(contextFilePath, compactContext);
 			}
 
-			// Build full prompts with context prepended
+			// Build full prompts from delegation TOON
 			// Allocate unique IDs across the session to prevent artifact collisions
 			let uniqueIds: string[];
 			if (preAllocatedIds && preAllocatedIds.length === tasks.length) {
@@ -994,8 +1065,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
-			// Build full prompts with context prepended
-			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(context, t));
+			// Build full prompts from delegation TOON
+			const tasksWithContext = await Promise.all(
+				tasksWithUniqueIds.map(taskItem =>
+					renderTaskWithDelegationToon(this.session, agentName, taskItem, context),
+				),
+			);
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles;
 			const promptTemplates = this.session.promptTemplates;
