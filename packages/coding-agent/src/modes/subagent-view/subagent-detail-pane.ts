@@ -23,7 +23,8 @@ const ASSIGNMENT_MAX_LINES = 8;
  *  3. Token gauge — ASCII progress bar + raw numbers
  *  4. Timing — elapsed duration, age, started time
  *  5. Session context — session ID, parent agent, depth
- *  6. Assignment preview — first 5-8 lines, separated by border
+ *  6. Delegation — task metadata from sidecar (when populated)
+ *  7. Assignment preview — first 5-8 lines, separated by border
  */
 export class SubagentDetailPane extends Container {
 	#ref: SubagentViewRef | undefined;
@@ -76,6 +77,7 @@ export class SubagentDetailPane extends Container {
 		this.#addTokenGaugeSection(ref);
 		this.#addTimingSection(ref);
 		this.#addSessionContextSection(ref);
+		this.#addDelegationSection(ref);
 		this.#addAssignmentSection(ref);
 	}
 
@@ -155,6 +157,130 @@ export class SubagentDetailPane extends Container {
 			this.addChild(new Text(`  ${theme.fg("text", "Depth:")} ${theme.fg("dim", String(ref.depth))}`, 1, 0));
 		}
 		this.addChild(new Text("", 1, 0));
+	}
+
+	#hasDelegationFields(ref: SubagentViewRef): boolean {
+		return !!(
+			ref.taskTitle ||
+			ref.taskId ||
+			ref.taskIntent ||
+			ref.delegatorRole ||
+			ref.delegateRole ||
+			ref.inputProfile ||
+			ref.planPath ||
+			ref.repoRoot ||
+			ref.branch ||
+			ref.worktreePath ||
+			ref.envelopeId ||
+			ref.parentEnvelopeId ||
+			ref.retryAttempt !== undefined ||
+			(ref.qualityWarnings?.length ?? 0) > 0 ||
+			(ref.qualityErrors?.length ?? 0) > 0
+		);
+	}
+
+	#addDelegationSection(ref: SubagentViewRef): void {
+		if (!this.#hasDelegationFields(ref)) return;
+
+		const border = theme.fg("border", `\u2500\u2500 Delegation ${theme.boxSharp.horizontal.repeat(20)}`);
+		this.addChild(new Text(border, 1, 0));
+
+		// Task title (primary heading)
+		if (ref.taskTitle) {
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Task:")} ${theme.bold(theme.fg("accent", ref.taskTitle))}`, 1, 0),
+			);
+		}
+		// Task ID (subordinate, 4-space indent)
+		if (ref.taskId) {
+			this.addChild(new Text(`    ${theme.fg("text", "ID:")} ${theme.fg("dim", ref.taskId)}`, 1, 0));
+		}
+		// Intent (italic when present)
+		if (ref.taskIntent) {
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Intent:")} ${theme.italic(theme.fg("dim", ref.taskIntent))}`, 1, 0),
+			);
+		}
+		// Delegation roles: From -> To (only when both roles are present)
+		if (ref.delegatorRole && ref.delegateRole) {
+			this.addChild(
+				new Text(
+					`  ${theme.fg("text", "From")} ${theme.fg("dim", "->")} ${theme.fg("text", "To:")} ${theme.fg("text", ref.delegatorRole)} ${theme.fg("dim", "->")} ${theme.fg("text", ref.delegateRole)}`,
+					1,
+					0,
+				),
+			);
+		} else if (ref.delegatorRole) {
+			this.addChild(new Text(`  ${theme.fg("text", "From:")} ${theme.fg("text", ref.delegatorRole)}`, 1, 0));
+		} else if (ref.delegateRole) {
+			this.addChild(new Text(`  ${theme.fg("text", "To:")} ${theme.fg("text", ref.delegateRole)}`, 1, 0));
+		}
+		// Input profile
+		if (ref.inputProfile) {
+			this.addChild(new Text(`  ${theme.fg("text", "Profile:")} ${theme.fg("dim", ref.inputProfile)}`, 1, 0));
+		}
+		// Plan path
+		if (ref.planPath) {
+			this.addChild(new Text(`  ${theme.fg("text", "Plan:")} ${theme.fg("accent", ref.planPath)}`, 1, 0));
+		} else {
+			this.addChild(new Text(`  ${theme.fg("text", "Plan:")} ${theme.fg("dim", "No plan")}`, 1, 0));
+		}
+		// Repo root
+		if (ref.repoRoot) {
+			this.addChild(new Text(`  ${theme.fg("text", "Repo:")} ${theme.fg("text", ref.repoRoot)}`, 1, 0));
+		}
+		// Branch
+		if (ref.branch) {
+			this.addChild(new Text(`  ${theme.fg("text", "Branch:")} ${theme.fg("text", ref.branch)}`, 1, 0));
+		}
+		// Worktree (omit row entirely when undefined)
+		if (ref.worktreePath) {
+			this.addChild(new Text(`  ${theme.fg("text", "Worktree:")} ${theme.fg("text", ref.worktreePath)}`, 1, 0));
+		}
+		// Envelope ID
+		if (ref.envelopeId) {
+			this.addChild(new Text(`  ${theme.fg("text", "Envelope:")} ${theme.fg("dim", ref.envelopeId)}`, 1, 0));
+		}
+		// Parent envelope ID (omit row entirely when undefined)
+		if (ref.parentEnvelopeId) {
+			this.addChild(new Text(`  ${theme.fg("text", "Parent:")} ${theme.fg("dim", ref.parentEnvelopeId)}`, 1, 0));
+		}
+		// Retry attempt (omit row entirely when undefined)
+		if (ref.retryAttempt !== undefined) {
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Retry:")} ${theme.fg("warning", `Attempt ${ref.retryAttempt}`)}`, 1, 0),
+			);
+		}
+		// Quality indicator
+		this.#addQualityIndicator(ref);
+
+		this.addChild(new Text("", 1, 0));
+	}
+
+	#addQualityIndicator(ref: SubagentViewRef): void {
+		const errorCount = ref.qualityErrors?.length ?? 0;
+		const warningCount = ref.qualityWarnings?.length ?? 0;
+
+		if (errorCount === 0 && warningCount === 0) {
+			// Only show clean indicator when delegation fields are populated
+			if (this.#hasDelegationFields(ref)) {
+				this.addChild(new Text(`  ${theme.fg("text", "Quality:")} ${theme.fg("success", "\u25CF clean")}`, 1, 0));
+			}
+			return;
+		}
+
+		if (errorCount > 0) {
+			const errorText = `${errorCount} error${errorCount !== 1 ? "s" : ""}`;
+			const warnText = warningCount > 0 ? `, ${warningCount} warning${warningCount !== 1 ? "s" : ""}` : "";
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Quality:")} ${theme.fg("error", `\u2717 ${errorText}${warnText}`)}`, 1, 0),
+			);
+		} else {
+			const warnText = `${warningCount} warning${warningCount !== 1 ? "s" : ""}`;
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Quality:")} ${theme.fg("warning", `\u25B2 ${warnText}`)}`, 1, 0),
+			);
+		}
 	}
 
 	#addAssignmentSection(ref: SubagentViewRef): void {

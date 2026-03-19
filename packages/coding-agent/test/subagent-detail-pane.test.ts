@@ -265,6 +265,195 @@ describe("SubagentDetailPane", () => {
 		});
 	});
 
+	describe("delegation section", () => {
+		const DELEGATION_FIELDS: Partial<SubagentViewRef> = {
+			taskTitle: "Build TOON delegation builder",
+			taskId: "task-2",
+			taskIntent: "Implement the core builder module",
+			delegatorRole: "orchestrator",
+			delegateRole: "implement",
+			inputProfile: "detailed",
+			planPath: "/repo/.omp/sessions/plans/toon/plan.md",
+			repoRoot: "/repo/oh-my-pi",
+			branch: "feature/toon-delegation",
+			worktreePath: "/repo/.worktrees/feature-toon",
+			envelopeId: "del_f1a2b3c4d5e6",
+			parentEnvelopeId: "del_4a9b2c1e8f3d",
+		};
+
+		test("renders full delegation section with all fields populated", () => {
+			const pane = new SubagentDetailPane(makeFullRef(DELEGATION_FIELDS));
+			const text = renderText(pane);
+
+			expect(text).toContain("Delegation");
+			expect(text).toContain("Task:");
+			expect(text).toContain("Build TOON delegation builder");
+			expect(text).toContain("ID:");
+			expect(text).toContain("task-2");
+			expect(text).toContain("Intent:");
+			expect(text).toContain("Implement the core builder module");
+			expect(text).toContain("orchestrator");
+			expect(text).toContain("implement");
+			expect(text).toContain("Profile:");
+			expect(text).toContain("detailed");
+			expect(text).toContain("Plan:");
+			expect(text).toContain("/repo/.omp/sessions/plans/toon/plan.md");
+			expect(text).toContain("Repo:");
+			expect(text).toContain("/repo/oh-my-pi");
+			expect(text).toContain("Branch:");
+			expect(text).toContain("feature/toon-delegation");
+			expect(text).toContain("Worktree:");
+			expect(text).toContain("/repo/.worktrees/feature-toon");
+			expect(text).toContain("Envelope:");
+			expect(text).toContain("del_f1a2b3c4d5e6");
+			expect(text).toContain("del_4a9b2c1e8f3d");
+		});
+
+		test("omits delegation section entirely when no delegation fields are set", () => {
+			const pane = new SubagentDetailPane(makeFullRef());
+			const text = renderText(pane);
+			expect(text).not.toContain("Delegation");
+			expect(text).not.toContain("Task:");
+			expect(text).not.toContain("Quality:");
+		});
+
+		test("renders partial delegation (only taskTitle + taskId)", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "My Task", taskId: "t-1" }));
+			const text = renderText(pane);
+			expect(text).toContain("Delegation");
+			expect(text).toContain("Task:");
+			expect(text).toContain("My Task");
+			expect(text).toContain("ID:");
+			expect(text).toContain("t-1");
+			// Plan should show "No plan" when task fields exist but planPath is missing
+			expect(text).toContain("No plan");
+			// Should not render empty rows for missing fields
+			expect(text).not.toContain("Branch:");
+			expect(text).not.toContain("Repo:");
+			expect(text).not.toContain("Worktree:");
+			expect(text).not.toContain("Envelope:");
+		});
+
+		test("shows 'No plan' when delegation fields present but planPath missing", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "Build X", planPath: undefined }));
+			const text = renderText(pane);
+			expect(text).toContain("Plan:");
+			expect(text).toContain("No plan");
+		});
+
+		test("shows 'No plan' for non-task delegation fields when planPath missing", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ branch: "main" }));
+			const text = renderText(pane);
+			expect(text).toContain("Delegation");
+			expect(text).toContain("Branch:");
+			expect(text).toContain("Plan:");
+			expect(text).toContain("No plan");
+		});
+
+		test("renders retry attempt with warning color label", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "X", retryAttempt: 2 }));
+			const text = renderText(pane);
+			expect(text).toContain("Retry:");
+			expect(text).toContain("Attempt 2");
+		});
+
+		test("omits retry row when retryAttempt is undefined", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "X", retryAttempt: undefined }));
+			const text = renderText(pane);
+			expect(text).not.toContain("Retry:");
+		});
+
+		test("renders quality clean indicator when no warnings or errors", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "X" }));
+			const text = renderText(pane);
+			expect(text).toContain("Quality:");
+			expect(text).toContain("clean");
+		});
+
+		test("renders quality warnings indicator", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({ taskTitle: "X", qualityWarnings: ["lint issue", "type warning"] }),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Quality:");
+			expect(text).toContain("2 warnings");
+		});
+
+		test("renders quality errors indicator with combined counts", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({
+					taskTitle: "X",
+					qualityErrors: ["build failed"],
+					qualityWarnings: ["lint issue"],
+				}),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("Quality:");
+			expect(text).toContain("1 error");
+			expect(text).toContain("1 warning");
+		});
+
+		test("renders singular 'error' and 'warning' for count of 1", () => {
+			const pane = new SubagentDetailPane(
+				makeFullRef({ taskTitle: "X", qualityErrors: ["fail"], qualityWarnings: ["warn"] }),
+			);
+			const text = renderText(pane);
+			expect(text).toContain("1 error,");
+			expect(text).toContain("1 warning");
+			expect(text).not.toContain("errors");
+			expect(text).not.toContain("warnings");
+		});
+
+		test("renders delegation section before assignment section", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ ...DELEGATION_FIELDS, assignmentPreview: "Do the thing" }));
+			const text = renderText(pane);
+			const delegationIdx = text.indexOf("Delegation");
+			const assignmentIdx = text.indexOf("Assignment");
+			expect(delegationIdx).toBeGreaterThan(-1);
+			expect(assignmentIdx).toBeGreaterThan(-1);
+			expect(delegationIdx).toBeLessThan(assignmentIdx);
+		});
+
+		test("renders roles row with From -> To when both roles present", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ delegatorRole: "orchestrator", delegateRole: "implement" }));
+			const text = renderText(pane);
+			expect(text).toContain("From");
+			expect(text).toContain("To:");
+			expect(text).toContain("orchestrator");
+			expect(text).toContain("implement");
+		});
+
+		test("renders partial role as 'From:' label when only delegatorRole is present", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ delegatorRole: "orchestrator" }));
+			const text = renderText(pane);
+			expect(text).toContain("From:");
+			expect(text).toContain("orchestrator");
+			expect(text).not.toContain("unknown");
+		});
+
+		test("renders partial role as 'To:' label when only delegateRole is present", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ delegateRole: "implement" }));
+			const text = renderText(pane);
+			expect(text).toContain("To:");
+			expect(text).toContain("implement");
+			expect(text).not.toContain("unknown");
+		});
+
+		test("omits worktree row when worktreePath is undefined", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "X", worktreePath: undefined }));
+			const text = renderText(pane);
+			expect(text).not.toContain("Worktree:");
+		});
+
+		test("omits parentEnvelopeId row when undefined", () => {
+			const pane = new SubagentDetailPane(makeFullRef({ taskTitle: "X", parentEnvelopeId: undefined }));
+			const text = renderText(pane);
+			// 'Parent:' may still appear from session section's parentAgentName
+			// but no envelope parent row content
+			expect(text).not.toContain("del_");
+		});
+	});
+
 	describe("assignment preview section", () => {
 		test("renders assignment with separator border", () => {
 			const pane = new SubagentDetailPane(makeFullRef());
