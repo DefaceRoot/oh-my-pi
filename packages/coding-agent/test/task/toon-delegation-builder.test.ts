@@ -78,6 +78,7 @@ type ToonDelegationBuilderModule = {
 				lessons_learned?: string[];
 			};
 			retryContext?: Record<string, unknown>;
+			outputContract?: Record<string, unknown>;
 		};
 	}) => ToonDelegationResult | Promise<ToonDelegationResult>;
 };
@@ -1086,6 +1087,340 @@ describe("ask and default delegation modes", () => {
 			});
 			// ask runtime role takes precedence over inherited plan_linked
 			expect(result.metadata.context.workflow_mode).toBe("ask");
+		});
+	});
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Coverage extensions: output_contract, debug profile, task fields,
+// linter gaps, and mixed inheritance precedence
+// ────────────────────────────────────────────────────────────────────
+
+describe("output contract serialization", () => {
+	it("includes output_contract in TOON and metadata when provided", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const contract = {
+				schema: { type: "object", properties: { verdict: { type: "string" } } },
+				required_fields: ["verdict", "reason"],
+			};
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+				options: { outputContract: contract },
+			});
+			expect(result.metadata.output_contract).toMatchObject(contract);
+			expect(result.toon).toContain("output_contract:");
+			expect(result.toon).toContain('type: "object"');
+		});
+	});
+
+	it("omits output_contract when not provided", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.output_contract).toBeUndefined();
+			expect(result.toon).not.toContain("output_contract:");
+		});
+	});
+});
+
+describe("debug delegate profile default", () => {
+	it("defaults to detailed profile for debug delegate", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd),
+				delegate: "debug",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.input_policy.mode).toBe("detailed");
+		});
+	});
+});
+
+describe("task summary and blockers propagation", () => {
+	it("includes summary and blockers in TOON when provided", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd),
+				delegate: "implement",
+				task: createSemanticTask({
+					summary: "Compact summary of the task.",
+					blockers: ["Waiting on upstream schema", "API rate limit"],
+				}),
+			});
+			expect(result.metadata.task.summary).toBe("Compact summary of the task.");
+			expect(result.metadata.task.blockers).toEqual(["Waiting on upstream schema", "API rate limit"]);
+			expect(result.toon).toContain('summary: "Compact summary of the task."');
+			expect(result.toon).toContain("blockers");
+		});
+	});
+
+	it("omits summary and blockers when not provided", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd),
+				delegate: "lint",
+				task: createSemanticTask(),
+			});
+			expect(result.metadata.task.summary).toBeUndefined();
+			expect(result.metadata.task.blockers).toBeUndefined();
+			expect(result.toon).not.toContain("summary:");
+			expect(result.toon).not.toContain("blockers");
+		});
+	});
+
+	it("normalizes whitespace in summary and blockers", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd),
+				delegate: "implement",
+				task: createSemanticTask({
+					summary: "  Padded summary  ",
+					blockers: ["  Leading spaces  ", "\tTabbed blocker\t"],
+				}),
+			});
+			expect(result.metadata.task.summary).toBe("Padded summary");
+			expect(result.metadata.task.blockers).toEqual(["Leading spaces", "Tabbed blocker"]);
+		});
+	});
+});
+
+describe("delegation quality linter - extended coverage", () => {
+	it("warns when plan_path exists but plan_excerpt extraction failed for detailed profile", async () => {
+		await withTempDir(async cwd => {
+			// Create a bare plan that has no 'Plan Excerpt' section
+			const { barePlanPath } = await createPlanFixtureSet(cwd);
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makePlanContext(cwd, barePlanPath),
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("plan_excerpt extraction failed"))).toBe(true);
+		});
+	});
+
+	it("warns when output_contract is missing for implement delegate in non-minimal mode", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				delegate: "implement",
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("output_contract missing for implement delegate"))).toBe(true);
+		});
+	});
+
+	it("does not warn about output_contract for non-implement delegates", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				delegate: "explore",
+				profile: "standard",
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("output_contract missing"))).toBe(false);
+		});
+	});
+
+	it("does not warn about output_contract for implement in minimal mode", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeImplementationContext(cwd),
+				delegate: "implement",
+				profile: "minimal",
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("output_contract missing"))).toBe(false);
+		});
+	});
+
+	it("suppresses output_contract warning when contract is provided", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+				options: { outputContract: { schema: {} } },
+			});
+			const warnings = result.quality_report?.warnings ?? [];
+			expect(warnings.some(w => w.includes("output_contract missing"))).toBe(false);
+		});
+	});
+
+	it("skips file existence check for local:// plan paths", async () => {
+		await withTempDir(async cwd => {
+			// local:// plan paths should not produce a file-not-found error
+			const result = await buildDelegation({
+				cwd,
+				compactContext: makeDelegationContext({
+					repository_cwd: cwd,
+					workflow_mode: "plan_linked",
+					repo_root: cwd,
+					plan_file_path: "local://my-plan/plan.md",
+				}),
+			});
+			const errors = result.quality_report?.errors ?? [];
+			expect(errors.some(e => e.includes("file does not exist"))).toBe(false);
+		});
+	});
+});
+
+describe("mixed TOON and legacy inheritance precedence", () => {
+	it("TOON fields override legacy XML for overlapping context fields", async () => {
+		await withTempDir(async cwd => {
+			// Build a compact context with both legacy XML and TOON block
+			const legacyBlock = makeDelegationContext({
+				repository_cwd: "/legacy/workspace",
+				workflow_mode: "legacy_mode",
+				repo_root: "/legacy/repo",
+			});
+			const toonBlock = makeParentToon("del_toon_parent_999", "/toon/repo", "plan_linked");
+			const combined = `${legacyBlock}\n\n## Assistant\n\nProcessing.\n\n## User\n\n${toonBlock}`;
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => combined,
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			// TOON overrides legacy for context fields present in both parsers
+			expect(result.metadata.context.workflow_mode).toBe("plan_linked");
+			expect(result.metadata.context.repo_root).toBe("/toon/repo");
+			// The parent TOON envelope.id becomes the fallback parent_envelope_id
+			expect(result.metadata.envelope.parent_envelope_id).toBe("del_toon_parent_999");
+		});
+	});
+
+	it("falls back to legacy XML when TOON block is absent", async () => {
+		await withTempDir(async cwd => {
+			const legacyContext = makeDelegationContext({
+				repository_cwd: "/legacy/workspace",
+				repo_root: "/legacy/repo",
+				workflow_mode: "plan_linked",
+				parent_envelope_id: "del_legacy_only",
+			});
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => legacyContext,
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			expect(result.metadata.envelope.parent_envelope_id).toBe("del_legacy_only");
+			expect(result.metadata.context.workflow_mode).toBe("plan_linked");
+		});
+	});
+});
+
+describe("TOON parser edge cases", () => {
+	it("handles empty compact context gracefully", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => "" }),
+				delegate: "lint",
+				task: createSemanticTask(),
+			});
+			// Should produce a valid TOON without any inherited context
+			expect(result.validation_passed).toBe(true);
+			expect(result.metadata.envelope.parent_envelope_id).toBeUndefined();
+		});
+	});
+
+	it("handles compact context with no TOON or legacy block", async () => {
+		await withTempDir(async cwd => {
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => "## User\n\nHello world\n\n## Assistant\n\nI will help.",
+				}),
+				delegate: "lint",
+				task: createSemanticTask(),
+			});
+			expect(result.validation_passed).toBe(true);
+			expect(result.metadata.envelope.parent_envelope_id).toBeUndefined();
+		});
+	});
+
+	it("parses TOON block with plan_path and plan_workspace_dir", async () => {
+		await withTempDir(async cwd => {
+			const planPath = "/repo/.omp/sessions/plans/my-plan/plan.md";
+			const planWorkspaceDir = "/repo/.omp/sessions/plans/my-plan";
+			const parentToon = [
+				"delegation:",
+				'  contract_version: "omp-delegation/v1"',
+				"  envelope:",
+				'    id: "del_plan_context_abc"',
+				'    created_at: "2026-03-19T00:00:00.000Z"',
+				"  context:",
+				`    repo_root: ${JSON.stringify(cwd)}`,
+				`    plan_path: ${JSON.stringify(planPath)}`,
+				`    plan_workspace_dir: ${JSON.stringify(planWorkspaceDir)}`,
+				'    workflow_mode: "plan_linked"',
+				"  roles:",
+				'    delegator: "orchestrator"',
+				'    delegate: "implement"',
+				"  task:",
+				'    id: "test"',
+				'    title: "Test"',
+				'    description: "Test"',
+			].join("\n");
+			const result = await buildToonDelegation({
+				session: createSession(cwd, {
+					getCompactContext: () => parentToon,
+				}),
+				delegate: "explore",
+				task: createSemanticTask(),
+				options: { profile: "standard" },
+			});
+			// plan_path and plan_workspace_dir should be inherited from parent TOON
+			expect(result.metadata.context.plan_path).toBe(planPath);
+			expect(result.metadata.context.plan_workspace_dir).toBe(planWorkspaceDir);
+		});
+	});
+});
+
+describe("TOON rendering field ordering", () => {
+	it("renders root-level sections in canonical order", async () => {
+		await withTempDir(async cwd => {
+			const builderModule = await loadBuilderModule();
+			const result = await builderModule.buildToonDelegation({
+				session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+				delegate: "implement",
+				task: createSemanticTask(),
+				options: {
+					outputContract: { schema: {} },
+					retryContext: { attempt: 1 },
+				},
+			});
+			const toon = result.toon;
+			const sectionPositions = [
+				toon.indexOf("contract_version:"),
+				toon.indexOf("envelope:"),
+				toon.indexOf("input_policy:"),
+				toon.indexOf("context:"),
+				toon.indexOf("\n  roles:"),
+				toon.indexOf("\n  task:"),
+				toon.indexOf("retry_context:"),
+				toon.indexOf("output_contract:"),
+			];
+			// Every expected section must be present
+			for (const pos of sectionPositions) {
+				expect(pos).toBeGreaterThan(-1);
+			}
+			// Sections must appear in ascending order
+			for (let i = 1; i < sectionPositions.length; i++) {
+				expect(sectionPositions[i]!).toBeGreaterThan(sectionPositions[i - 1]!);
+			}
 		});
 	});
 });

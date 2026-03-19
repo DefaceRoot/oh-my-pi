@@ -306,12 +306,10 @@ describe("delegation sidecar writing", () => {
 	test("writes delegation-meta sidecar when getArtifactsDir is available", async () => {
 		await withTempDir(async cwd => {
 			const artifactsDir = path.join(cwd, "artifacts");
-			const tool = await TaskTool.create(
-				{
-					...createSession(cwd, { asyncEnabled: false }),
-					getArtifactsDir: () => artifactsDir,
-				} as any,
-			);
+			const tool = await TaskTool.create({
+				...createSession(cwd, { asyncEnabled: false }),
+				getArtifactsDir: () => artifactsDir,
+			} as any);
 
 			await tool.execute("sidecar-call", {
 				agent: "explore",
@@ -331,9 +329,7 @@ describe("delegation sidecar writing", () => {
 			const sidecarFiles = fs.readdirSync(artifactsDir).filter(f => f.endsWith("-delegation-meta.json"));
 			expect(sidecarFiles.length).toBeGreaterThanOrEqual(1);
 
-			const sidecarContent = JSON.parse(
-				fs.readFileSync(path.join(artifactsDir, sidecarFiles[0]!), "utf-8"),
-			);
+			const sidecarContent = JSON.parse(fs.readFileSync(path.join(artifactsDir, sidecarFiles[0]!), "utf-8"));
 			expect(sidecarContent.contract_version).toBe("omp-delegation/v1");
 			expect(sidecarContent.envelope?.id).toBeTruthy();
 			expect(sidecarContent.task?.title).toBeTruthy();
@@ -345,13 +341,11 @@ describe("delegation sidecar writing", () => {
 			// Return a path that cannot be written to (a file, not a dir)
 			const blockingFile = path.join(cwd, "blocked");
 			fs.writeFileSync(blockingFile, "x");
-			const tool = await TaskTool.create(
-				{
-					...createSession(cwd, { asyncEnabled: false }),
-					// Return path to a file instead of a dir so mkdir fails
-					getArtifactsDir: () => blockingFile,
-				} as any,
-			);
+			const tool = await TaskTool.create({
+				...createSession(cwd, { asyncEnabled: false }),
+				// Return path to a file instead of a dir so mkdir fails
+				getArtifactsDir: () => blockingFile,
+			} as any);
 
 			// Delegation should still succeed despite sidecar write failure
 			const result = await tool.execute("sidecar-fail-call", {
@@ -366,6 +360,71 @@ describe("delegation sidecar writing", () => {
 			});
 			expect(result).toBeDefined();
 			expect(result.content[0]?.type).toBe("text");
+		});
+	});
+});
+
+describe("pre-built delegation context passthrough", () => {
+	beforeEach(() => {
+		buildToonCalls.length = 0;
+		runSubprocessCalls.length = 0;
+		builderMode = "success";
+	});
+
+	test("skips builder when context already starts with delegation:", async () => {
+		await withTempDir(async cwd => {
+			const preBuiltToon = [
+				"delegation:",
+				'  contract_version: "omp-delegation/v1"',
+				"  envelope:",
+				'    id: "del_prebuilt_000"',
+				'    created_at: "2026-03-19T00:00:00.000Z"',
+				"  task:",
+				'    id: "prebuilt"',
+				'    title: "Already built"',
+				'    description: "Pre-built delegation payload"',
+			].join("\n");
+			const tool = await TaskTool.create(createSession(cwd, { asyncEnabled: false }));
+
+			await tool.execute("passthrough-call", {
+				agent: "explore",
+				context: preBuiltToon,
+				tasks: [
+					{
+						id: "PassthroughTask",
+						description: "Should skip builder",
+						assignment: "Target: skip builder.\nAcceptance: TOON passed through.",
+					},
+				],
+			});
+
+			// Builder should NOT be called when context is already TOON-shaped
+			expect(buildToonCalls).toHaveLength(0);
+			expect(runSubprocessCalls).toHaveLength(1);
+			// Subprocess should receive the pre-built TOON content
+			expect(runSubprocessCalls[0]?.task).toContain("delegation:");
+			expect(runSubprocessCalls[0]?.task).toContain('id: "del_prebuilt_000"');
+		});
+	});
+
+	test("uses builder when context does not start with delegation:", async () => {
+		await withTempDir(async cwd => {
+			const tool = await TaskTool.create(createSession(cwd, { asyncEnabled: false }));
+
+			await tool.execute("non-toon-call", {
+				agent: "explore",
+				context: "Plain text context that is not TOON.",
+				tasks: [
+					{
+						id: "NonToonTask",
+						description: "Should invoke builder",
+						assignment: "Target: use builder.\nAcceptance: builder called.",
+					},
+				],
+			});
+
+			// Builder should be called for non-TOON context
+			expect(buildToonCalls).toHaveLength(1);
 		});
 	});
 });

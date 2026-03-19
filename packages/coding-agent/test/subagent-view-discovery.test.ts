@@ -289,4 +289,87 @@ describe("SubagentIndex delegation sidecar wiring", () => {
 			envelopeId: "del_nested123",
 		});
 	});
+
+	test("sidecar with quality errors populates qualityErrors field", async () => {
+		const sidecarWithErrors = {
+			...SIDECAR_DATA,
+			envelope: { ...SIDECAR_DATA.envelope, id: "del_errors_test_1" },
+			quality_report: {
+				warnings: [],
+				errors: ["plan_path is not readable", "build failed"],
+			},
+		};
+		await seedWithSidecar(artifactsDir, "WorkflowWorker", sidecarWithErrors);
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		const ref = snapshot.refs.find(r => r.id === "0-WorkflowWorker");
+		expect(ref).toBeDefined();
+		expect(ref!.qualityErrors).toEqual(["plan_path is not readable", "build failed"]);
+		// #readStringArray returns undefined for empty arrays
+		expect(ref!.qualityWarnings).toBeUndefined();
+	});
+
+	test("sidecar without retry_context leaves retryAttempt undefined", async () => {
+		const { retry_context: _dropped, ...sidecarNoRetry } = SIDECAR_DATA;
+		const noRetrySidecar = {
+			...sidecarNoRetry,
+			envelope: { ...SIDECAR_DATA.envelope, id: "del_noretry_test" },
+		};
+		await seedWithSidecar(artifactsDir, "WorkflowWorker", noRetrySidecar);
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		const ref = snapshot.refs.find(r => r.id === "0-WorkflowWorker");
+		expect(ref).toBeDefined();
+		expect(ref!.retryAttempt).toBeUndefined();
+		// Other fields should still be populated
+		expect(ref!.taskId).toBe("WorkflowWorker");
+		expect(ref!.envelopeId).toBe("del_noretry_test");
+	});
+
+	test("sidecar without parent_envelope_id leaves parentEnvelopeId undefined", async () => {
+		const sidecarNoParent = {
+			...SIDECAR_DATA,
+			envelope: {
+				id: "del_noparent_test",
+				created_at: SIDECAR_DATA.envelope.created_at,
+			},
+		};
+		await seedWithSidecar(artifactsDir, "WorkflowWorker", sidecarNoParent);
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		const ref = snapshot.refs.find(r => r.id === "0-WorkflowWorker");
+		expect(ref).toBeDefined();
+		expect(ref!.parentEnvelopeId).toBeUndefined();
+		expect(ref!.envelopeId).toBe("del_noparent_test");
+		expect(ref!.taskId).toBe("WorkflowWorker");
+	});
+
+	test("sidecar with all optional fields missing still populates core fields", async () => {
+		const minimalSidecar = {
+			envelope: { id: "del_minimal_test" },
+			task: { id: "WorkflowWorker", title: "Minimal sidecar" },
+			roles: { delegator: "implement", delegate: "lint" },
+		};
+		await seedWithSidecar(artifactsDir, "WorkflowWorker", minimalSidecar);
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+
+		const ref = snapshot.refs.find(r => r.id === "0-WorkflowWorker");
+		expect(ref).toBeDefined();
+		expect(ref!.taskId).toBe("WorkflowWorker");
+		expect(ref!.taskTitle).toBe("Minimal sidecar");
+		expect(ref!.delegatorRole).toBe("implement");
+		expect(ref!.delegateRole).toBe("lint");
+		expect(ref!.envelopeId).toBe("del_minimal_test");
+		// Optional fields not in sidecar
+		expect(ref!.retryAttempt).toBeUndefined();
+		expect(ref!.qualityWarnings).toBeUndefined();
+		expect(ref!.qualityErrors).toBeUndefined();
+		expect(ref!.parentEnvelopeId).toBeUndefined();
+		expect(ref!.planPath).toBeUndefined();
+		expect(ref!.branch).toBeUndefined();
+	});
 });
