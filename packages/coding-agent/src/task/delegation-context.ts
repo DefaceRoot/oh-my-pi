@@ -1,12 +1,12 @@
 import path from "node:path";
 import type { ToolSession } from "..";
-import { resolveLocalUrlToPath } from "../internal-urls";
-import { getLatestPlanModeActivePlanFilePath } from "../plan-mode/active-plan-file";
 import { resolveToCwd } from "../tools/path-utils";
 
 const DELEGATION_CONTEXT_BLOCK_RE = /<delegation_context>\s*([\s\S]*?)<\/delegation_context>/gi;
 const IMPLEMENTATION_ENGINE_STATE_ENTRY_TYPE = "implementation-engine/state";
 const IMPLEMENTATION_ENGINE_PLAN_ENTRY_TYPE = "implementation-engine/plan-new-metadata";
+
+const PLAN_MODE_ACTIVE_PLAN_FILE_ENTRY_TYPE = "plan-mode/active-plan-file";
 
 type SessionEntryLike = {
 	type?: unknown;
@@ -22,6 +22,8 @@ interface DelegationMetadata {
 	repoRoot?: string;
 	branchName?: string;
 	baseBranch?: string;
+	parentEnvelopeId?: string;
+	envelopeId?: string;
 	planReference?: string;
 	planFilePath?: string;
 	planWorkspaceDir?: string;
@@ -101,6 +103,12 @@ function parseDelegationContext(text: string | undefined): Partial<DelegationMet
 			case "base_branch":
 				metadata.baseBranch = value;
 				break;
+			case "parent_envelope_id":
+				metadata.parentEnvelopeId = value;
+				break;
+			case "envelope_id":
+				metadata.envelopeId = value;
+				break;
 			case "plan_reference":
 				metadata.planReference = value;
 				break;
@@ -117,12 +125,7 @@ function parseDelegationContext(text: string | undefined): Partial<DelegationMet
 
 function resolveSessionPath(rawPath: string, session: ToolSession): string {
 	if (rawPath.startsWith("local://")) {
-		return path.normalize(
-			resolveLocalUrlToPath(rawPath, {
-				getArtifactsDir: () => session.getArtifactsDir?.() ?? null,
-				getSessionId: () => session.getSessionId?.() ?? null,
-			}),
-		);
+		return rawPath;
 	}
 	return path.normalize(resolveToCwd(rawPath, session.cwd));
 }
@@ -183,18 +186,21 @@ function determineWorkflowMode(args: {
 }
 
 function maybeGetActivePlanReference(
-	session: ToolSession,
+	_session: ToolSession,
 	entries: ReadonlyArray<Record<string, unknown>>,
 ): string | undefined {
-	if (entries.length === 0) return undefined;
-	return getLatestPlanModeActivePlanFilePath(entries, {
-		cwd: session.cwd,
-		getArtifactsDir: () => session.getArtifactsDir?.() ?? null,
-		getSessionId: () => session.getSessionId?.() ?? null,
-	});
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index];
+		if (entry?.type !== "custom" || entry.customType !== PLAN_MODE_ACTIVE_PLAN_FILE_ENTRY_TYPE) continue;
+		const data = asRecord(entry.data);
+		const planFilePath = normalizeString(data?.planFilePath);
+		if (planFilePath) return planFilePath;
+	}
+
+	return undefined;
 }
 
-export function buildDelegationContext(session: ToolSession): string | undefined {
+export function collectDelegationContext(session: ToolSession): DelegationMetadata {
 	const inherited = parseDelegationContext(session.getCompactContext?.());
 	const entries = session.getSessionEntries?.() ?? [];
 	const worktreeState = readPersistedWorktreeState(entries);
@@ -210,7 +216,7 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 	const planWorkspaceDir =
 		resolveOptionalSessionPath(worktreeState?.planWorkspaceDir, session) ??
 		(planFilePath ? path.dirname(planFilePath) : inherited.planWorkspaceDir);
-	const metadata: DelegationMetadata = {
+	return {
 		repositoryCwd: session.cwd,
 		parentRuntimeRole: normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole,
 		workflowMode: determineWorkflowMode({
@@ -223,11 +229,16 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 		repoRoot: resolveOptionalSessionPath(worktreeState?.repoRoot, session) ?? inherited.repoRoot,
 		branchName: worktreeState?.branchName ?? inherited.branchName,
 		baseBranch: worktreeState?.baseBranch ?? inherited.baseBranch,
+		parentEnvelopeId: inherited.parentEnvelopeId,
+		envelopeId: inherited.envelopeId,
 		planReference: planReference ?? inherited.planReference,
 		planFilePath,
 		planWorkspaceDir,
 	};
+}
 
+export function buildDelegationContext(session: ToolSession): string | undefined {
+	const metadata = collectDelegationContext(session);
 	const hasUsefulMetadata = Boolean(
 		metadata.parentRuntimeRole ||
 			metadata.workflowMode ||
