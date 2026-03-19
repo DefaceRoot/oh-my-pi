@@ -1000,6 +1000,17 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: { tab: "input", label: "Speech-to-text", description: "Enable speech-to-text input via microphone" },
 	},
+	"stt.inputDevice": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "input",
+			label: "STT input device",
+			description:
+				"Optional microphone override. On Linux use a PipeWire/Pulse source name, on macOS an AVFoundation audio device, and on Windows a DirectShow audio device name.",
+			submenu: true,
+		},
+	},
 	"stt.language": {
 		type: "string",
 		default: "en",

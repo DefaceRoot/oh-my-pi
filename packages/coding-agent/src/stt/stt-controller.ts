@@ -78,7 +78,9 @@ export class STTController {
 		this.#tempFile = path.join(os.tmpdir(), `omp-stt-${id}.wav`);
 
 		try {
-			this.#recordingHandle = await startRecording(this.#tempFile);
+			this.#recordingHandle = await startRecording(this.#tempFile, {
+				inputDevice: settings.get("stt.inputDevice") as string | undefined,
+			});
 			this.#setState("recording", options);
 			logger.debug("STT recording started", { tempFile: this.#tempFile });
 		} catch (err) {

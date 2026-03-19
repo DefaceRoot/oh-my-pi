@@ -8,12 +8,26 @@ export interface RecordingHandle {
 	stop(): Promise<void>;
 }
 
+export interface RecordingOptions {
+	inputDevice?: string;
+}
+
 const isWindows = process.platform === "win32";
+
+function normalizeInputDevice(inputDevice?: string): string | undefined {
+	const trimmed = inputDevice?.trim();
+	return trimmed ? trimmed : undefined;
+}
 
 /**
  * Returns available recording tools in priority order.
  */
-export function detectRecordingTools(): string[] {
+export function detectRecordingTools(options?: RecordingOptions): string[] {
+	const inputDevice = normalizeInputDevice(options?.inputDevice);
+	if (inputDevice) {
+		return Bun.which("ffmpeg") ? ["ffmpeg"] : [];
+	}
+
 	const tools: string[] = [];
 	if (Bun.which("sox")) tools.push("sox");
 	if (Bun.which("ffmpeg")) tools.push("ffmpeg");
@@ -58,10 +72,11 @@ async function startSoxRecording(outputPath: string): Promise<RecordingHandle> {
 	};
 }
 
-async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle> {
+async function startFFmpegRecording(outputPath: string, options?: RecordingOptions): Promise<RecordingHandle> {
+	const inputDevice = normalizeInputDevice(options?.inputDevice);
 	let args: string[];
 	if (isWindows) {
-		const device = await detectWindowsAudioDevice();
+		const device = inputDevice ?? (await detectWindowsAudioDevice());
 		args = [
 			"ffmpeg",
 			"-f",
@@ -83,7 +98,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			"-f",
 			"avfoundation",
 			"-i",
-			":0",
+			inputDevice ? `:${inputDevice}` : ":0",
 			"-ar",
 			"16000",
 			"-ac",
@@ -99,7 +114,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			"-f",
 			"pulse",
 			"-i",
-			"default",
+			inputDevice ?? "default",
 			"-ar",
 			"16000",
 			"-ac",
@@ -293,9 +308,16 @@ async function verifyProcessAlive(proc: ReturnType<typeof Bun.spawn>, tool: stri
 
 // ── Public API ─────────────────────────────────────────────────────
 
-export async function startRecording(outputPath: string): Promise<RecordingHandle> {
-	const tools = detectRecordingTools();
+export async function startRecording(outputPath: string, options?: RecordingOptions): Promise<RecordingHandle> {
+	const inputDevice = normalizeInputDevice(options?.inputDevice);
+	const tools = detectRecordingTools({ inputDevice });
 	if (tools.length === 0) {
+		if (inputDevice) {
+			throw new Error(
+				"No compatible audio recording tool found for stt.inputDevice. Install FFmpeg or clear stt.inputDevice to use the system default input.",
+			);
+		}
+
 		throw new Error(
 			isWindows
 				? "No audio recording tool found. Install FFmpeg or SoX and add to PATH."
@@ -305,13 +327,13 @@ export async function startRecording(outputPath: string): Promise<RecordingHandl
 
 	const errors: string[] = [];
 	for (const tool of tools) {
-		logger.debug("Trying audio recording", { tool, outputPath });
+		logger.debug("Trying audio recording", { tool, outputPath, inputDevice: inputDevice ?? "default" });
 		try {
 			switch (tool) {
 				case "sox":
 					return await startSoxRecording(outputPath);
 				case "ffmpeg":
-					return await startFFmpegRecording(outputPath);
+					return await startFFmpegRecording(outputPath, { inputDevice });
 				case "arecord":
 					return await startArecordRecording(outputPath);
 				case "powershell":
