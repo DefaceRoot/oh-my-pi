@@ -662,6 +662,46 @@ describe("InteractiveMode subagent token loading", () => {
 		expect(headerText).toContain("Source /tmp/22-VerifyPhase07.jsonl");
 	});
 
+	test("renderSubagentSession prefers transcript tokens over snapshot totals", async () => {
+		const setContent = vi.fn();
+		const statusLine = { setHookStatus: vi.fn() };
+		const mode = Object.create(InteractiveMode.prototype) as any;
+		mode.subagentCycleIndex = 0;
+		mode.subagentNestedCycleIndex = -1;
+		mode.subagentNestedArrowMode = false;
+		mode.subagentSessionViewer = { setContent };
+		mode.statusLine = statusLine;
+		mode.ui = { requestRender: vi.fn(), terminal: { rows: 40, columns: 120 } };
+		mode.keybindings = { getDisplayString: vi.fn(() => "Ctrl+X") };
+		mode.inputController = { cycleAgentMode: vi.fn(async () => undefined) };
+
+		const selected = makeRef("44-Live", {
+			tokens: 120_000,
+			status: "running",
+			description: "Live token view",
+		});
+		const groups = [makeGroup(selected.id, [selected])];
+
+		await mode.renderSubagentSession(
+			selected,
+			{
+				source: "/tmp/44-Live.jsonl",
+				content: "",
+				model: "gpt-5.4",
+				tokens: 17,
+				skillsUsed: [],
+			},
+			groups,
+		);
+
+		const payload = setContent.mock.calls[0]?.[0];
+		const statusText = plain(String(statusLine.setHookStatus.mock.calls.at(-1)?.[1] ?? ""));
+		expect(payload.metadata?.tokens).toBe(17);
+		expect(statusText).toContain("tokens:17");
+		expect(statusText).not.toContain("120,000");
+	});
+
+
 	test("renderSubagentSession falls back to transcript identity when the snapshot ref is missing agent metadata", async () => {
 		const setContent = vi.fn();
 		const statusLine = { setHookStatus: vi.fn() };

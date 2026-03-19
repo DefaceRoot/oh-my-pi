@@ -2374,7 +2374,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		const skillsUsed = transcript.skillsUsed ?? [];
 		const skillsLabel = skillsUsed.length > 0 ? this.clipPreview(skillsUsed.join(", "), 120) : "none";
-		const tokensValue = selected.tokens ?? transcript.tokens;
+		const tokensValue = transcript.tokens ?? selected.tokens;
 		const modelStatusLabel =
 			requestedModelLabel && actualModelLabel && requestedModelLabel !== actualModelLabel
 				? this.clipPreview(`${actualModelLabel} <- ${requestedModelLabel}`, 44)
@@ -2458,7 +2458,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				role: resolvedSelectedAgent,
 				provider: actualModelMeta.provider ?? selected.provider,
 				model: actualModelLabel ?? requestedModelLabel,
-				tokens: selected.tokens ?? transcript.tokens,
+				tokens: transcript.tokens ?? selected.tokens,
 				tokenCapacity: selected.tokenCapacity,
 				status: selected.status,
 				thinkingLevel: selected.thinkingLevel,

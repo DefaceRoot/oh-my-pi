@@ -91,6 +91,39 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs.every(ref => ref.status === "completed")).toBe(true);
 	});
 
+	test("bootstrap reconcile recovers agent and model metadata when session_init is not the first transcript entry", async () => {
+		const baseTime = new Date("2025-01-01T00:00:00.000Z");
+		const sessionPath = path.join(artifactsDir, "0-Root/0-Root.1-Reviewer.jsonl");
+		await mkdir(path.dirname(sessionPath), { recursive: true });
+		const oversizedPrompt = "x".repeat(20_000);
+		await writeFile(
+			sessionPath,
+			`${[
+				JSON.stringify({ type: "model_change", model: "openai-codex/gpt-5.2-codex", role: "code-reviewer" }),
+				JSON.stringify({ type: "thinking_level_change", thinkingLevel: "medium" }),
+				JSON.stringify({
+					type: "session_init",
+					agentName: "code-reviewer",
+					systemPrompt: oversizedPrompt,
+					task: "Review delegated patch",
+				}),
+			].join("\n")}\n`,
+			"utf8",
+		);
+		await utimes(sessionPath, baseTime, baseTime);
+
+		const index = new SubagentIndex({ artifactsDir });
+		const snapshot = await index.reconcile();
+		const ref = snapshot.refs.find(candidate => candidate.id === "0-Root.1-Reviewer");
+
+		expect(ref).toMatchObject({
+			id: "0-Root.1-Reviewer",
+			agent: "code-reviewer",
+			model: "openai-codex/gpt-5.2-codex",
+			status: "completed",
+		});
+	});
+
 	test("ingestTaskResults updates metadata synchronously without filesystem refresh", () => {
 		const index = new SubagentIndex({ artifactsDir });
 		const outputPath = path.join(artifactsDir, "2-Implement.md");
@@ -178,6 +211,7 @@ describe("SubagentIndex", () => {
 		index.ingestTaskResults([
 			buildTaskResult({
 				id: "4-CacheAware",
+				tokens: Number.NaN,
 				usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5 } as SingleResult["usage"],
 			}),
 		]);
@@ -186,7 +220,7 @@ describe("SubagentIndex", () => {
 		expect(snapshot.refs[0]).toMatchObject({ id: "4-CacheAware", tokens: 180 });
 	});
 
-	test("ingestTaskResults prefers provider total token fields when present", () => {
+	test("ingestTaskResults prefers explicit task tokens over usage totals", () => {
 		const index = new SubagentIndex({ artifactsDir });
 
 		index.ingestTaskResults([
@@ -204,7 +238,7 @@ describe("SubagentIndex", () => {
 		]);
 
 		const snapshot = index.getSnapshot();
-		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 42 });
+		expect(snapshot.refs[0]).toMatchObject({ id: "5-TotalTokens", tokens: 999 });
 	});
 
 	test("ingestTaskResults keeps provider totals when cache breakdown fields also exist", () => {
@@ -213,7 +247,7 @@ describe("SubagentIndex", () => {
 		index.ingestTaskResults([
 			buildTaskResult({
 				id: "5-TotalWithCache",
-				tokens: 999,
+				tokens: Number.NaN,
 				usage: {
 					cacheRead: 10,
 					cacheWrite: 5,
@@ -232,6 +266,7 @@ describe("SubagentIndex", () => {
 		index.ingestTaskResults([
 			buildTaskResult({
 				id: "5-AltUsageFields",
+				tokens: Number.NaN,
 				usage: {
 					inputTokens: 10,
 					outputTokens: 8,

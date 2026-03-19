@@ -22,7 +22,10 @@ type FilesystemRef = {
 	lastSeenOrder: number;
 	sourcePath: string;
 	agent?: string;
+	model?: string;
 };
+
+const TRANSCRIPT_BOOTSTRAP_BYTES = 16 * 1024;
 
 type ScanArtifactsResult = {
 	entries: Map<string, FilesystemRef>;
@@ -148,7 +151,7 @@ export class SubagentIndex {
 			}
 
 			this.#seenOrder += 1;
-			const agentName = await this.#readAgentNameFromTranscript(absolutePath);
+			const metadata = await this.#readBootstrapMetadataFromTranscript(absolutePath);
 			const candidate: FilesystemRef = {
 				id,
 				sessionPath: absolutePath,
@@ -156,32 +159,64 @@ export class SubagentIndex {
 				mtimeMs,
 				lastSeenOrder: this.#seenOrder,
 				sourcePath: absolutePath,
-				agent: agentName,
+				agent: metadata.agent,
+				model: metadata.model,
 			};
 			this.#upsertFilesystemRef(entries, candidate);
 		}
 	}
 
-	async #readAgentNameFromTranscript(filePath: string): Promise<string | undefined> {
+	async #readBootstrapMetadataFromTranscript(filePath: string): Promise<Pick<FilesystemRef, "agent" | "model">> {
 		let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
 		try {
 			fileHandle = await fs.open(filePath, "r");
-			const buffer = Buffer.alloc(512);
-			const { bytesRead } = await fileHandle.read(buffer, 0, 512, 0);
+			const buffer = Buffer.alloc(TRANSCRIPT_BOOTSTRAP_BYTES);
+			const { bytesRead } = await fileHandle.read(buffer, 0, TRANSCRIPT_BOOTSTRAP_BYTES, 0);
 			const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-			const newlineIndex = chunk.indexOf("\n");
-			const firstLine = newlineIndex >= 0 ? chunk.slice(0, newlineIndex) : chunk;
-			if (!firstLine.trim()) return undefined;
-			const parsed = JSON.parse(firstLine) as unknown;
-			if (!parsed || typeof parsed !== "object") return undefined;
-			const record = parsed as Record<string, unknown>;
-			if (record.type !== "session_init") return undefined;
-			const agentName = record.agentName;
-			return typeof agentName === "string" && agentName.trim().length > 0 ? agentName.trim() : undefined;
+			const lines = chunk.split("\n");
+			let agent: string | undefined;
+			let role: string | undefined;
+			let model: string | undefined;
+
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed) {
+					continue;
+				}
+				if (!agent && /"type"\s*:\s*"session_init"/.test(trimmed)) {
+					agent = this.#readSerializedStringField(trimmed, "agentName") ?? agent;
+				}
+				if ((!model || !role) && /"type"\s*:\s*"model_change"/.test(trimmed)) {
+					model = this.#readSerializedStringField(trimmed, "model") ?? model;
+					role = this.#readSerializedStringField(trimmed, "role") ?? role;
+				}
+				if (agent && model) {
+					break;
+				}
+			}
+
+			return {
+				agent: agent ?? role,
+				model,
+			};
 		} catch {
-			return undefined;
+			return {};
 		} finally {
 			await fileHandle?.close().catch(() => {});
+		}
+	}
+
+	#readSerializedStringField(line: string, fieldName: string): string | undefined {
+		const fieldPattern = new RegExp(`"${fieldName}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`);
+		const match = fieldPattern.exec(line);
+		if (!match) {
+			return undefined;
+		}
+		try {
+			const value = JSON.parse(`"${match[1]}"`) as unknown;
+			return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+		} catch {
+			return undefined;
 		}
 	}
 
@@ -256,7 +291,7 @@ export class SubagentIndex {
 		const usageTokens = getTotalUsageTokens(record.usage);
 		const explicitTokens = this.#readNumber(record.tokens);
 		if (explicitTokens !== undefined || usageTokens !== undefined) {
-			existing.tokens = usageTokens ?? explicitTokens;
+			existing.tokens = explicitTokens ?? usageTokens;
 		}
 
 		const task = this.#readString(record.task) ?? "";
@@ -321,6 +356,7 @@ export class SubagentIndex {
 			next.sessionPath ??= filesystemRef.sessionPath;
 			next.outputPath ??= filesystemRef.outputPath;
 			next.agent ??= filesystemRef.agent;
+			next.model ??= filesystemRef.model;
 			next.lastUpdatedMs = Math.max(next.lastUpdatedMs ?? 0, filesystemRef.mtimeMs);
 			next.lastSeenOrder = this.#mergeSeenOrder(next.lastSeenOrder, filesystemRef.lastSeenOrder);
 			// Note: Don't set status default here - let finalizeRef handle it

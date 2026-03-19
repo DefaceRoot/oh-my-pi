@@ -840,9 +840,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						accumulatedUsage.output +=
 							firstNumberField(usageRecord, ["output", "output_tokens", "outputTokens"]) ?? 0;
 						accumulatedUsage.cacheRead +=
-							firstNumberField(usageRecord, ["cacheRead", "cache_read", "cacheReadTokens"]) ?? 0;
+							firstNumberField(usageRecord, [
+								"cacheRead",
+								"cache_read",
+								"cacheReadTokens",
+								"cache_read_tokens",
+								"cacheReadInputTokens",
+								"cache_read_input_tokens",
+							]) ?? 0;
 						accumulatedUsage.cacheWrite +=
-							firstNumberField(usageRecord, ["cacheWrite", "cache_write", "cacheWriteTokens"]) ?? 0;
+							firstNumberField(usageRecord, [
+								"cacheWrite",
+								"cache_write",
+								"cacheWriteTokens",
+								"cache_write_tokens",
+								"cacheCreationInputTokens",
+								"cache_creation_input_tokens",
+								"cacheWriteInputTokens",
+								"cache_write_input_tokens",
+							]) ?? 0;
 						accumulatedUsage.totalTokens += messageUsageTokens;
 						if (costRecord) {
 							accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
@@ -851,8 +867,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							accumulatedUsage.cost.cacheWrite += getNumberField(costRecord, "cacheWrite") ?? 0;
 							accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
 						}
-						// Accumulate tokens for progress display
-						progress.tokens += messageUsageTokens;
+						// Keep live token displays pinned to latest assistant request usage.
+						progress.tokens = messageUsageTokens;
 					}
 				}
 				break;
