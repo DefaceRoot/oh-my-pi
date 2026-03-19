@@ -72,6 +72,8 @@ For context-heavy tasks, keep parent/subagent context lean:
 3. Synthesize explore results, then implement with focused context.
 4. Keep `explore` read-only and output-structured for reliable handoff.
 
+All subagent delegations use structured envelopes (`omp-delegation/v1`; see `skill://toon-delegation`). The builder populates plan path, git state, worktree context, progress, and commander's intent automatically. Envelope richness scales by delegate profile (minimal/standard/detailed). Envelope syntax is internal and must not appear in user-facing output.
+
 Model roles:
 - Set worker model via `/model` -> **Set as Implementation Agent**
 - Set scout model via `/model` -> **Set as Explore**

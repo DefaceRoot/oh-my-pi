@@ -5,6 +5,10 @@ alwaysApply: false
 
 # Implementation Worktree Lifecycle
 
+## Delegation Envelope Propagation
+
+Implementation sessions delegate via `omp-delegation/v1` structured envelopes (`skill://toon-delegation`). The envelope carries plan path, worktree path, git state, and parent delegation chain automatically. Multi-hop chains (orchestrator → implement → lint) inherit context through `envelope.parent_envelope_id`. Envelope syntax is internal and must not appear in user-facing output.
+
 ## Worktree Setup
 
 `/implement` prompts for base branch + new branch name and then creates/switches to an isolated worktree.

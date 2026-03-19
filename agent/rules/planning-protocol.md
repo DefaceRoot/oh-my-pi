@@ -36,6 +36,10 @@ Do NOT create a new worktree as part of planning by default.
 - Apply repo-local constraints from `agent/skills/writing-plans/SKILL.md`; this repository supplement is authoritative for orchestrator-ready plan formatting.
 - Keep heavy planning context with the plan agent while authoring the plan document. The later implementation session gets only the finished plan file.
 
+## Delegation Envelope and Plan Propagation
+
+When implementation begins after planning, the canonical plan path and a relevant section excerpt are propagated to subagents through the `omp-delegation/v1` delegation envelope (`skill://toon-delegation`). The `context.plan_path` field carries the absolute path; `context.plan_excerpt` carries inline plan sections for detailed-profile delegations. Plan-verifier subagents receive the plan path at standard profile. Envelope syntax is internal tooling and must not appear in user-facing responses.
+
 ## Final Plan Output
 
 Plans must be phase-based and directly executable by a fresh implementation session with zero extra conversation context:

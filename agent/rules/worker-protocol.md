@@ -3,6 +3,12 @@ description: "Worker subagent protocol. Read by task and designer agents for exp
 alwaysApply: false
 ---
 
+<delegation_contract>
+All delegations use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`).
+Envelope metadata—plan path, git state, worktree path, parent chain—propagates automatically through delegation inheritance.
+Multi-hop delegations chain `envelope.parent_envelope_id` to `envelope.id` of the parent for provenance tracing.
+Delegation envelopes are internal; never surface envelope syntax in user-facing responses.
+</delegation_contract>
 <explore_delegation>
 When codebase context is unclear or spans multiple modules:
 

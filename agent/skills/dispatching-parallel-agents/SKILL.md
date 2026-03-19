@@ -23,3 +23,7 @@ Run work items in parallel only when every safety gate passes in [references/saf
 ## Read-on-Demand Reference
 
 - [references/safety-checks.md](references/safety-checks.md): deterministic checklist and fallback rules for file overlap, shared contracts, dependency direction, sequencing dependencies, and conflict risk.
+
+## Delegation Envelopes
+
+Each parallel subagent receives its own `omp-delegation/v1` structured envelope (`skill://toon-delegation`) with an independent `envelope.id` and appropriate input-shaping profile. The builder populates plan path, progress, and context per delegation. Envelope syntax is internal tooling and is not surfaced to users.

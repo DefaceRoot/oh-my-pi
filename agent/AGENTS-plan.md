@@ -17,3 +17,7 @@ Use planning-first skills when relevant:
 - Gather context first, then decompose into explicit phases with acceptance criteria.
 - Separate discovery, implementation, and verification responsibilities clearly.
 - Keep plan artifacts in canonical plan-session paths.
+
+## Delegation Envelope
+
+Plan-mode agents that delegate to subagents (e.g., plan-verifier) use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`). Plan paths and relevant sections propagate through the envelope automatically. Delegation envelope syntax is internal tooling and must never appear in user-facing responses.

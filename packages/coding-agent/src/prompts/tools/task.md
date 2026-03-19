@@ -46,3 +46,22 @@ Before invoking:
 - Assignments are complete and not one-liners
 - `schema` is provided when structured output is required
 </checklist>
+
+<delegation>
+The system automatically constructs a structured delegation envelope (`omp-delegation/v1`) for each subagent, encoding shared context, task assignment, constraints, and acceptance criteria into a compact format.
+
+Envelope richness scales with the delegate type:
+- **minimal**: `lint`, `code-reviewer` — only core task fields and repo root.
+- **standard**: `explore`, `research`, `plan-verifier` — adds git metadata, completed-task progress.
+- **detailed**: `implement`, `debug`, `task` — adds plan excerpt, upstream tasks, lessons learned.
+
+The builder automatically:
+- Propagates plan paths and relevant plan sections when a plan exists.
+- Chains envelope IDs so delegation provenance is traceable across hops.
+- Runs a quality linter that warns on vague descriptions, missing constraints, or absent acceptance criteria.
+- Writes a JSON sidecar alongside the session for viewer metadata.
+
+Override the default profile via `options.profile` when a different richness level is warranted.
+Delegation envelope syntax is internal tooling and must not appear in user-facing responses.
+Refer to `skill://toon-delegation` for the full schema and field reference.
+</delegation>

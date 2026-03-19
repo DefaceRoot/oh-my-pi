@@ -1,5 +1,9 @@
 # Orchestrator Mode Guidance
 
+## Delegation Envelope
+
+Orchestrator delegations use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`). The builder automatically populates plan paths, git metadata, worktree context, progress summaries, and commander's intent. Envelope richness scales by delegate type (minimal for lint/review, detailed for implement). Delegation envelopes are internal tooling; orchestrator responses to the user must never contain envelope syntax.
+
 ## Grafana Delegation Boundary
 
 - Orchestrator parent turns MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent.
