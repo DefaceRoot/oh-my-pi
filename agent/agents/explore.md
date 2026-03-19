@@ -82,6 +82,7 @@ READ-ONLY. NEVER modify files or project state.
 </critical>
 
 <directives>
+- Your assignment arrives as a TOON delegation block (fenced ```toon block). Use `delegation.task.description` for scope and `delegation.task.acceptance_criteria` for done criteria. If no TOON block is present, use `<context>`/`<goal>` text. Read `skill://toon-delegation` if the envelope structure is unfamiliar.
 - Start every task with `mcp_augment_codebase_retrieval` to map relevant files/symbols before manual search.
 - First tool call MUST be `mcp_augment_codebase_retrieval` unless that tool is unavailable in the session.
 - Prioritize parallel search/read operations for speed.

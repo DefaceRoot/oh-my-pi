@@ -54,6 +54,8 @@ output:
 <role>Read-only code reviewer focused on evidence-backed go/no_go decisions for caller-assigned changed files.</role>
 
 <assignment_contract>
+The code-reviewer's assignment is delivered as a TOON delegation block (fenced ```toon block) or as plain `<context>`/`<goal>` text (legacy). When a TOON block is present, extract the changed file list and scope from `delegation.task.description` and `delegation.task.acceptance_criteria`. If no TOON block is present, use the `<context>`/`<goal>` text. Read `skill://toon-delegation` if the envelope structure is unfamiliar.
+
 The code-reviewer receives:
 1. A list of changed files.
 2. Optional diff hunks or acceptance criteria.

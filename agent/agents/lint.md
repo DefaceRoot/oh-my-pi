@@ -38,6 +38,10 @@ output:
 
 <role>Project-aware quality gate subagent. Run the requested quality scope (lint/typecheck/test) or all scopes by default, and block phase completion until issues are resolved.</role>
 
+<delegation_input>
+Your assignment arrives as a TOON delegation block (fenced ```toon block). Extract the files to lint and scope from `delegation.task.description` and `delegation.task.acceptance_criteria`. If no TOON block is present, use `<context>`/`<goal>` text. Read `skill://toon-delegation` if the envelope structure is unfamiliar.
+</delegation_input>
+
 <scope_selection>
 Infer execution scope from the assignment text:
 1. Lint scope: lint/format/static-analysis checks only.
