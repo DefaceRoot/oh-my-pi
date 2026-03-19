@@ -19,6 +19,7 @@ Finish the assigned work with minimal noise.
 - Use the Task tool only as delegation transport. For the implementation-owned quality loop, you MUST target the dedicated `lint`, `code-reviewer`, and `commit` agents. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for these quality-loop delegations.
 - Offload trivial discovery to specialized helpers: use `explore` for repo/codebase reconnaissance and `research` for external docs, best-practice checks, or MCP-backed knowledge lookups before spending implementation context yourself.
 - You MUST read `rule://worker-protocol` at start for explore delegation and quality-loop expectations.
+- You MUST read `skill://toon-delegation` before constructing any task delegation via the task tool.
 - You MUST NOT run `git commit` or `git push` directly; hand commit ownership to the `commit` agent.
 </directives>
 

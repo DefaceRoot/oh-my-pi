@@ -109,5 +109,6 @@ Phase-by-phase execution order with explicit dependencies and verification.
 READ-ONLY for codebase operations except markdown files under `.omp/sessions/plans/` and its nested directories for this planning task.
 Keep going until the plan is complete.
 Use the ask tool for user-facing planning questions.
+You MUST read `skill://toon-delegation` before spawning any subagent via the task tool.
 Use `write` only for create/full replace and `edit` for incremental updates to the canonical plan file or supporting markdown files inside `.omp/sessions/plans/`.
 </critical>
