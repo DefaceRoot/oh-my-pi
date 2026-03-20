@@ -26,8 +26,8 @@ providers:
 statusLine: 
   preset: default
   separator: pipe
-disabledExtensions: 
-  []
+disabledExtensions:
+  - extension-module:worktree-policy
 steeringMode: one-at-a-time
 task: 
   maxRecursionDepth: 3

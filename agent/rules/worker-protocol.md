@@ -28,12 +28,18 @@ When coordinating implementation workers:
 3. When scopes share contracts or files, run sequentially and pass explicit handoff context.
 4. Give every worker an explicit file allowlist and acceptance criteria before execution.
 </implementation_parallelism>
+<isolation_conflicts>
+When using `isolated: true` for parallel implementation delegations:
+1. Keep independence checks as the primary safety gate; isolation is defense-in-depth.
+2. If integration reports cherry-pick or patch conflicts, spawn a `merge` agent with conflicting branch names, concise summaries, and relevant plan context.
+3. Do not attempt ad-hoc manual conflict resolution in the parent worker turn; delegate to `merge` and continue from its outcome.
+</isolation_conflicts>
 <quality_loop>
 To complete assigned implementation work (planned or ad hoc), run this loop before reporting completion:
 0. **Quality gate skip mode:** If the orchestrator included `<skip_quality_gates />` in the task context, the assignment does not involve file or code changes. Skip the entire quality loop (steps 1-11) and call `submit_result` directly after completing the assigned work.
 1. Quality and commit gates are implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` for active implementation slices.
 2. Use the Task tool only as delegation transport. For this quality loop, always target the dedicated `lint`, `code-reviewer`, and `commit` agents; never substitute `implement` or `explore` for those checks.
-3. Never set `isolated: true` for these quality-loop delegations; they must reuse the current workspace.
+3. Never set `isolated: true` for these quality-loop delegations (`lint`, `code-reviewer`, `commit`); they must reuse the current workspace.
 4. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
 5. Otherwise spawn a `lint` agent to run lint, typecheck, and tests for the changed scope.
 6. Send changed files to `code-reviewer` for independent evidence-first review.

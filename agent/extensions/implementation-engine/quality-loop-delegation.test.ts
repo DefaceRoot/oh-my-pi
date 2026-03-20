@@ -4,7 +4,13 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const implementationEnginePath = path.join(repoRoot, "agent/extensions/implementation-engine/index.ts");
 const implementAgentPath = path.join(repoRoot, "agent/agents/implement.md");
+const mergeAgentPath = path.join(repoRoot, "agent/agents/merge.md");
 const workerProtocolPath = path.join(repoRoot, "agent/rules/worker-protocol.md");
+const orchestratorModePath = path.join(repoRoot, "agent/rules/orchestrator-mode.md");
+const dispatchSkillPath = path.join(repoRoot, "agent/skills/dispatching-parallel-agents/SKILL.md");
+const taskToolPromptPath = path.join(repoRoot, "packages/coding-agent/src/prompts/tools/task.md");
+const taskTypesPath = path.join(repoRoot, "packages/coding-agent/src/task/types.ts");
+const configPath = path.join(repoRoot, "agent/config.yml");
 
 const readFile = async (filePath: string): Promise<string> => Bun.file(filePath).text();
 
@@ -48,7 +54,6 @@ describe("implementation quality-loop delegation", () => {
 		expect(source).toMatch(/computeFilesDelta\([\s\S]*implementationWorkerBaselineSnapshot[\s\S]*postTaskSnapshot[\s\S]*recordImplementationWorkerGateOutcome\([\s\S]*getImplementationWorkerGateOptions\(workerOwnedFiles\)/);
 	});
 
-
 	test("implementation agent prompt requires dedicated lint, review, and commit agents", async () => {
 		const content = await readFile(implementAgentPath);
 
@@ -58,11 +63,43 @@ describe("implementation quality-loop delegation", () => {
 		expect(content).toMatch(/never set `isolated: true` for these quality-loop delegations/i);
 	});
 
-	test("worker protocol mirrors the dedicated quality-loop requirement", async () => {
+	test("worker protocol mirrors quality-loop and conflict escalation requirements", async () => {
 		const content = await readFile(workerProtocolPath);
 
 		expect(content).toContain("Use the Task tool only as delegation transport");
 		expect(content).toContain("dedicated `lint`, `code-reviewer`, and `commit` agents");
 		expect(content).toContain("Never set `isolated: true` for these quality-loop delegations");
+		expect(content).toContain("When using `isolated: true` for parallel implementation delegations");
+		expect(content).toContain("spawn a `merge` agent with conflicting branch names");
+	});
+
+	test("orchestrator and merge guidance document isolated conflict handling", async () => {
+		const orchestratorRule = await readFile(orchestratorModePath);
+		const mergeAgent = await readFile(mergeAgentPath);
+
+		expect(orchestratorRule).toContain("`merge` only for isolated-integration conflicts");
+		expect(orchestratorRule).toContain("If an isolated batch reports integration conflicts");
+		expect(orchestratorRule).toContain("## Isolated Dispatch Guidance");
+		expect(mergeAgent).toContain("spawns: explore");
+		expect(mergeAgent).toContain("### Isolation-conflict mode");
+		expect(mergeAgent).toContain("human_review_required=true");
+	});
+
+	test("task prompt, schema, and dispatch skill document isolated usage", async () => {
+		const taskPrompt = await readFile(taskToolPromptPath);
+		const taskTypes = await readFile(taskTypesPath);
+		const dispatchSkill = await readFile(dispatchSkillPath);
+
+		expect(taskPrompt).toContain("`isolated`: optional boolean");
+		expect(taskPrompt).toContain("<task_isolation>");
+		expect(taskPrompt).toContain("spawn a `merge` agent with conflicting branch names");
+		expect(taskTypes).toContain("Use for parallel implementation slices touching different subsystems as defense-in-depth");
+		expect(dispatchSkill).toContain("## Task Isolation");
+		expect(dispatchSkill).toContain("Never use isolation for quality-loop delegations (`lint`, `code-reviewer`, `commit`)");
+	});
+
+	test("agent config disables worktree-policy extension", async () => {
+		const config = await readFile(configPath);
+		expect(config).toMatch(/disabledExtensions:\s*[\r\n]+\s*- extension-module:worktree-policy/);
 	});
 });

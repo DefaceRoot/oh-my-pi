@@ -10,6 +10,7 @@ Subagents do not inherit your chat history. Put all required constraints, file p
   - `description`: short UI-only summary
   - `assignment`: complete, self-contained instructions for that task
 - `timeout`: optional, seconds. When set, waits up to this duration then returns current status. Tasks keep running in the background and can be polled with `await`. Use for long-running tasks where you need periodic control to assess progress or handle errors.
+- `isolated`: optional boolean. Available when `task.isolation.mode` is not `none`; runs each delegated work item in a separate isolated workspace and merges outputs back after completion.
 </parameters>
 
 <critical>
@@ -23,6 +24,18 @@ Subagents do not inherit your chat history. Put all required constraints, file p
 Run tasks in parallel only when outputs are independent.
 Use sequential ordering when one task defines contracts another depends on (types/interfaces, API exports, schema/migrations, core module changes).
 </parallelization>
+
+<task_isolation>
+Use `isolated: true` only for parallel implementation batches that already pass independence checks (non-overlapping files, contracts, and sequencing).
+Isolation is defense-in-depth, not a replacement for independence analysis.
+
+Do NOT use isolation for quality-loop delegations (`lint`, `code-reviewer`, `commit`) because they must inspect the live workspace state.
+Read-only delegations (`explore`, `research`, `plan-verifier`) do not need isolation.
+
+Conflict handling:
+- If isolated integration reports cherry-pick or patch conflicts, spawn a `merge` agent with conflicting branch names, concise summaries of each slice, and relevant plan context.
+- Respect `task.isolation.merge` for integration behavior (`patch` applies diffs; `branch` cherry-picks task branches).
+</task_isolation>
 
 <template>
 `context` should contain:
@@ -75,4 +88,3 @@ Delegate type examples:
 - `code-reviewer`: evidence-first structural review.
 - `commit`: git staging/commit/push handoff only.
 </delegation>
-

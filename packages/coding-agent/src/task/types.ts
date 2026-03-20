@@ -84,7 +84,8 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 			...properties,
 			isolated: Type.Optional(
 				Type.Boolean({
-					description: "Run in isolated environment; returns patches. Use when tasks edit overlapping files.",
+					description:
+						"Run in isolated environment; returns patches. Use for parallel implementation slices touching different subsystems as defense-in-depth against file conflicts.",
 				}),
 			),
 		});

@@ -20,6 +20,18 @@ Run work items in parallel only when every safety gate passes in [references/saf
 3. Dispatch in parallel only if all required checks pass.
 4. Otherwise dispatch sequentially, upstream contract owners first.
 
+## Task Isolation
+
+When `task.isolation.mode` is enabled and the independence checklist passes, you MAY set `isolated: true` for parallel implementation dispatch as defense-in-depth.
+
+Isolation does not replace independence checks. Validate file ownership, contract boundaries, and sequencing first.
+
+Do not use isolation for intentional overlap in the same files; run those slices sequentially.
+Never use isolation for quality-loop delegations (`lint`, `code-reviewer`, `commit`) because they must inspect the live workspace.
+Read-only delegations (`explore`, `research`) do not need isolation.
+
+Start with small parallel batches (3-5 agents). Increase only after repeated clean integrations.
+
 ## Read-on-Demand Reference
 
 - [references/safety-checks.md](references/safety-checks.md): deterministic checklist and fallback rules for file overlap, shared contracts, dependency direction, sequencing dependencies, and conflict risk.
