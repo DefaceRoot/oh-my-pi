@@ -159,6 +159,34 @@ subagents:
 		expect(await resolveArray(rolesConfig.getMcpForSubagent("lint"))).toEqual(["augment"]);
 	});
 
+	it("resolves role MCP allowlists from subagent entries when role config is absent", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  explore:
+    mcp:
+      - augment
+      - better-context
+  ask-explore:
+    mcp: []
+  _default:
+    mcp:
+      - augment
+`);
+
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		expect(await resolveArray(rolesConfig.getMcpForRole("explore"))).toEqual(["augment", "better-context"]);
+		expect(await resolveArray(rolesConfig.getMcpForRole("ask-explore"))).toEqual([]);
+		expect(await resolveArray(rolesConfig.getMcpForRole("unknown-role"))).toEqual(["augment"]);
+	});
+
 	it("resolves configured skill categories per role", async () => {
 		await writeRoles(`roles:
   default:

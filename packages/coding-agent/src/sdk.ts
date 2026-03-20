@@ -666,15 +666,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? logger.time("sessionManager", SessionManager.create, cwd);
 	const sessionId = sessionManager.getSessionId();
 	const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
-	const normalizeMainRole = (role: string | undefined): "default" | "orchestrator" | "plan" | "ask" => {
+	const normalizePromptRole = (role: string | undefined): "default" | "orchestrator" | "plan" | "ask" => {
 		if (role === "orchestrator" || role === "plan" || role === "ask") return role;
 		return "default";
 	};
+	const resolveRoleName = (role: string | undefined): string => {
+		const trimmedRole = role?.trim();
+		return trimmedRole && trimmedRole.length > 0 ? trimmedRole : "default";
+	};
 	const getRoleToolAllowlist = (role: string | undefined): string[] => {
-		return rolesConfig.getToolsForRole(normalizeMainRole(role));
+		return rolesConfig.getToolsForRole(resolveRoleName(role));
 	};
 	const getRoleMcpAllowlist = (role: string | undefined): string[] => {
-		return rolesConfig.getMcpForRole(normalizeMainRole(role));
+		return rolesConfig.getMcpForRole(resolveRoleName(role));
 	};
 	const getMcpServerNameForTool = (tool: AgentTool): string | undefined => {
 		const mcpTool = tool as AgentTool & { mcpServerName?: string };
@@ -697,19 +701,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return managedRuntimeAliases.get(toolName);
 	};
 
-	const startupRole = normalizeMainRole(sessionManager.getLastModelChangeRole());
+	const startupRole = resolveRoleName(sessionManager.getLastModelChangeRole());
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
 	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
 	// Use explicit mcpAllowlist from options if provided, otherwise fall back to role-based defaults
 	const sessionMcpDiscoveryAllowlist =
 		options.mcpAllowlist ??
-		((options.taskDepth ?? 0) > 0
-			? startupRoleMcpAllowlist
-			: Array.from(
-					new Set(
-						(["default", "orchestrator", "plan", "ask"] as const).flatMap(role => getRoleMcpAllowlist(role)),
-					),
-				));
+		((options.taskDepth ?? 0) > 0 ? startupRoleMcpAllowlist : rolesConfig.getKnownMcpServers());
 	const mcpServerNameByToolName = new Map<string, string>();
 
 	const modelApiKeyAvailability = new Map<string, boolean>();
@@ -1285,14 +1283,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const resolveToolNamesForRole = (role: string, availableToolNames: string[]): string[] => {
-		const normalizedRole = normalizeMainRole(role);
+		const allowlistRole = resolveRoleName(role);
 		const managedRoleFiltered = filterToolNamesByRoleAllowlist(
 			availableToolNames,
 			settings,
-			getRoleToolAllowlist(normalizedRole),
+			getRoleToolAllowlist(allowlistRole),
 		);
 		const managedRoleSet = new Set(managedRoleFiltered);
-		const allowedMcpServers = new Set(getRoleMcpAllowlist(normalizedRole));
+		const allowedMcpServers = new Set(getRoleMcpAllowlist(allowlistRole));
 		const filtered = availableToolNames.filter(name => {
 			const tool = toolRegistry.get(name);
 			if (!tool) return false;
@@ -1333,8 +1331,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
 		toolContextStore.setToolNames(toolNames);
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
-		const currentMode = normalizeMainRole(sessionManager.getLastModelChangeRole());
-		const promptMcpAllowlist = options.mcpAllowlist ?? getRoleMcpAllowlist(currentMode);
+		const currentRole = sessionManager.getLastModelChangeRole();
+		const currentMode = normalizePromptRole(currentRole);
+		const promptMcpAllowlist = options.mcpAllowlist ?? getRoleMcpAllowlist(currentRole);
 
 		// Build combined append prompt: memory instructions + MCP server instructions
 		const serverInstructions = mcpManager?.getServerInstructions(promptMcpAllowlist);

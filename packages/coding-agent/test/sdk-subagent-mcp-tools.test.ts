@@ -92,6 +92,65 @@ describe("createAgentSession MCP proxy tool exposure", () => {
 		expect(session.systemPrompt).toContain("mcp_grafana_list_datasources");
 	});
 
+	test("uses role-based MCP defaults for subagent runtime roles", async () => {
+		fs.writeFileSync(
+			path.join(tempDir, "roles.yml"),
+			`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+  explore:
+    tools:
+      - read
+    mcp:
+      - augment
+      - better-context
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`,
+			"utf8",
+		);
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendModelChange("anthropic/claude-sonnet-4-5", "default");
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager,
+			settings: Settings.isolated({ "async.enabled": true }),
+			hasUI: false,
+			enableMCP: false,
+			enableLsp: false,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			skipPythonPreflight: true,
+			taskDepth: 1,
+			toolNames: ["read"],
+			customTools: [
+				createCustomTool("mcp_augment_codebase_retrieval", "augment"),
+				createCustomTool("mcp_better_context_ask", "better-context"),
+				createCustomTool("mcp_grafana_list_datasources", "grafana"),
+			],
+			...({ role: "explore" } as any),
+		});
+
+		expect(session.getActiveToolNames().filter(name => name.startsWith("mcp_")).sort()).toEqual([
+			"mcp_augment_codebase_retrieval",
+			"mcp_better_context_ask",
+		]);
+		expect(session.systemPrompt).toContain("mcp_better_context_ask");
+		expect(session.systemPrompt).not.toContain("mcp_grafana_list_datasources");
+	});
+
 	test("keeps MCP proxy tools out of sessions with an explicit empty allowlist", async () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendModelChange("anthropic/claude-sonnet-4-5", "default");

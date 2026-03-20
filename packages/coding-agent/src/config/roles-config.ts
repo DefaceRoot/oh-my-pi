@@ -291,7 +291,17 @@ export class RolesConfig {
 	}
 
 	getMcpForRole(role: string): string[] {
-		return normalizeMcpServers(this.#getRole(role).mcp);
+		const config = this.#getConfig();
+		const namedRole = config.roles[role];
+		if (namedRole) {
+			return normalizeMcpServers(namedRole.mcp);
+		}
+		const namedSubagent = config.subagents[role];
+		if (namedSubagent) {
+			return namedSubagent.mcp.length === 0 ? [] : normalizeMcpServers(namedSubagent.mcp);
+		}
+		const defaultRole = config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		return normalizeMcpServers(defaultRole.mcp);
 	}
 
 	setMcpForRole(role: string, servers: string[]): void {

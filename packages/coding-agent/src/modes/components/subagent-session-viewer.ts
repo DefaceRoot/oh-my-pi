@@ -342,16 +342,18 @@ export class SubagentSessionViewerComponent implements Component {
 			lines.push(` ${stats.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}
 		const toolCount = meta.toolNames?.length ?? 0;
-		if (toolCount > 0 || (meta.mcpServers?.length ?? 0) > 0 || (meta.mcpAllowlist?.length ?? 0) > 0) {
+		const usedMcpServers = meta.mcpServers ?? [];
+		const configuredMcpAllowlist = meta.mcpAllowlist ?? [];
+		if (toolCount > 0 || usedMcpServers.length > 0 || configuredMcpAllowlist.length > 0) {
 			const detailParts: string[] = [];
 			if (toolCount > 0) {
 				detailParts.push(`${theme.fg("dim", "Tools")} ${theme.fg("text", String(toolCount))}`);
 			}
-			if (meta.mcpServers?.length) {
-				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(meta.mcpServers))}`);
+			if (usedMcpServers.length > 0) {
+				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(usedMcpServers))}`);
 			}
-			if (meta.mcpAllowlist?.length) {
-				detailParts.push(`${theme.fg("dim", "Allowlist")} ${theme.fg("text", formatList(meta.mcpAllowlist))}`);
+			if (configuredMcpAllowlist.length > 0) {
+				detailParts.push(`${theme.fg("dim", "Allowed MCP")} ${theme.fg("text", formatList(configuredMcpAllowlist))}`);
 			}
 			lines.push(` ${detailParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}

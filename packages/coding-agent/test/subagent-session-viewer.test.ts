@@ -210,6 +210,24 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("S stop");
 	});
 
+	test("renders used MCP servers separate from configured allowlist", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["session header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: {
+				agentName: "explore-agent",
+				status: "running",
+				mcpServers: ["augment", "better-context"],
+				mcpAllowlist: ["augment"],
+			} as any,
+		});
+		const text = renderText(viewer, 120);
+		expect(text).toContain("MCP augment, better-context");
+		expect(text).toContain("Allowed MCP augment");
+	});
+
 	test("renders cancelled status label consistently", () => {
 		const viewer = createViewer();
 		setViewerContent(viewer, {
