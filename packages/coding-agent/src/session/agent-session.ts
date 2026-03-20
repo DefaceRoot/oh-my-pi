@@ -138,6 +138,7 @@ import {
 } from "./messages";
 import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionManager } from "./session-manager";
 import { getLatestCompactionEntry } from "./session-manager";
+import { truncateHeadBytes } from "./streaming-output";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -5479,66 +5480,93 @@ Be thorough - include exact file paths, function names, error messages, and tech
 	}
 
 	/**
-	 * Format the conversation as compact context for subagents.
-	 * Includes only user messages and assistant text responses.
-	 * Excludes: system prompt, tool definitions, tool calls/results, thinking blocks.
+	 * Format targeted conversation context for subagents.
+	 * Includes only a short session progress line and recent user instructions.
+	 * Excludes assistant/tool/thinking transcript details.
 	 */
 	formatCompactContext(): string {
+		const MAX_RECENT_USER_MESSAGES = 5;
+		const MAX_CONTEXT_BYTES = 16 * 1024;
+		const MAX_MESSAGE_CHARS = 3000;
+
 		const lines: string[] = [];
 		lines.push("# Conversation Context");
 		lines.push("");
-		lines.push(
-			"This is a summary of the parent conversation. Read this if you need additional context about what was discussed or decided.",
-		);
+		lines.push("Targeted parent context for delegated work.");
 		lines.push("");
 
-		for (const msg of this.messages) {
-			if (msg.role === "user") {
-				lines.push("## User");
-				lines.push("");
-				if (typeof msg.content === "string") {
-					lines.push(msg.content);
-				} else {
-					for (const c of msg.content) {
-						if (c.type === "text") {
-							lines.push(c.text);
-						} else if (c.type === "image") {
-							lines.push("[Image attached]");
-						}
-					}
-				}
-				lines.push("");
-			} else if (msg.role === "assistant") {
+		const stats = this.getSessionStats();
+		const latestAssistantUpdate = (() => {
+			for (let i = this.messages.length - 1; i >= 0; i--) {
+				const msg = this.messages[i];
+				if (msg.role !== "assistant") continue;
 				const assistantMsg = msg as AssistantMessage;
-				// Only include text content, skip tool calls and thinking
-				const textParts: string[] = [];
-				for (const c of assistantMsg.content) {
-					if (c.type === "text" && c.text.trim()) {
-						textParts.push(c.text);
-					}
+				const text = assistantMsg.content
+					.filter((c): c is TextContent => c.type === "text" && typeof c.text === "string")
+					.map(c => c.text.trim())
+					.filter(Boolean)
+					.join(" ");
+				if (!text) continue;
+				const normalized = text.replace(/\s+/g, " ").trim();
+				return normalized.length > 220 ? `${normalized.slice(0, 220)}…` : normalized;
+			}
+			return undefined;
+		})();
+
+		const progressLine = [
+			`Session progress: ${stats.userMessages} user message${stats.userMessages === 1 ? "" : "s"}, ${stats.assistantMessages} assistant response${stats.assistantMessages === 1 ? "" : "s"}, ${stats.toolCalls} tool call${stats.toolCalls === 1 ? "" : "s"} completed.`,
+			latestAssistantUpdate ? `Latest assistant update: ${latestAssistantUpdate}` : undefined,
+		]
+			.filter(Boolean)
+			.join(" ");
+		lines.push(progressLine);
+		lines.push("");
+
+		const recentUsers = this.messages
+			.filter(msg => msg.role === "user")
+			.slice(-MAX_RECENT_USER_MESSAGES)
+			.reverse();
+
+		if (recentUsers.length === 0) {
+			lines.push("No user messages available.");
+		} else {
+			lines.push(
+				`Recent user instructions (most recent first, up to ${MAX_RECENT_USER_MESSAGES} messages):`,
+			);
+			lines.push("");
+
+			for (const [index, msg] of recentUsers.entries()) {
+				const text = this.#extractUserMessageText(msg.content).trim();
+				const hasImage = Array.isArray(msg.content) && msg.content.some(c => c.type === "image");
+				let body = text;
+				if (hasImage) {
+					body = body ? `${body}\n[Image attached]` : "[Image attached]";
 				}
-				if (textParts.length > 0) {
-					lines.push("## Assistant");
-					lines.push("");
-					lines.push(textParts.join("\n\n"));
-					lines.push("");
+				if (!body) {
+					body = "[No text content]";
 				}
-			} else if (msg.role === "fileMention") {
-				const fileMsg = msg as FileMentionMessage;
-				const paths = fileMsg.files.map(f => f.path).join(", ");
-				lines.push(`[Files referenced: ${paths}]`);
+				if (body.length > MAX_MESSAGE_CHARS) {
+					body = `${body.slice(0, MAX_MESSAGE_CHARS)}\n[Message truncated for sidecar size]`;
+				}
+
+				lines.push(`## User Message ${index + 1}`);
 				lines.push("");
-			} else if (msg.role === "compactionSummary") {
-				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push("## Earlier Context (Summarized)");
-				lines.push("");
-				lines.push(compactMsg.summary);
+				lines.push(body);
 				lines.push("");
 			}
-			// Skip: toolResult, bashExecution, pythonExecution, branchSummary, custom, hookMessage
 		}
 
-		return lines.join("\n").trim();
+		const rendered = lines.join("\n").trim();
+		const renderedBytes = Buffer.byteLength(rendered, "utf-8");
+		if (renderedBytes <= MAX_CONTEXT_BYTES) {
+			return rendered;
+		}
+
+		const truncationNotice = "\n\n[Context truncated to 16KB sidecar limit]";
+		const noticeBytes = Buffer.byteLength(truncationNotice, "utf-8");
+		const availableBytes = Math.max(0, MAX_CONTEXT_BYTES - noticeBytes);
+		const head = truncateHeadBytes(rendered, availableBytes).text;
+		return `${head}${truncationNotice}`.trim();
 	}
 
 	// =========================================================================
