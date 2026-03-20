@@ -192,7 +192,7 @@ describe("createAgentSession MCP proxy tool exposure", () => {
 			skipPythonPreflight: true,
 			taskDepth: 1,
 			toolNames: ["read"],
-			...( { role: "code-reviewer" } as any),
+			...({ role: "code-reviewer" } as any),
 		});
 
 		expect(session.sessionManager.getLastModelChangeRole()).toBe("code-reviewer");

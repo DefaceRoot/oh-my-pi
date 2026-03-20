@@ -25,7 +25,7 @@ Helpers auto-print and return values for chaining.
 {{/if}}
 
 <output>
-Notebook-style output is rendered for users (`display(...)`, markdown/html/json, figures).
+Notebook-style output is rendered for users (`display(…)`, markdown/html/json, figures).
 </output>
 
 <caution>

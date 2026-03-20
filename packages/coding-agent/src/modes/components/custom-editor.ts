@@ -25,12 +25,12 @@ export class CustomEditor extends Editor {
 	public onAltUp?: () => void;
 
 	/** Custom key handlers from extensions */
-	private customKeyHandlers = new Map<KeyId, () => boolean | void>();
+	private customKeyHandlers = new Map<KeyId, () => boolean | undefined>();
 
 	/**
 	 * Register a custom key handler. Extensions use this for shortcuts.
 	 */
-	setCustomKeyHandler(key: KeyId, handler: () => boolean | void): void {
+	setCustomKeyHandler(key: KeyId, handler: () => boolean | undefined): void {
 		this.customKeyHandlers.set(key, handler);
 	}
 

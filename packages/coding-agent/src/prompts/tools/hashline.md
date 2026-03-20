@@ -22,7 +22,7 @@ Payload shape: `{ path, edits[] }`
 - `edits[n].pos`: anchor tag (`N#ID`) or null (BOF/EOF insertion)
 - `edits[n].end`: inclusive end tag for range `replace`
 - `edits[n].lines`:
-  - `[...]` insert/replace with those lines
+  - `[…]` insert/replace with those lines
   - `null` or `[]` delete (for `replace`)
   - `[""]` keep blank line
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { AgentSession } from "../../../session/agent-session";
 import { initTheme, theme } from "../../../modes/theme/theme";
+import type { AgentSession } from "../../../session/agent-session";
 import type { SegmentContext } from "./segments";
 import { renderSegment } from "./segments";
 
@@ -111,7 +111,7 @@ describe("status-line model segment agent modes", () => {
 			const rendered = renderSegment(
 				"model",
 				createContext({
- 					lastRole: testCase.role,
+					lastRole: testCase.role,
 					roles: {
 						default: "anthropic/default-model",
 						ask: "anthropic/ask-model",

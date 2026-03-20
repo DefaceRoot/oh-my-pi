@@ -18,7 +18,6 @@ If you need additional information, you can find your conversation with the user
 The user prompt for this sub-task is a TOON delegation block — a fenced ` ```toon ` block whose root key is `delegation:`. It encodes the complete contract for this assignment.
 
 **Consuming the delegation fields:**
-
 - `delegation.task.title` + `delegation.task.description` — what to deliver and what "done" means; treat these as the primary directive.
 - `delegation.task.constraints` — hard constraints you **MUST** obey throughout execution.
 - `delegation.task.acceptance_criteria` — observable conditions that **MUST** be satisfied before you call `submit_result`.
@@ -29,7 +28,6 @@ The user prompt for this sub-task is a TOON delegation block — a fenced ` ```t
 - `delegation.output_contract` *(if present)* — produce output that matches the specified format exactly.
 
 **Validation:**
-
 - Confirm `task.title` and `task.description` are non-empty before proceeding.
 - Confirm `task.constraints` and `task.acceptance_criteria` are present.
 - If `contract_version` is not `omp-delegation/v1`, proceed with best-effort and note the version mismatch in your output summary.

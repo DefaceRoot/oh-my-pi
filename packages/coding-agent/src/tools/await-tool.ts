@@ -191,12 +191,16 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 
 						// Show nested subagent data if available
 						const extracted = p.extractedToolData as Record<string, unknown[]> | undefined;
-						if (extracted?.["task"]) {
-							for (const nestedTask of extracted["task"]) {
-								const nt = nestedTask as { results?: Array<{ agent?: string; id?: string; exitCode?: number }> };
+						if (extracted?.task) {
+							for (const nestedTask of extracted.task) {
+								const nt = nestedTask as {
+									results?: Array<{ agent?: string; id?: string; exitCode?: number }>;
+								};
 								if (nt.results) {
 									for (const nr of nt.results) {
-										lines.push(`    - nested ${nr.agent ?? "agent"} (${nr.id ?? "?"}): exit=${nr.exitCode ?? "?"}`);
+										lines.push(
+											`    - nested ${nr.agent ?? "agent"} (${nr.id ?? "?"}): exit=${nr.exitCode ?? "?"}`,
+										);
 									}
 								}
 							}

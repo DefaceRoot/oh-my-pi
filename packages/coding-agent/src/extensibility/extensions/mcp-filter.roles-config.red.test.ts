@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 type HandlerMap = Map<string, Array<(event: any, ctx: any) => any>>;
 
-const hadOriginalEnvAgentDir = Object.prototype.hasOwnProperty.call(process.env, "PI_CODING_AGENT_DIR");
+const hadOriginalEnvAgentDir = Object.hasOwn(process.env, "PI_CODING_AGENT_DIR");
 const originalEnvAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalResolvedAgentDir = getAgentDir();
 

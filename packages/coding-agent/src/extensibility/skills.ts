@@ -71,7 +71,9 @@ export interface LoadSkillsOptions extends SkillsSettings {
 }
 
 const SKILL_NAME_TO_CATEGORY = new Map<string, string>(
-	Object.entries(SKILL_CATEGORY_TO_SKILLS).flatMap(([category, skillNames]) => skillNames.map(skillName => [skillName, category])),
+	Object.entries(SKILL_CATEGORY_TO_SKILLS).flatMap(([category, skillNames]) =>
+		skillNames.map(skillName => [skillName, category]),
+	),
 );
 
 export function getSkillCategoryForSkillName(skillName: string): string | null {

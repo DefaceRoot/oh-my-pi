@@ -97,27 +97,30 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 							},
 							{ additionalProperties: false, description: "Successfully completed the task" },
 						),
-						Type.Object({
-							error: Type.String({ description: "Error message when the task cannot be completed" }),
-							outcome: Type.Optional(
-								Type.Object(
-									{
-										status: Type.Union([
-											Type.Literal("pass"),
-											Type.Literal("fail"),
-											Type.Literal("go"),
-											Type.Literal("no_go"),
-										]),
-										label: Type.Optional(Type.String()),
-										summary: Type.Optional(Type.String()),
-									},
-									{
-										additionalProperties: false,
-										description: "Optional deterministic verdict for audit surfaces and gating UIs",
-									},
+						Type.Object(
+							{
+								error: Type.String({ description: "Error message when the task cannot be completed" }),
+								outcome: Type.Optional(
+									Type.Object(
+										{
+											status: Type.Union([
+												Type.Literal("pass"),
+												Type.Literal("fail"),
+												Type.Literal("go"),
+												Type.Literal("no_go"),
+											]),
+											label: Type.Optional(Type.String()),
+											summary: Type.Optional(Type.String()),
+										},
+										{
+											additionalProperties: false,
+											description: "Optional deterministic verdict for audit surfaces and gating UIs",
+										},
+									),
 								),
-							),
-						}, { additionalProperties: false }),
+							},
+							{ additionalProperties: false },
+						),
 					]),
 				},
 				{

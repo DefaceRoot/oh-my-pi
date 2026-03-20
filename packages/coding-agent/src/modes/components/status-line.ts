@@ -479,7 +479,10 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.resolveSettings().segmentOptions ?? {},
 			planMode: this.planModeStatus,
-			usageStats: { ...usageStats, tokensPerSecond: (usageStats as { tokensPerSecond?: number | null }).tokensPerSecond ?? null },
+			usageStats: {
+				...usageStats,
+				tokensPerSecond: (usageStats as { tokensPerSecond?: number | null }).tokensPerSecond ?? null,
+			},
 			contextPercent,
 			contextWindow,
 			autoCompactEnabled: this.autoCompactEnabled,

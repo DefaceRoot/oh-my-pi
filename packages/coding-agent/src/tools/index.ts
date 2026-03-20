@@ -428,10 +428,12 @@ export async function createTools(
 		filteredRequestedTools !== undefined
 			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
 			: [
-					...roleFilteredBuiltinTools.map(name => [name, BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS]] as const),
+					...roleFilteredBuiltinTools.map(
+						name => [name, BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS]] as const,
+					),
 					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
 					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
-			  ];
+				];
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {

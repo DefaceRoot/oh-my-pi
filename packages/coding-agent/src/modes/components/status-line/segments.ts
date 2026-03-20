@@ -111,7 +111,7 @@ const modelSegment: StatusLineSegment = {
 			modelName = modelName.slice(7);
 		}
 		if (/^gpt-/i.test(modelName)) {
-			modelName = "GPT-" + modelName.slice(4);
+			modelName = `GPT-${modelName.slice(4)}`;
 		}
 
 		let content = withIcon(theme.icon.model, modelName);
@@ -203,11 +203,7 @@ const gitSegment: StatusLineSegment = {
 		const showBranch = opts.showBranch !== false;
 		let content = "";
 		if (showBranch && branch) {
-			const branchIcon = inWorktree
-				? theme.icon.branch === "@"
-					? "wt"
-					: ""
-				: theme.icon.branch;
+			const branchIcon = inWorktree ? (theme.icon.branch === "@" ? "wt" : "") : theme.icon.branch;
 			content = withIcon(branchIcon, branch);
 		}
 

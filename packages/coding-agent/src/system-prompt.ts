@@ -291,7 +291,8 @@ async function mergeModeSpecificAgentsGuidance(
 			const modeContent = await loadModeSpecificAgentsFile(file.path, mode);
 			if (!modeContent) return file;
 			const sharedContent = file.content.trimEnd();
-			const mergedContent = sharedContent.length > 0 ? `${sharedContent}\n\n${modeContent.trimStart()}` : modeContent;
+			const mergedContent =
+				sharedContent.length > 0 ? `${sharedContent}\n\n${modeContent.trimStart()}` : modeContent;
 			return { ...file, content: mergedContent };
 		}),
 	);

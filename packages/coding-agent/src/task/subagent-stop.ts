@@ -12,4 +12,3 @@ export function buildUserStoppedAbortReason(reason: string | undefined): string 
 	}
 	return isUserStoppedAbortReason(trimmed) ? trimmed : `${USER_STOPPED_ABORT_PREFIX} ${trimmed}`;
 }
-
