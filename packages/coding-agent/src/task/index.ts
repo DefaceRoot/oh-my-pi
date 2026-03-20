@@ -74,7 +74,7 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer", "commit"]);
+const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer"]);
 
 function normalizeRuntimeRole(role: string | undefined): string | undefined {
 	const normalized = role?.trim().toLowerCase();
@@ -355,7 +355,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	#orchestratorBoundaryMessage(agentName: string): string {
 		return (
 			`Cannot spawn '${agentName}' from orchestrator parent sessions. ` +
-			"Delegate an 'implement' or 'debug' worker first; lint, code-reviewer, and commit must run inside that worker's quality loop before handoff."
+			"Delegate an 'implement' or 'debug' worker first; lint and code-reviewer must run inside that worker's quality loop before handoff."
 		);
 	}
 

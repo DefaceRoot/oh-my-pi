@@ -25,9 +25,11 @@ You are **COORDINATION-ONLY** in the parent turn. You phase work and delegate â€
   - No sequencing dependency exists (no slice depends on outputs from another slice).
 - If any independence check is unknown or false, run the work sequentially.
 - Verification fan-out never overrides implementation safety checks; when implementation is sequential-only, keep implementation sequential.
-- During implementation flow, parent delegation is restricted to `explore`, `research`, `implement`, and `debug`.
-- Use `debug` for bug reports, failing tests, and unexpected behavior that require diagnosis; use `implement` for known-good scoped changes.
-- Parent orchestrators MUST NOT spawn `lint`, `code-reviewer`, or `commit` during implementation flow.
+- During implementation flow, parent delegation is restricted to `explore`, `research`, `implement`, `debug`, and conditional `commit` handoff.
+- Routing decision tree: bug reports, failing tests, and unexpected behavior that require diagnosis go to `debug`.
+- Routing decision tree: known-good scoped code changes go to `implement` after diagnosis is complete.
+- Routing decision tree: direct git-only handoff goes to `commit` only when no implementation-owned file set is pending.
+- Parent orchestrators MUST NOT spawn `lint` or `code-reviewer` directly during implementation flow.
 - Quality gates and git handoff are delegated-worker-owned and must run inside `implement` or `debug` sessions before work is reported complete.
 - After all implementation units for a phase are complete, run one phase-end verifier round:
   - Spawn one `verifier` task per completed implementation unit plus one `coderabbit` task in parallel.

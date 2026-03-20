@@ -105,7 +105,7 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		lastRunSubprocessAgent = null;
 	});
 
-	for (const restrictedAgent of ["lint", "code-reviewer", "commit"] as const) {
+	for (const restrictedAgent of ["lint", "code-reviewer"] as const) {
 		test(`blocks orchestrator parent from spawning ${restrictedAgent}`, async () => {
 			const result = await executeWithAgent(restrictedAgent);
 			const text = collectText(result);
@@ -116,9 +116,9 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 	}
 
 	test("blocks orchestrator boundary when runtime role casing varies", async () => {
-		const result = await executeWithAgent("commit", { getRuntimeRole: () => "  ORCHESTRATOR  " });
+		const result = await executeWithAgent("lint", { getRuntimeRole: () => "  ORCHESTRATOR  " });
 		const text = collectText(result);
-		expect(text).toContain("Cannot spawn 'commit' from orchestrator parent sessions");
+		expect(text).toContain("Cannot spawn 'lint' from orchestrator parent sessions");
 		expect(runSubprocessAgents).toHaveLength(0);
 	});
 
@@ -134,6 +134,14 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		expect(text).toContain("Cannot spawn 'lint' from orchestrator parent sessions");
 		expect(text).not.toContain("Async execution is enabled but no async job manager is available.");
 		expect(runSubprocessAgents).toHaveLength(0);
+	});
+
+	test("allows orchestrator parent to delegate commit handoff", async () => {
+		const result = await executeWithAgent("commit");
+		expect(runSubprocessAgents).toEqual(["commit"]);
+		const text = collectText(result);
+		expect(text).not.toContain("Cannot spawn 'commit' from orchestrator parent sessions");
+		expect(text).not.toContain("Delegate an 'implement' or 'debug' worker first");
 	});
 
 	test("allows orchestrator parent to delegate implementation-phase workers", async () => {

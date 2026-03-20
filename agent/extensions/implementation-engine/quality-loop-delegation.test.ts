@@ -28,6 +28,17 @@ describe("implementation quality-loop delegation", () => {
 		expect(toolCallBlock).toMatch(/quality-loop subagents must reuse the current workspace/i);
 	});
 
+	test("orchestrator task routing blocks direct quality-loop agents and conditional commit", async () => {
+		const source = await readFile(implementationEnginePath);
+		const toolCallBlock = extractToolCallBlock(source);
+
+		expect(toolCallBlock).toMatch(/isOrchestratorParentTaskCall\s*=\s*enforceOrchestratorGuards\s*&&\s*activeAgentIsParentTurn/);
+		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"lint"\s*\|\|\s*taskAgent\s*===\s*"code-reviewer"/);
+		expect(toolCallBlock).toMatch(/parent cannot delegate lint or code-reviewer directly/i);
+		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"commit"[\s\S]*captureGitStatusSnapshot\(snapshotCwd\)/);
+		expect(toolCallBlock).toMatch(/commit delegation is reserved for direct git-only handoff when no implementation-owned file set is pending/i);
+	});
+
 	test("worker gate derives lint requirement from owned files for submit and task-result checks", async () => {
 		const source = await readFile(implementationEnginePath);
 		const toolCallBlock = extractToolCallBlock(source);

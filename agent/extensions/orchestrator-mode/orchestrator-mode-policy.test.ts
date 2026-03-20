@@ -179,8 +179,10 @@ describe("orchestrator-mode policy", () => {
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");
 		expect(prompt).toContain("The only exception is await when background work is already running");
-		expect(prompt).toContain("Bug reports, failing tests, and unexpected behavior MUST be delegated to the debug subagent.");
-		expect(prompt).toContain("Use implement for known-good scoped changes after diagnosis is complete.");
+		expect(prompt).toContain("Routing decision tree: bug reports, failing tests, and unexpected behavior MUST go to the debug subagent.");
+		expect(prompt).toContain("Routing decision tree: known-good scoped code changes go to implement after diagnosis is complete.");
+		expect(prompt).toContain("Routing decision tree: direct git-only handoff goes to commit only when no implementation-owned file set is pending.");
+		expect(prompt).toContain("Do not delegate lint or code-reviewer directly from the parent turn;");
 		expect(prompt).toContain("- debug         : root-cause debugging specialist (diagnose, reproduce, and fix)");
 	});
 });

@@ -1796,7 +1796,7 @@ const notifyWorktreeProgress = (
 			"- Parent orchestrator must not call direct discovery tools (for example `find`, `grep`, or any `mcp_*` tool). Route all discovery through Task subagents (`explore` for reconnaissance).",
 			"",
 			"After each Task subagent completes:",
-			"- Run `git status --porcelain` in the active worktree before advancing. If dirty, spawn a remediation Task subagent dedicated to commit/push cleanup, then re-check until clean.",
+			"- Run `git status --porcelain` in the active worktree before advancing. If dirty, spawn a remediation Task subagent (`implement` or `debug`) to complete quality-loop commit/push cleanup, then re-check until clean.",
 			"- Update `todo_write` first, then continue.",
 			"- Confirm each implementation Task that changed files ran its own nested `lint` subagent scoped to those changed paths; missing lint evidence or any lint failure means the phase is BLOCKED until remediated.",
 			"- Quality PASSED with clean git status → spawn next phase. One-line response: 'Phase N complete. Starting Phase N+1.'",
@@ -4613,6 +4613,31 @@ const notifyWorktreeProgress = (
 			const taskInput = input as Record<string, unknown>;
 			const taskAgent =
 				typeof taskInput.agent === "string" ? taskInput.agent : undefined;
+			const isOrchestratorParentTaskCall =
+				enforceOrchestratorGuards && activeAgentIsParentTurn;
+			if (
+				isOrchestratorParentTaskCall &&
+				(taskAgent === "lint" || taskAgent === "code-reviewer")
+			) {
+				return {
+					block: true,
+					reason:
+						"Orchestrator mode: parent cannot delegate lint or code-reviewer directly. Delegate an implement or debug worker and let that worker run its quality loop.",
+				};
+			}
+			if (isOrchestratorParentTaskCall && taskAgent === "commit") {
+				const snapshotCwd = normalizePath(
+					last.worktreePath ?? last.repoRoot ?? process.cwd(),
+				);
+				const implementationOwnedFiles = await captureGitStatusSnapshot(snapshotCwd);
+				if (implementationOwnedFiles.size > 0) {
+					return {
+						block: true,
+						reason:
+							"Orchestrator mode: commit delegation is reserved for direct git-only handoff when no implementation-owned file set is pending. Delegate the owning implement or debug worker to complete its quality loop.",
+					};
+				}
+			}
 			const isImplementationQualityLoopAgent =
 				taskAgent === "lint" ||
 				taskAgent === "code-reviewer" ||
