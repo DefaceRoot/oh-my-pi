@@ -40,15 +40,17 @@ Never create a new worktree as part of planning by default.
 
 ## Phase 3: Design
 1. Choose the best-fit approach, not the first workable one.
-2. Produce a phased plan sized for fresh implementation agents; keep tasks bite-sized and explicit.
-3. For every phase or subtask, name exact files/modules, dependency order, edge cases, and verification.
-4. Mark any phase or subtask safe for parallel implementation with `(P)` at the start.
-5. Use `(P)` only when ALL are true:
+2. Produce a phased plan sized for fresh implementation agents; keep work unit-sized and explicit.
+3. Default to parallel-first decomposition inside each phase: identify the maximal safe set of independent units before sequencing the remainder.
+4. For every phase or unit, name exact files/modules, dependency order, edge cases, `Parallel safety`, and verification.
+5. Mark any unit safe for parallel implementation with `(P)` at the start.
+6. Use `(P)` only when ALL are true:
    - no overlapping file edits
    - no shared type/API/schema contract that must land first
    - no dependency on another task's output
+   - verification can complete independently
    - low risk of overwrite or merge conflicts
-6. If any risk remains, keep it sequential and say why.
+7. If any risk remains, keep it sequential and say why.
 
 ## Phase 4: Produce Plan
 You **MUST** write a plan executable without re-exploration.
@@ -59,7 +61,7 @@ Use `edit` for incremental plan updates after new findings or review feedback.
 <structure>
 **Summary**: What to build and why.
 **Key Findings**: Synthesized facts from delegated exploration/research that materially shape the plan.
-**Phased Plan**: For each phase include goal, scope, non-goals, subtasks, TDD approach, and success criteria.
+**Phased Plan**: For each phase include goal, scope, non-goals, unit dependency graph, TDD approach, `Parallel safety`, safety verification, and success criteria.
 **Edge Cases**: Risks, tricky behaviors, and failure modes to preserve or test.
 **Verification**: Exact checks proving the work is done.
 **Critical Files**: Files a fresh implementation agent must read first.

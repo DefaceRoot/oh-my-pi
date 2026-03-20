@@ -71,7 +71,7 @@ Required section title:
 For each phase:
 - Keep scope small: target 1-2 concrete actions
 - Put phases in strict dependency order
-- Assume one fresh subagent will execute each phase
+- Assume implementation fan-out happens at the unit level inside the phase
 
 Every phase MUST include:
 - Goal (1-2 sentences)
@@ -80,13 +80,31 @@ Every phase MUST include:
 - TDD approach (what fails first, what minimal implementation makes it pass, what is refactored)
 - Commit checkpoint (how atomic commit boundaries will be kept inside the phase)
 - Success criteria (objective done checks)
+
+Within each phase, decompose work into very small units:
+- `#### Unit N.M: ...`
+- `#### Unit N.M (P): ...` only when safe parallelism is proven
+- Default to parallel-first decomposition: identify independent units first, then sequence only blocked follow-on units
+- Keep `Depends on` links explicit so fresh executors never infer ordering
+
+Every unit MUST include:
+- Files
+- Change
+- Depends on
+- Tests First
+- Implementation
+- Verification (behavior checks plus any safety checks for dependency or parallel claims)
+
+If a unit is marked `(P)`, it MUST also include:
+- Parallel safety evidence covering no shared files, no shared contract/type ownership, no ordering dependency, and verification independence
 </phase_contract>
 
 <execution_contract>
 After the phase list, include a short execution contract stating:
-- Implement phases sequentially
-- Spawn one fresh subagent per phase
-- Do not parallelize dependent phases
+- Execute phases in order
+- Inside each phase, spawn one fresh subagent per unit; fan out sibling `(P)` units together only when their `Parallel safety` proof still matches current repo state
+- Do not parallelize dependent units or units that cannot be verified independently
+- Use unit verification to prove both intended behavior and the safety boundary before proceeding to dependent work
 - During implementation of each phase, apply the `commit-hygiene` skill (or equivalent atomic-commit discipline if unavailable)
 - Finish each completed phase with atomic commit(s) scoped only to that phase (no cross-phase commits)
 - Stop on failure and report blockers before proceeding
