@@ -4,7 +4,7 @@ import { buildPlanTodoBootstrapData, parsePlanToTodoPhases } from "@oh-my-pi/pi-
 const standardPlan = [
 	"# Example Plan",
 	"",
-	"## Phased Implementation Plan",
+	"## Phased Implementation Plan (Agent-Sized)",
 	"",
 	"### Phase 1 — Bootstrap",
 	"**Goal:** Prepare plan parsing.",
@@ -22,7 +22,7 @@ const standardPlan = [
 const incompletePlan = [
 	"# Example Plan",
 	"",
-	"## Phased Implementation Plan",
+	"## Phased Implementation Plan (Agent-Sized)",
 	"",
 	"### Phase 1 — Bootstrap",
 	"**Goal:** Prepare plan parsing.",
@@ -43,7 +43,7 @@ const planWithDuplicatePhaseNumberOutsidePlanSection = [
 	"### Phase 1 — Outside Section",
 	"**Goal:** Ignore this heading.",
 	"",
-	"## Phased Implementation Plan",
+	"## Phased Implementation Plan (Agent-Sized)",
 	"",
 	"### Phase 1 — Bootstrap",
 	"**Goal:** Use this heading.",
