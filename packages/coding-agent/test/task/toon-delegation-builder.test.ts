@@ -403,6 +403,8 @@ describe("toon delegation builder", () => {
 				["plan-verifier", "standard"],
 				["merge", "standard"],
 				["implement", "detailed"],
+				["debug", "detailed"],
+				["designer", "detailed"],
 				["task", "detailed"],
 				["designer", "detailed"],
 			];

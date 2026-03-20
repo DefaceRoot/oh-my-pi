@@ -330,6 +330,7 @@ const DEFAULT_PROFILE_BY_DELEGATE: Record<string, InputProfileMode> = {
 	merge: "standard",
 	implement: "detailed",
 	debug: "detailed",
+	designer: "detailed",
 	task: "detailed",
 	designer: "detailed",
 };
