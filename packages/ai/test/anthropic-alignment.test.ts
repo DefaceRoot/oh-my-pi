@@ -19,7 +19,6 @@ import {
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
