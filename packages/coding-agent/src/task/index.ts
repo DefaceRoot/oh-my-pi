@@ -318,7 +318,11 @@ async function renderTaskWithDelegationToon(
 		});
 		// Fire-and-forget sidecar write; failures are non-fatal
 		writeDelegationSidecar(session, result).catch(() => {});
-		delegationContext = result.toon;
+		if (result.validation_passed === false) {
+			delegationContext = buildFallbackDelegationToon(session, delegate, task);
+		} else {
+			delegationContext = result.toon;
+		}
 	} catch {
 		delegationContext = buildFallbackDelegationToon(session, delegate, task);
 	}
