@@ -22,32 +22,6 @@ type OrchestratorPolicyEvent = {
 	toolName: string;
 	input?: unknown;
 };
-
-type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
-
-type TodoTask = {
-	id: string;
-	content: string;
-	status: TodoStatus;
-	notes?: string;
-};
-
-type TodoPhase = {
-	id: string;
-	name: string;
-	tasks: TodoTask[];
-};
-
-type SessionMessageEntry = {
-	type?: string;
-	message?: {
-		role?: string;
-		toolName?: string;
-		details?: { phases?: unknown };
-		isError?: boolean;
-	};
-};
-
 type OrchestratorPolicyContext = {
 	orchestratorModeThisTurn: boolean;
 	activeAgentIsParentTurn: boolean;
@@ -439,8 +413,8 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 
 		if (event.toolName === "todo_write") {
 			const todoPhases = Array.isArray((event.details as { phases?: unknown } | undefined)?.phases)
-				? cloneTodoPhases((event.details as { phases: TodoPhase[] }).phases)
-				: getLatestTodoPhasesFromEntries(ctx.sessionManager.getEntries() as SessionMessageEntry[]);
+				? ((event.details as { phases: TodoPhase[] }).phases)
+				: getLatestTodoPhasesFromEntries(ctx.sessionManager.getEntries() as never);
 			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 			todoRefreshRequired = false;
