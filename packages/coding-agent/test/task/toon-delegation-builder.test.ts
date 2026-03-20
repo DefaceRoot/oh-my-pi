@@ -602,7 +602,7 @@ describe("delegation quality linter", () => {
 		});
 	});
 
-	it("warns when task.constraints is empty", async () => {
+	it("does not warn when task.constraints is empty", async () => {
 		await withTempDir(async cwd => {
 			const result = await buildDelegation({
 				cwd,
@@ -610,11 +610,11 @@ describe("delegation quality linter", () => {
 				task: createSemanticTask({ constraints: [] }),
 			});
 			const warnings = result.quality_report?.warnings ?? [];
-			expect(warnings.some(w => w.includes("task.constraints is empty or missing"))).toBe(true);
+			expect(warnings.some(w => w.includes("task.constraints is empty or missing"))).toBe(false);
 		});
 	});
 
-	it("warns when task.acceptance_criteria is empty", async () => {
+	it("does not warn when task.acceptance_criteria is empty", async () => {
 		await withTempDir(async cwd => {
 			const result = await buildDelegation({
 				cwd,
@@ -622,7 +622,7 @@ describe("delegation quality linter", () => {
 				task: createSemanticTask({ acceptance_criteria: [] }),
 			});
 			const warnings = result.quality_report?.warnings ?? [];
-			expect(warnings.some(w => w.includes("task.acceptance_criteria is empty or missing"))).toBe(true);
+			expect(warnings.some(w => w.includes("task.acceptance_criteria is empty or missing"))).toBe(false);
 		});
 	});
 

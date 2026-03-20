@@ -1134,12 +1134,6 @@ export async function validateDelegationQuality(
 	if (metadata.task.description.length < 20) {
 		warnings.push("task.description is under 20 characters");
 	}
-	if (!metadata.task.constraints || metadata.task.constraints.length === 0) {
-		warnings.push("task.constraints is empty or missing");
-	}
-	if (!metadata.task.acceptance_criteria || metadata.task.acceptance_criteria.length === 0) {
-		warnings.push("task.acceptance_criteria is empty or missing");
-	}
 	if (metadata.context.plan_path && !metadata.context.plan_excerpt && metadata.input_policy.mode === "detailed") {
 		warnings.push("plan_path exists but plan_excerpt extraction failed [info]");
 	}
