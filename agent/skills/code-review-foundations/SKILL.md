@@ -5,11 +5,12 @@ description: Evaluate code changes using evidence-first criteria for correctness
 
 # Code Review Foundations
 
-Use this skill when performing implementation reviews that must hold up under production pressure.
+Use this skill when performing implementation reviews that must hold up under production pressure. It provides structural evaluation criteria — code cleanliness, complexity, smell detection, contracts, invariants, and test adequacy — not domain-specific design opinions. The reviewer uses these criteria to decide whether a change is correct, safe to modify, and resilient under failure.
 
 ## When to use
 
-- Reviewing pull requests for correctness and maintainability risk
+- Reviewing changed files for structural correctness, maintainability risk, and complexity
+- Evaluating whether structure preserves contracts, trust boundaries, and failure handling
 - Evaluating whether tests meaningfully cover changed behavior
 - Deciding if a concern is a real defect, design debt, or acceptable tradeoff
 
@@ -38,5 +39,9 @@ Read `references/code-smells.md` when you see suspicious patterns but need help 
 ## Expected review posture
 
 - Prioritize correctness, safety, and change resilience over stylistic preference
+- Start from contracts, invariants, state transitions, control flow, and error handling before commenting on style
 - Prefer root-cause findings over symptom-level comments
 - Distinguish required fixes from optional improvements
+- Use design commentary only when it explains a correctness or maintenance risk
+- Evaluate through the structural lens of these references — do not provide domain-specific design opinions that override the delegating agent's expertise
+- Security findings are always valid regardless of review scope constraints — security is not domain-specific
