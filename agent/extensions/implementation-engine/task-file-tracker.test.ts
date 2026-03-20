@@ -331,6 +331,21 @@ describe("isImplementationWorkerPrompt", () => {
 		).toBe(true);
 	});
 
+	test("matches designer prompts that declare the delivery loop", () => {
+		expect(
+			isImplementationWorkerPrompt(
+				"<role>Frontend and UI/UX implementation specialist for visual systems, interaction design, and production-ready interface delivery.</role>",
+				[
+					"<delivery_loop>",
+					"1. Spawn a `lint` subagent first for lint, typecheck, and tests in the changed scope.",
+					"2. Only after `lint` succeeds, send the changed files to `code-reviewer`.",
+					"3. After checks are green, hand git operations to the `commit` agent.",
+					"</delivery_loop>",
+				].join("\n"),
+			),
+		).toBe(true);
+	});
+
 	test("does not match unrelated subagent prompts", () => {
 		expect(
 			isImplementationWorkerPrompt(
@@ -492,6 +507,35 @@ describe("implementation worker submit gate", () => {
 			success: true,
 		});
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(false);
+
+		state = recordImplementationWorkerGateOutcome(state, "commit", { success: true });
+		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);
+	});
+
+	test("requires code-reviewer rerun when review finishes before lint", () => {
+		let state = createImplementationWorkerGateState();
+
+		state = recordImplementationWorkerGateOutcome(state, "code-reviewer", {
+			success: true,
+		});
+		expect(getImplementationWorkerSubmitDecision(state)).toEqual({
+			allowed: false,
+			reason: "Implementation workflow gate: submit_result blocked until a successful lint task.",
+		});
+
+		state = recordImplementationWorkerGateOutcome(state, "lint", { success: true });
+		expect(getImplementationWorkerSubmitDecision(state)).toEqual({
+			allowed: false,
+			reason: "Implementation workflow gate: submit_result blocked until a successful code-reviewer task after lint.",
+		});
+
+		state = recordImplementationWorkerGateOutcome(state, "code-reviewer", {
+			success: true,
+		});
+		expect(getImplementationWorkerSubmitDecision(state)).toEqual({
+			allowed: false,
+			reason: "Implementation workflow gate: submit_result blocked until a successful commit task after code-reviewer.",
+		});
 
 		state = recordImplementationWorkerGateOutcome(state, "commit", { success: true });
 		expect(getImplementationWorkerSubmitDecision(state).allowed).toBe(true);

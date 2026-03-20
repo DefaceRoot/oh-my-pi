@@ -4,6 +4,8 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const implementationEnginePath = path.join(repoRoot, "agent/extensions/implementation-engine/index.ts");
 const implementAgentPath = path.join(repoRoot, "agent/agents/implement.md");
+const debugAgentPath = path.join(repoRoot, "agent/agents/debug.md");
+const designerAgentPath = path.join(repoRoot, "agent/agents/designer.md");
 const mergeAgentPath = path.join(repoRoot, "agent/agents/merge.md");
 const workerProtocolPath = path.join(repoRoot, "agent/rules/worker-protocol.md");
 const orchestratorModePath = path.join(repoRoot, "agent/rules/orchestrator-mode.md");
@@ -54,23 +56,43 @@ describe("implementation quality-loop delegation", () => {
 		expect(source).toMatch(/computeFilesDelta\([\s\S]*implementationWorkerBaselineSnapshot[\s\S]*postTaskSnapshot[\s\S]*recordImplementationWorkerGateOutcome\([\s\S]*getImplementationWorkerGateOptions\(workerOwnedFiles\)/);
 	});
 
-	test("implementation agent prompt requires dedicated lint, review, and commit agents", async () => {
-		const content = await readFile(implementAgentPath);
+	test("worker prompts document lint-first review ordering", async () => {
+		const implementAgent = await readFile(implementAgentPath);
+		const debugAgent = await readFile(debugAgentPath);
+		const designerAgent = await readFile(designerAgentPath);
 
-		expect(content).toContain("Use the Task tool only as delegation transport");
-		expect(content).toContain("dedicated `lint`, `code-reviewer`, and `commit` agents");
-		expect(content).toContain("Never substitute `implement` or `explore` for these quality gates");
-		expect(content).toMatch(/never set `isolated: true` for these quality-loop delegations/i);
+		for (const content of [implementAgent, debugAgent]) {
+			expect(content).toContain("Use the Task tool only as delegation transport");
+			expect(content).toContain("dedicated `lint`, `code-reviewer`, and `commit` agents");
+			expect(content).toContain("`lint` first, then `code-reviewer`, then `commit`");
+			expect(content).toContain("Do not launch `lint` and `code-reviewer` in parallel or in the same Task call");
+			expect(content).toMatch(/never set `isolated: true` for (?:these )?quality-loop delegations/i);
+		}
+
+		expect(designerAgent).toContain("you own the same worker quality loop: `lint` first, then `code-reviewer`, then `commit` via Task");
+		expect(designerAgent).toContain("Do not launch `lint` and `code-reviewer` in parallel or in the same Task call");
+		expect(designerAgent).toContain("hand commit ownership to the `commit` agent");
 	});
 
-	test("worker protocol mirrors quality-loop and conflict escalation requirements", async () => {
+	test("worker protocol mirrors lint-first review ordering and conflict escalation requirements", async () => {
 		const content = await readFile(workerProtocolPath);
 
 		expect(content).toContain("Use the Task tool only as delegation transport");
 		expect(content).toContain("dedicated `lint`, `code-reviewer`, and `commit` agents");
-		expect(content).toContain("Never set `isolated: true` for these quality-loop delegations");
+		expect(content).toContain("Only after `lint` succeeds");
+		expect(content).toContain("Do not launch `lint` and `code-reviewer` in parallel or in the same Task call");
+		expect(content).toContain("restart from `lint` and continue back through `code-reviewer` in order");
 		expect(content).toContain("When using `isolated: true` for parallel implementation delegations");
 		expect(content).toContain("spawn a `merge` agent with conflicting branch names");
+	});
+
+	test("implementation-engine prompt documents worker-owned lint-first review flow", async () => {
+		const content = await readFile(implementationEnginePath);
+
+		expect(content).toContain("Implementation Worker Quality Loop (MANDATORY):");
+		expect(content).toContain("Every `implement`, `debug`, or file-mutating `designer` worker owns `lint` -> `code-reviewer` -> `commit`.");
+		expect(content).toContain("Do not have workers launch `lint` and `code-reviewer` in parallel or in the same Task call");
+		expect(content).toContain("nested lint-first quality loop");
 	});
 
 	test("orchestrator and merge guidance document isolated conflict handling", async () => {

@@ -41,10 +41,10 @@ To complete assigned implementation work (planned or ad hoc), run this loop befo
 2. Use the Task tool only as delegation transport. For this quality loop, always target the dedicated `lint`, `code-reviewer`, and `commit` agents; never substitute `implement` or `explore` for those checks.
 3. Never set `isolated: true` for these quality-loop delegations (`lint`, `code-reviewer`, `commit`); they must reuse the current workspace.
 4. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
-5. Otherwise spawn a `lint` agent to run lint, typecheck, and tests for the changed scope.
-6. Send changed files to `code-reviewer` for independent evidence-first review.
+5. Otherwise spawn a `lint` agent to run lint, typecheck, and tests for the changed scope. This gate runs first.
+6. Only after `lint` succeeds (or is skipped under step 4), send changed files to `code-reviewer` for independent evidence-first review. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
 7. Treat these as hard failures: missing `submit_result`, non-structured output, `SYSTEM WARNING: Subagent exited without calling submit_result`, or any orchestrator guard/tool-block message.
-8. If lint or review fails, spawn a focused fix task limited to reported issues, then re-run lint and code-reviewer.
+8. If lint or review fails, spawn a focused fix task limited to reported issues, then restart from `lint` and continue back through `code-reviewer` in order.
 9. Allow at most 3 remediation cycles. If still failing, report blockers and stop.
 10. Never report completion while any required gate is failing.
 11. Never include raw lint/review/test transcripts in success summaries.

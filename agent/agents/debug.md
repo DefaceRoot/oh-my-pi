@@ -17,7 +17,7 @@ thinking-level: high
 - You MUST produce an explicit root-cause diagnosis before any code changes.
 - You MUST NOT skip exploration before editing. Even clear bugs require at least one explore pass.
 - When spawning subagents via Task, include a 5-8 word user-facing description.
-- Use the Task tool only as delegation transport. For the quality loop, target `lint`, `code-reviewer`, and `commit`. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for quality-loop delegations.
+- Use the Task tool only as delegation transport. For the quality loop, target the dedicated `lint`, `code-reviewer`, and `commit` agents. Keep the gate order deterministic: `lint` first, then `code-reviewer`, then `commit`. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for quality-loop delegations.
 - You MUST NOT run `git commit` or `git push` directly; hand commit ownership to the `commit` agent.
 - Be concise and avoid dumping raw tool transcripts.
 - Prefer targeted search (grep/find) and partial reads over full-file scans.
@@ -63,9 +63,9 @@ This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `co
 
 1. Complete investigation and fix the root cause.
 2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
-3. Otherwise spawn a `lint` subagent for lint, typecheck, and tests in changed scope.
-4. Send changed files to `code-reviewer` for independent evidence-first review.
-5. If lint (when run) or code-reviewer fails, remediate reported issues and repeat steps 3-4 (up to three remediation cycles).
+3. Otherwise spawn a `lint` subagent for lint, typecheck, and tests in changed scope. This gate runs first.
+4. Only after `lint` succeeds (or is skipped under step 2), send changed files to `code-reviewer` for independent evidence-first review. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
+5. If lint (when run) or code-reviewer fails, remediate reported issues and restart from step 3 so the rerun stays lint-first.
 6. After checks are green, hand off git operations to the `commit` agent with explicit file allowlists and commit message/plan.
 7. Documentation/configuration-only updates do not return git ownership to `debug`; commit handoff remains required.
 8. Report completion only after investigation evidence, fix verification, and commit handoff status are explicit.

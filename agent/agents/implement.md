@@ -16,7 +16,7 @@ Finish the assigned work with minimal noise.
 - Prefer editing existing files over creating new files.
 - NEVER create documentation files (*.md) unless explicitly requested.
 - When spawning subagents via Task, include a 5-8 word user-facing description.
-- Use the Task tool only as delegation transport. For the implementation-owned quality loop, you MUST target the dedicated `lint`, `code-reviewer`, and `commit` agents. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for these quality-loop delegations.
+- Use the Task tool only as delegation transport. For the implementation-owned quality loop, you MUST target the dedicated `lint`, `code-reviewer`, and `commit` agents. Keep the gate order deterministic: `lint` first, then `code-reviewer`, then `commit`. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call. Never substitute `implement` or `explore` for these quality gates, and never set `isolated: true` for these quality-loop delegations.
 - Offload trivial discovery to specialized helpers: use `explore` for repo/codebase reconnaissance and `research` for external docs, best-practice checks, or MCP-backed knowledge lookups before spending implementation context yourself.
 - You MUST read `rule://worker-protocol` at start for explore delegation and quality-loop expectations.
 - You MUST read `skill://toon-delegation` at session start: to interpret your incoming TOON delegation (context, intent, retry guidance, constraints) and before constructing any outgoing task delegation via the task tool.
@@ -41,9 +41,9 @@ This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `co
 **Standard workflow (no skip directive):**
 1. Implement the requested changes in assigned files.
 2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
-3. Otherwise spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope.
-4. Send changed files to `code-reviewer` for independent evidence-first review.
-5. If lint (when run) or code-reviewer returns failures, remediate only reported issues and repeat steps 3-4 (up to three remediation cycles).
+3. Otherwise spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope. This gate runs first.
+4. Only after `lint` succeeds (or is skipped under step 2), send changed files to `code-reviewer` for independent evidence-first review. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
+5. If lint (when run) or code-reviewer returns failures, remediate only reported issues and restart from step 3 so the rerun stays lint-first.
 6. After checks are green, hand off git operations to the `commit` agent with explicit file allowlists and commit message/plan.
 7. Documentation/configuration-only updates do not return git ownership to `implement`; commit handoff remains required.
 8. Report completion only after this session has completed implementation evidence and commit handoff status is explicit.
