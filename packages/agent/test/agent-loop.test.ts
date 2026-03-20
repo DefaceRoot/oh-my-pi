@@ -633,30 +633,24 @@ describe("agentLoop with AgentMessage", () => {
 
 		let streamCallCount = 0;
 		const events: AgentEvent[] = [];
-		const stream = agentLoop(
-			[userPrompt],
-			context,
-			config,
-			abortController.signal,
-			() => {
-				streamCallCount++;
-				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
-					if (streamCallCount === 1) {
-						const message = createAssistantMessage(
-							[{ type: "toolCall", id: "tool-1", name: "submit_result", arguments: {} }],
-							"toolUse",
-						);
-						stream.push({ type: "done", reason: "toolUse", message });
-						return;
-					}
+		const stream = agentLoop([userPrompt], context, config, abortController.signal, () => {
+			streamCallCount++;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (streamCallCount === 1) {
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "submit_result", arguments: {} }],
+						"toolUse",
+					);
+					stream.push({ type: "done", reason: "toolUse", message });
+					return;
+				}
 
-					const message = createAssistantMessage([{ type: "text", text: "unexpected second turn" }]);
-					stream.push({ type: "done", reason: "stop", message });
-				});
-				return stream;
-			},
-		);
+				const message = createAssistantMessage([{ type: "text", text: "unexpected second turn" }]);
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
 
 		for await (const event of stream) {
 			events.push(event);
@@ -670,9 +664,7 @@ describe("agentLoop with AgentMessage", () => {
 				message =>
 					message.role === "assistant" &&
 					Array.isArray(message.content) &&
-					message.content.some(
-						content => content.type === "text" && content.text === "unexpected second turn",
-					),
+					message.content.some(content => content.type === "text" && content.text === "unexpected second turn"),
 			),
 		).toBe(false);
 	});

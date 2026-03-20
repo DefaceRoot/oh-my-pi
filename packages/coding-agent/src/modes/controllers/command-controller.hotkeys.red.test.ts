@@ -15,17 +15,11 @@ class MockMarkdown {
 	invalidate(): void {}
 }
 
-class MockLoader {
-	constructor(..._args: unknown[]) {}
-}
+class MockLoader {}
 
-class MockSpacer {
-	constructor(..._args: unknown[]) {}
-}
+class MockSpacer {}
 
-class MockText {
-	constructor(..._args: unknown[]) {}
-}
+class MockText {}
 
 mock.module("@oh-my-pi/pi-tui", () => ({
 	Loader: MockLoader,

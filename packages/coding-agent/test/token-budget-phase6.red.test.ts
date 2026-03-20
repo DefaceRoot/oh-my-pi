@@ -444,7 +444,6 @@ describe("Phase 6 RED: startup token benchmark script contract", () => {
 	});
 });
 
-
 describe("Phase 6 RED: hybrid managed startup baseline budgets", () => {
 	it("keeps default managed startup payload within the intended baseline target", async () => {
 		const rowsByMode = await measureManagedStartupRowsForHybridBudget();

@@ -194,7 +194,10 @@ subagents:
 		const { RolesConfig } = await loadRolesConfigModule();
 		const rolesConfig = new RolesConfig(rolesPath);
 
-		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("default"))).toEqual(["implementation", "frontend"]);
+		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("default"))).toEqual([
+			"implementation",
+			"frontend",
+		]);
 		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("plan"))).toEqual(["planning", "workflow"]);
 		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("ask"))).toEqual([]);
 	});

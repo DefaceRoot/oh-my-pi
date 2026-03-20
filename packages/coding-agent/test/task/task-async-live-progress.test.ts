@@ -147,8 +147,10 @@ describe("TaskTool async live progress", () => {
 		await asyncJobManager.drain();
 
 		expect(runSubprocessCalls).toHaveLength(1);
-		const liveDetail = updates.find(detail =>
-			Array.isArray(detail.progress) && detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 321),
+		const liveDetail = updates.find(
+			detail =>
+				Array.isArray(detail.progress) &&
+				detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 321),
 		);
 		expect(liveDetail).toBeDefined();
 		expect((liveDetail?.progress?.[0] as Record<string, unknown>) ?? {}).toMatchObject({
@@ -160,8 +162,10 @@ describe("TaskTool async live progress", () => {
 			lastUpdatedMs: liveProgressTimestamp,
 		});
 
-		const completedDetail = updates.find(detail =>
-			Array.isArray(detail.progress) && detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 654),
+		const completedDetail = updates.find(
+			detail =>
+				Array.isArray(detail.progress) &&
+				detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 654),
 		);
 		expect(completedDetail).toBeDefined();
 		expect((completedDetail?.progress?.[0] as Record<string, unknown>) ?? {}).toMatchObject({

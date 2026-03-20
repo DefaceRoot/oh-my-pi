@@ -22,10 +22,7 @@ describe("subagent runtime registry", () => {
 		});
 
 		await expect(
-			stopSubagentRuntime(
-				{ id: "22-VerifyPhase07" },
-				"User stopped: waiting on product clarification",
-			),
+			stopSubagentRuntime({ id: "22-VerifyPhase07" }, "User stopped: waiting on product clarification"),
 		).resolves.toBe(true);
 		expect(stop).toHaveBeenCalledWith("User stopped: waiting on product clarification");
 	});
@@ -40,10 +37,7 @@ describe("subagent runtime registry", () => {
 		});
 
 		await expect(
-			stopSubagentRuntime(
-				{ sessionId: "omp-session-1497" },
-				"User stopped: no longer needed",
-			),
+			stopSubagentRuntime({ sessionId: "omp-session-1497" }, "User stopped: no longer needed"),
 		).resolves.toBe(true);
 		expect(stop).toHaveBeenCalledWith("User stopped: no longer needed");
 	});
@@ -58,9 +52,7 @@ describe("subagent runtime registry", () => {
 		});
 		unregisterSubagentRuntime("22-VerifyPhase07");
 
-		await expect(
-			stopSubagentRuntime({ id: "22-VerifyPhase07" }, "User stopped: done"),
-		).resolves.toBe(false);
+		await expect(stopSubagentRuntime({ id: "22-VerifyPhase07" }, "User stopped: done")).resolves.toBe(false);
 		expect(stop).not.toHaveBeenCalled();
 	});
 });

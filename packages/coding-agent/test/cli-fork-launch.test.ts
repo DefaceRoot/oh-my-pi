@@ -131,9 +131,7 @@ describe("Launcher handoff contract [SPECIFICATION]", () => {
 		// Document the expected fork entry point for handoff
 		const expectedForkEntry = path.join(FORK_REPO_ROOT, "packages/coding-agent/src/cli.ts");
 
-		expect(expectedForkEntry).toBe(
-			"/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/cli.ts"
-		);
+		expect(expectedForkEntry).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/cli.ts");
 		expect(FORK_REPO_ROOT).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
 	});
 

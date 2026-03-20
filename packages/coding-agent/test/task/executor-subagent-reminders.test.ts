@@ -452,7 +452,10 @@ describe("runSubprocess submit_result reminders", () => {
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
 			prompts.push(text);
 			if (promptIndex !== 1) return;
-			const assistant = createAssistantErrorMessage("Internal Network Failure", "tool completed before provider failure");
+			const assistant = createAssistantErrorMessage(
+				"Internal Network Failure",
+				"tool completed before provider failure",
+			);
 			state.messages.push(assistant);
 			emit({ type: "message_end", message: assistant });
 		});
@@ -533,11 +536,13 @@ describe("runSubprocess submit_result reminders", () => {
 			});
 			session.waitForIdle = waitForIdle;
 
-			(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-				session,
-				extensionsResult: {} as unknown as LoadExtensionsResult,
-				setToolUIContext: () => {},
-			});
+			(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue(
+				{
+					session,
+					extensionsResult: {} as unknown as LoadExtensionsResult,
+					setToolUIContext: () => {},
+				},
+			);
 
 			const result = await runSubprocess({
 				...baseOptions,
@@ -552,7 +557,6 @@ describe("runSubprocess submit_result reminders", () => {
 			expect(result.output).toContain('"continued": true');
 		}
 	});
-
 
 	it("surfaces abort reason when submit_result reports aborted status", async () => {
 		const session = createMockSession(({ promptIndex, emit, state }) => {

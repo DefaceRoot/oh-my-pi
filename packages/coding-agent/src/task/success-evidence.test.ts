@@ -24,34 +24,19 @@ describe("parseAgentFields successRequiresTools", () => {
 		const codeReviewerAgent = parseAgentFields(parseFrontmatter(codeReviewerAgentText).frontmatter);
 
 		expect(lintAgent?.successRequiresTools).toEqual(["bash"]);
-		expect(codeReviewerAgent?.successRequiresTools).toEqual([
-			"read",
-			"grep",
-			"find",
-			"bash",
-			"lsp",
-			"ast_grep",
-		]);
+		expect(codeReviewerAgent?.successRequiresTools).toEqual(["read", "grep", "find", "bash", "lsp", "ast_grep"]);
 	});
 });
 
 describe("validateSuccessToolRequirements", () => {
 	test("allows success when agent has no explicit evidence requirement", () => {
-		expect(
-			validateSuccessToolRequirements(
-				{ name: "explore" },
-				new Set<string>(),
-			),
-		).toBeNull();
+		expect(validateSuccessToolRequirements({ name: "explore" }, new Set<string>())).toBeNull();
 	});
 
 	test("rejects success when required tools never ran", () => {
 		expect(
-			validateSuccessToolRequirements(
-				{ name: "lint", successRequiresTools: ["bash"] },
-				new Set(["submit_result"]),
-			),
-		).toContain('must run at least one of: bash');
+			validateSuccessToolRequirements({ name: "lint", successRequiresTools: ["bash"] }, new Set(["submit_result"])),
+		).toContain("must run at least one of: bash");
 	});
 
 	test("allows success when any required tool ran", () => {

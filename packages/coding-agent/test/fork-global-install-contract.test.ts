@@ -27,7 +27,7 @@ describe("fork launcher contract", () => {
 
 		const launcher = await readText(launcherPath);
 		expect(launcher).toContain('export PI_CODING_AGENT_DIR="$FORK_ROOT/agent"');
-		expect(launcher).toContain('packages/coding-agent/src/cli.ts');
+		expect(launcher).toContain("packages/coding-agent/src/cli.ts");
 	});
 
 	test("installer links the local fork launcher instead of reinstalling packed globals", async () => {
