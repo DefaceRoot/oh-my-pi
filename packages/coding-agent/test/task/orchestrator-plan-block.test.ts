@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { PLAN_MODE_SUBAGENT_TOOLS } from "../../src/task/plan-mode-tools";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import { PLAN_MODE_SUBAGENT_TOOLS } from "../../src/task/plan-mode-tools";
 
 const runSubprocessAgents: string[] = [];
 let lastRunSubprocessAgent: Record<string, unknown> | null = null;
@@ -18,17 +18,24 @@ const stubResult: SingleResult = {
 	tokens: 100,
 };
 
-const availableAgents = ["explore", "research", "implement", "verifier", "coderabbit", "lint", "code-reviewer", "commit"].map(
-	name => ({
-		name,
-		description: `${name} test agent`,
-		source: "bundled" as const,
-		model: "default",
-		systemPrompt: `You are ${name}.`,
-		tools: name === "explore" ? ["read"] : undefined,
-		spawns: name === "explore" ? "*" : undefined,
-	}),
-);
+const availableAgents = [
+	"explore",
+	"research",
+	"implement",
+	"verifier",
+	"coderabbit",
+	"lint",
+	"code-reviewer",
+	"commit",
+].map(name => ({
+	name,
+	description: `${name} test agent`,
+	source: "bundled" as const,
+	model: "default",
+	systemPrompt: `You are ${name}.`,
+	tools: name === "explore" ? ["read"] : undefined,
+	spawns: name === "explore" ? "*" : undefined,
+}));
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	runSubprocess: async (opts: Record<string, unknown>) => {
