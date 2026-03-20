@@ -1,4 +1,16 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { buildPlanTodoBootstrapData } from "@oh-my-pi/pi-coding-agent/plan-mode/plan-todos";
+import { collectDelegationContext } from "@oh-my-pi/pi-coding-agent/task/delegation-context";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import {
+	getLatestTodoPhasesFromEntries,
+	TODO_BOOTSTRAP_ENTRY_TYPE,
+	type TodoPhase,
+} from "@oh-my-pi/pi-coding-agent/tools/todo-write";
+import { resolveToCwd } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import {
 	isOrchestratorParentToolAllowed,
 	resolveParentRuntimeRole,
@@ -71,38 +83,46 @@ function detectCurrentRole(ctx: ExtensionContext): string | undefined {
 	return undefined;
 }
 
-function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map((phase) => ({
-		id: phase.id,
-		name: phase.name,
-		tasks: phase.tasks.map((task) => ({
-			id: task.id,
-			content: task.content,
-			status: task.status,
-			notes: task.notes,
-		})),
-	}));
-}
+function resolvePlanTodoBootstrap(
+	ctx: ExtensionContext,
+): ReturnType<typeof buildPlanTodoBootstrapData> | undefined {
+	const metadata = collectDelegationContext({
+		cwd: ctx.cwd,
+		hasUI: ctx.hasUI,
+		getSessionFile: () => {
+			const manager = ctx.sessionManager as { getSessionFile?: () => string | undefined };
+			return manager.getSessionFile?.() ?? null;
+		},
+		getSessionSpawns: () => "*",
+		settings: {} as ToolSession["settings"],
+		getCompactContext: () => "",
+		getSessionEntries: () => ctx.sessionManager.getEntries() as Array<Record<string, unknown>>,
+		getPlanModeState: () => undefined,
+	} as ToolSession);
+	const planFilePath = metadata.planFilePath?.trim();
+	if (!planFilePath) return undefined;
 
-function getLatestTodoPhasesFromEntries(entries: SessionMessageEntry[]): TodoPhase[] {
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-
-		const message = entry.message;
-		if (
-			message?.role !== "toolResult" ||
-			message.toolName !== "todo_write" ||
-			message.isError ||
-			!Array.isArray(message.details?.phases)
-		) {
-			continue;
-		}
-
-		return cloneTodoPhases(message.details.phases as TodoPhase[]);
+	let resolvedPlanPath: string;
+	try {
+		resolvedPlanPath = planFilePath.startsWith("local://")
+			? resolveLocalUrlToPath(planFilePath, {
+				getArtifactsDir: () => ctx.sessionManager.getArtifactsDir?.() ?? null,
+				getSessionId: () => ctx.sessionManager.getSessionId?.() ?? null,
+			})
+			: path.normalize(resolveToCwd(planFilePath, ctx.cwd));
+	} catch {
+		return undefined;
 	}
 
-	return [];
+	if (!fs.existsSync(resolvedPlanPath)) return undefined;
+	const planContent = fs.readFileSync(resolvedPlanPath, "utf8");
+	return buildPlanTodoBootstrapData(planContent, planFilePath);
+}
+
+function persistPlanTodoBootstrap(ctx: ExtensionContext, data: NonNullable<ReturnType<typeof buildPlanTodoBootstrapData>>): void {
+	const sessionManager = ctx.sessionManager as { appendCustomEntry?: (customType: string, data?: unknown) => string };
+	if (!sessionManager.appendCustomEntry) return;
+	sessionManager.appendCustomEntry(TODO_BOOTSTRAP_ENTRY_TYPE, data);
 }
 
 function getTodoPlanDeficiency(phases: TodoPhase[]): string | undefined {
@@ -334,9 +354,16 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const todoPhases = getLatestTodoPhasesFromEntries(
-				ctx.sessionManager.getEntries() as SessionMessageEntry[],
+			let todoPhases = getLatestTodoPhasesFromEntries(
+				ctx.sessionManager.getEntries() as never,
 			);
+			if (todoPhases.length === 0) {
+				const bootstrap = resolvePlanTodoBootstrap(ctx);
+				if (bootstrap) {
+					todoPhases = bootstrap.phases;
+					persistPlanTodoBootstrap(ctx, bootstrap);
+				}
+			}
 			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 
