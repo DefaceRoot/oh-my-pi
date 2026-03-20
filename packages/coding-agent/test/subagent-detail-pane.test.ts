@@ -1031,7 +1031,7 @@ describe("SubagentDetailPane", () => {
 				tokens: undefined,
 			});
 			const messages = anomalies.map(a => a.message);
-			expect(messages).not.toContain(expect.stringContaining("No token data"));
+			expect(messages).not.toEqual(expect.arrayContaining([expect.stringContaining("No token data")]));
 		});
 
 		test("anomaly indicators render in detail pane", () => {
