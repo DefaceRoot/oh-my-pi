@@ -324,7 +324,7 @@ describe("delegation sidecar writing", () => {
 			});
 
 			// Allow fire-and-forget promise to settle
-			await new Promise(r => setTimeout(r, 50));
+			await Bun.sleep(50);
 
 			const sidecarFiles = fs.readdirSync(artifactsDir).filter(f => f.endsWith("-delegation-meta.json"));
 			expect(sidecarFiles.length).toBeGreaterThanOrEqual(1);
