@@ -355,7 +355,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	#orchestratorBoundaryMessage(agentName: string): string {
 		return (
 			`Cannot spawn '${agentName}' from orchestrator parent sessions. ` +
-			"Delegate an 'implement' worker first; lint, code-reviewer, and commit must run inside that implement session's quality loop before handoff."
+			"Delegate an 'implement' or 'debug' worker first; lint, code-reviewer, and commit must run inside that worker's quality loop before handoff."
 		);
 	}
 

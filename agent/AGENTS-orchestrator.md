@@ -2,7 +2,7 @@
 
 ## Delegation Envelope
 
-Orchestrator delegations use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`). The builder automatically populates plan paths, git metadata, worktree context, progress summaries, and commander's intent. Envelope richness scales by delegate type (minimal for lint/review, detailed for implement). Delegation envelopes are internal tooling; orchestrator responses to the user must never contain envelope syntax.
+Orchestrator delegations use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`). The builder automatically populates plan paths, git metadata, worktree context, progress summaries, and commander's intent. Envelope richness scales by delegate type (minimal for lint/review, detailed for implement/debug). Delegation envelopes are internal tooling; orchestrator responses to the user must never contain envelope syntax.
 
 ## Grafana Delegation Boundary
 
@@ -11,11 +11,12 @@ Orchestrator delegations use the `omp-delegation/v1` structured envelope (`skill
 
 ## Orchestrator Parent Delegation Boundary
 
-- During active implementation flow, parent/orchestrator turns may delegate only `explore`, `research`, and `implement`.
+- During active implementation flow, parent/orchestrator turns may delegate only `explore`, `research`, `implement`, and `debug`.
+- Route bug reports, failing tests, and unexpected behavior to `debug`; route known-good scoped code changes to `implement`.
 - Parent/orchestrator turns may delegate verification workers (`verifier` and `coderabbit`) only after implementation units complete for the current phase.
 - Parent/orchestrator turns MUST NOT spawn `lint`, `code-reviewer`, or `commit` for in-progress implementation work.
-- Quality gates and git handoff remain implementation-owned: `lint` -> `code-reviewer` -> remediation cycles -> `commit` before implementation completion is reported.
-- When an `implement` task requires NO file or code changes (running scripts, capturing output, executing deployments), include `<skip_quality_gates />` in the task `context` to disable the lint/code-review/commit hard blockers for that subagent. Omit the directive for any task that modifies repository files.
+- Quality gates and git handoff remain delegated-worker-owned: `implement` and `debug` sessions run `lint` -> `code-reviewer` -> remediation cycles -> `commit` before completion is reported.
+- When an `implement` or `debug` task requires NO file or code changes (running scripts, capturing output, executing deployments, diagnosis-only triage), include `<skip_quality_gates />` in the task `context` to disable the lint/code-review/commit hard blockers for that subagent. Omit the directive for any task that modifies repository files.
 ## Available Agents
 
 Spawn via Task tool with `agent: "<name>"`:
@@ -23,6 +24,7 @@ Spawn via Task tool with `agent: "<name>"`:
 - `explore`: Read-only codebase scout
 - `research`: Web + BTCA research specialist
 - `implement`: Implementation worker (owns lint -> code-reviewer -> commit loop)
+- `debug`: Root-cause debugging specialist (investigate, reproduce, and fix bugs)
 - `designer`: Frontend/UI specialist
 - `grafana`: Grafana investigation specialist
 - `lint`: Quality gate runner for implementation-owned checks

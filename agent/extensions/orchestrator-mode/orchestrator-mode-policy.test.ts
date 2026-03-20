@@ -179,6 +179,9 @@ describe("orchestrator-mode policy", () => {
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");
 		expect(prompt).toContain("The only exception is await when background work is already running");
+		expect(prompt).toContain("Bug reports, failing tests, and unexpected behavior MUST be delegated to the debug subagent.");
+		expect(prompt).toContain("Use implement for known-good scoped changes after diagnosis is complete.");
+		expect(prompt).toContain("- debug         : root-cause debugging specialist (diagnose, reproduce, and fix)");
 	});
 });
 

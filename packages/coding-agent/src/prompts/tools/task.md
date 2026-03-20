@@ -64,4 +64,15 @@ The builder automatically:
 Override the default profile via `options.profile` when a different richness level is warranted.
 Delegation envelope syntax is internal tooling and must not appear in user-facing responses.
 Refer to `skill://toon-delegation` for the full schema and field reference.
+
+Delegate type examples:
+- `implement`: known-good code changes with full implementation ownership.
+- `debug`: root-cause investigation plus verified fix delivery.
+- `designer`: frontend/UI design and implementation work.
+- `explore`: read-only codebase reconnaissance.
+- `research`: external-doc and web research.
+- `lint`: scoped lint/typecheck/test execution.
+- `code-reviewer`: evidence-first structural review.
+- `commit`: git staging/commit/push handoff only.
 </delegation>
+

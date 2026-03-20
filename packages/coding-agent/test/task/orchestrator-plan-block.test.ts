@@ -22,6 +22,7 @@ const availableAgents = [
 	"explore",
 	"research",
 	"implement",
+	"debug",
 	"verifier",
 	"coderabbit",
 	"lint",
@@ -109,7 +110,7 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 			const result = await executeWithAgent(restrictedAgent);
 			const text = collectText(result);
 			expect(text).toContain(`Cannot spawn '${restrictedAgent}' from orchestrator parent sessions`);
-			expect(text).toContain("Delegate an 'implement' worker first");
+			expect(text).toContain("Delegate an 'implement' or 'debug' worker first");
 			expect(runSubprocessAgents).toHaveLength(0);
 		});
 	}
@@ -140,14 +141,15 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 			await executeWithAgent("explore"),
 			await executeWithAgent("research"),
 			await executeWithAgent("implement"),
+			await executeWithAgent("debug"),
 			await executeWithAgent("verifier"),
 			await executeWithAgent("coderabbit"),
 		];
-		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "verifier", "coderabbit"]);
+		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "debug", "verifier", "coderabbit"]);
 		for (const result of results) {
 			const text = collectText(result);
 			expect(text).not.toContain("orchestrator parent sessions");
-			expect(text).not.toContain("Delegate an 'implement' worker first");
+			expect(text).not.toContain("Delegate an 'implement' or 'debug' worker first");
 		}
 	});
 
@@ -156,7 +158,7 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		expect(runSubprocessAgents).toEqual(["lint"]);
 		const text = collectText(result);
 		expect(text).not.toContain("Cannot spawn 'lint' from orchestrator parent sessions");
-		expect(text).not.toContain("Delegate an 'implement' worker first");
+		expect(text).not.toContain("Delegate an 'implement' or 'debug' worker first");
 	});
 
 	test("allows implement sessions to spawn lint, review, and commit", async () => {
@@ -170,7 +172,22 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		for (const result of results) {
 			const text = collectText(result);
 			expect(text).not.toContain("orchestrator parent sessions");
-			expect(text).not.toContain("Delegate an 'implement' worker first");
+			expect(text).not.toContain("Delegate an 'implement' or 'debug' worker first");
+		}
+	});
+
+	test("allows debug sessions to spawn lint, review, and commit", async () => {
+		const childSession = { hasUI: false, getRuntimeRole: () => "debug" };
+		const results = [
+			await executeWithAgent("lint", childSession),
+			await executeWithAgent("code-reviewer", childSession),
+			await executeWithAgent("commit", childSession),
+		];
+		expect(runSubprocessAgents).toEqual(["lint", "code-reviewer", "commit"]);
+		for (const result of results) {
+			const text = collectText(result);
+			expect(text).not.toContain("orchestrator parent sessions");
+			expect(text).not.toContain("Delegate an 'implement' or 'debug' worker first");
 		}
 	});
 
