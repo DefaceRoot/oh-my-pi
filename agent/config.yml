@@ -5,7 +5,7 @@ modelRoles:
   orchestrator: openai-codex/gpt-5.4:xhigh
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
-  implement: github-copilot/gpt-5.3-codex:high
+  implement: anthropic/claude-opus-4-6:high
   explore: openai-codex/gpt-5.4-mini:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
@@ -47,7 +47,7 @@ disabledProviders:
 memories: 
   enabled: true
 theme: 
-  dark: titanium
+  dark: dark-catppuccin
 agents_view: 
   columns: 
     status_width: 8

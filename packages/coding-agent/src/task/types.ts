@@ -2,8 +2,8 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import type { TaskSubagentStopRequest } from "./subagent-stop-request";
 import type { SubagentOutcome } from "./subagent-outcome";
+import type { TaskSubagentStopRequest } from "./subagent-stop-request";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
