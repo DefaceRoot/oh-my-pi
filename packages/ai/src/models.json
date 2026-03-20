@@ -5443,6 +5443,31 @@
 				"maxLevel": "high"
 			}
 		},
+		"gemini-3.1-flash-lite-preview": {
+			"id": "gemini-3.1-flash-lite-preview",
+			"name": "Gemini 3.1 Flash Lite Preview",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.25,
+				"output": 1.5,
+				"cacheRead": 0.0625,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
 		"gemini-3.1-pro-preview": {
 			"id": "gemini-3.1-pro-preview",
 			"name": "Gemini 3.1 Pro Preview",
@@ -6456,6 +6481,31 @@
 					"low",
 					"high"
 				]
+			}
+		},
+		"gemini-3.1-flash-lite-preview": {
+			"id": "gemini-3.1-flash-lite-preview",
+			"name": "Gemini 3.1 Flash Lite Preview",
+			"api": "google-vertex",
+			"provider": "google-vertex",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.25,
+				"output": 1.5,
+				"cacheRead": 0.0625,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	},

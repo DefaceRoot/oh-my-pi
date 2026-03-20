@@ -81,6 +81,35 @@ describe("model thinking metadata", () => {
 		expect(() => mapEffortToGoogleThinkingLevel(model, Effort.Medium)).toThrow(/not supported/);
 	});
 
+	it("keeps bundled Gemini 3.1 Flash-Lite metadata explicit for Google API and Vertex", () => {
+		const google = getBundledModel("google", "gemini-3.1-flash-lite-preview");
+		const vertex = getBundledModel("google-vertex", "gemini-3.1-flash-lite-preview");
+
+		expect(google?.id).toBe("gemini-3.1-flash-lite-preview");
+		expect(vertex?.id).toBe("gemini-3.1-flash-lite-preview");
+		expect(google?.thinking).toEqual({
+			mode: "google-level",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		});
+		expect(vertex?.thinking).toEqual({
+			mode: "google-level",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		});
+		expect(google?.contextWindow).toBe(1048576);
+		expect(vertex?.contextWindow).toBe(1048576);
+		expect(google?.maxTokens).toBe(65536);
+		expect(vertex?.maxTokens).toBe(65536);
+
+		if (!google || !vertex) {
+			return;
+		}
+
+		expect(mapEffortToGoogleThinkingLevel(google, Effort.Minimal)).toBe("MINIMAL");
+		expect(mapEffortToGoogleThinkingLevel(vertex, Effort.High)).toBe("HIGH");
+	});
+
 	it("encodes anthropic transport mode in metadata", () => {
 		const opus45 = createModel({
 			id: "claude-opus-4-5",
