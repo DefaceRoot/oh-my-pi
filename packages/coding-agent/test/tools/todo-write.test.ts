@@ -3,7 +3,11 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
-import { getLatestTodoPhasesFromEntries, withTodoPhasesPreserveData } from "../../src/tools/todo-write";
+import {
+	getLatestTodoPhasesFromEntries,
+	TODO_BOOTSTRAP_ENTRY_TYPE,
+	withTodoPhasesPreserveData,
+} from "../../src/tools/todo-write";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -164,5 +168,46 @@ describe("todo state compaction helpers", () => {
 		];
 
 		expect(getLatestTodoPhasesFromEntries(entries)).toEqual([]);
+	});
+});
+
+describe("todo bootstrap entries", () => {
+	it("reads prepopulated phases when no todo_write result exists yet", () => {
+		const phases = getLatestTodoPhasesFromEntries([
+			{
+				type: "custom",
+				customType: TODO_BOOTSTRAP_ENTRY_TYPE,
+				data: {
+					phases: [
+						{
+							id: "phase-1",
+							name: "Phase 1 — Bootstrap",
+							tasks: [
+								{
+									id: "task-1",
+									content: "Unit 1.1: Parse headings",
+									status: "in_progress",
+								},
+							],
+						},
+					],
+				},
+			} as never,
+		]);
+
+		expect(phases).toEqual([
+			{
+				id: "phase-1",
+				name: "Phase 1 — Bootstrap",
+				tasks: [
+					{
+						id: "task-1",
+						content: "Unit 1.1: Parse headings",
+						status: "in_progress",
+						notes: undefined,
+					},
+				],
+			},
+		]);
 	});
 });
