@@ -239,7 +239,18 @@ function buildFallbackDelegationToon(session: ToolSession, delegate: string, tas
 	const inherited = collectDelegationContext(session);
 	const delegator = normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole ?? "unknown";
 	const repoRoot = inherited.repoRoot ?? session.cwd;
-	const envelopeSeed = [repoRoot, delegate, task.id, task.description, task.assignment].join("\n");
+	const envelopeSeed = [
+		repoRoot,
+		delegate,
+		task.id,
+		task.description,
+		task.assignment,
+		inherited.worktreePath ?? "",
+		inherited.branchName ?? "",
+		inherited.baseBranch ?? "",
+		inherited.planFilePath ?? "",
+		inherited.planWorkspaceDir ?? "",
+	].join("\n");
 	const envelopeId = `del_${createHash("sha256").update(envelopeSeed).digest("hex").slice(0, 12)}`;
 
 	return [
@@ -251,6 +262,16 @@ function buildFallbackDelegationToon(session: ToolSession, delegate: string, tas
 		`    created_at: ${JSON.stringify(new Date().toISOString())}`,
 		"  context:",
 		`    repo_root: ${JSON.stringify(repoRoot)}`,
+		...(inherited.worktreePath ? [`    worktree:`, `      path: ${JSON.stringify(inherited.worktreePath)}`] : []),
+		...(inherited.branchName || inherited.baseBranch
+			? [
+				`    git:`,
+				...(inherited.branchName ? [`      branch: ${JSON.stringify(inherited.branchName)}`] : []),
+				...(inherited.baseBranch ? [`      base_branch: ${JSON.stringify(inherited.baseBranch)}`] : []),
+			]
+			: []),
+		...(inherited.planFilePath ? [`    plan_path: ${JSON.stringify(inherited.planFilePath)}`] : []),
+		...(inherited.planWorkspaceDir ? [`    plan_workspace_dir: ${JSON.stringify(inherited.planWorkspaceDir)}`] : []),
 		"  roles:",
 		`    delegator: ${JSON.stringify(delegator)}`,
 		`    delegate: ${JSON.stringify(delegate)}`,
