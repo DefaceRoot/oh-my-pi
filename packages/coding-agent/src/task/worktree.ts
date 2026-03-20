@@ -948,5 +948,7 @@ export async function mergeTaskBranches(
 export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
 	for (const branch of branches) {
 		await $`git branch -D ${branch}`.cwd(repoRoot).quiet().nothrow();
+		await $`git push origin --delete ${branch}`.cwd(repoRoot).quiet().nothrow();
+		await $`git branch -dr origin/${branch}`.cwd(repoRoot).quiet().nothrow();
 	}
 }
