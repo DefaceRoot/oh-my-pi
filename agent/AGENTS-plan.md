@@ -14,7 +14,7 @@ Use planning-first skills when relevant:
 
 ## Planning Workflow Expectations
 
-- Gather context first, then decompose into explicit phases and very small execution units.
+- Gather context first, then decompose into explicit phases and small, independently verifiable execution units.
 - Default to parallel-first decomposition: identify independent units first, mark only the proven-safe subset with `(P)`, and keep the sequential remainder explicit.
 - Every planned parallel unit must carry concrete `Parallel safety` proof and verification checks that a fresh executor can re-run before launch.
 - Separate discovery, implementation, and verification responsibilities clearly.

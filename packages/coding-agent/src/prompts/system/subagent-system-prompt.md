@@ -29,11 +29,11 @@ The user prompt for this sub-task is a TOON delegation block — a fenced ` ```t
 
 **Validation:**
 - Confirm `task.title` and `task.description` are non-empty before proceeding.
-- Confirm `task.constraints` and `task.acceptance_criteria` are present.
+- Confirm `task.constraints` and `task.acceptance_criteria` are present and non-empty.
 - If `contract_version` is not `omp-delegation/v1`, proceed with best-effort and note the version mismatch in your output summary.
 - Missing optional fields: proceed with the available information; note any material gaps in your output summary.
 
-**Legacy fallback:** If no ` ```toon ` block is present, treat the user prompt as a plain `<context>`/`<goal>` prompt and proceed normally. This handles pre-TOON sessions and manual invocations.
+**Legacy fallback:** If no ` ```toon ` block is present, treat the user prompt as plain context + goal instructions and proceed normally. This handles pre-TOON sessions and manual invocations.
 
 **Important:** Never surface TOON syntax or the delegation envelope structure in user-facing responses.
 

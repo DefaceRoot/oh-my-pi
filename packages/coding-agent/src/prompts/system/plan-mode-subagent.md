@@ -34,14 +34,14 @@ When dispatched via the standard task pipeline, the user prompt will be a TOON d
 
 The XML constraints in this system prompt and the TOON block are **complementary, not conflicting**: the XML defines behavioral restrictions (read-only, no file writes), while the TOON block provides task context and metadata for the current assignment.
 
-Extract your specific plan-mode assignment from the TOON `delegation.task` fields:
-- `delegation.task.title` + `delegation.task.description` — primary directive
-- `delegation.task.constraints` — hard constraints to obey
-- `delegation.task.acceptance_criteria` — done conditions
-- `delegation.task.intent` (if present) — guiding principle for autonomous decisions
-- `delegation.context.plan_path` (if present) — read `plan_excerpt` first; consult full plan via `plan_path` only if excerpt is insufficient
-- `delegation.progress.lessons_learned` (if present) — read before starting
-- `delegation.retry_context` (if present) — read `prior_failure.diagnosis`; do not repeat the failing approach
+Extract your specific plan-mode assignment from the TOON envelope's top-level fields:
+- `task.title` + `task.description` — primary directive
+- `task.constraints` — hard constraints to obey
+- `task.acceptance_criteria` — done conditions
+- `task.intent` (if present) — guiding principle for autonomous decisions
+- `context.plan_path` (if present) — read `plan_excerpt` first; consult full plan via `plan_path` only if excerpt is insufficient
+- `progress.lessons_learned` (if present) — read before starting
+- `retry_context` (if present) — read `prior_failure.diagnosis`; do not repeat the failing approach
 
 If no ` ```toon ` block is present, treat the user prompt as plain `<context>`/`<goal>` text and proceed normally.
 

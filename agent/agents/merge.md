@@ -75,7 +75,10 @@ Receive from parent assignment in one of two modes:
    - `git branch --list`
    - `git log --oneline --decorate -20`
 2. Review provided conflict context (`plan_excerpt`, branch summaries, conflicting branch names). If intent is still unclear, spawn `explore` agents to inspect the affected files before resolving.
-3. Replay integration in the provided branch order with `git cherry-pick <branch>` and continue until a conflict appears.
+3. Replay each branch's commits in the provided order.
+   - Determine the commit range to replay for each branch (for example, `git rev-list --reverse <merge-base>..<branch>`).
+   - Cherry-pick those commits one by one.
+   - Stop on conflicts, resolve them, then continue with `git cherry-pick --continue`.
 4. For each conflict:
    a. Inspect conflict hunks: `git diff --cc`
    b. Compare per-branch history for touched files
