@@ -34,7 +34,7 @@ When dispatched via the standard task pipeline, the user prompt will be a TOON d
 
 The XML constraints in this system prompt and the TOON block are **complementary, not conflicting**: the XML defines behavioral restrictions (read-only, no file writes), while the TOON block provides task context and metadata for the current assignment.
 
-Extract your specific plan-mode assignment from the TOON envelope's top-level fields:
+Extract your specific plan-mode assignment from the TOON block fields under the `delegation:` root:
 - `task.title` + `task.description` — primary directive
 - `task.constraints` — hard constraints to obey
 - `task.acceptance_criteria` — done conditions
