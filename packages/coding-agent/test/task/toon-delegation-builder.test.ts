@@ -397,11 +397,14 @@ describe("toon delegation builder", () => {
 			const cases: Array<[string, InputProfileMode]> = [
 				["lint", "minimal"],
 				["code-reviewer", "minimal"],
+				["commit", "minimal"],
 				["explore", "standard"],
 				["research", "standard"],
 				["plan-verifier", "standard"],
+				["merge", "standard"],
 				["implement", "detailed"],
 				["task", "detailed"],
+				["designer", "detailed"],
 			];
 
 			for (const [delegate, expectedMode] of cases) {

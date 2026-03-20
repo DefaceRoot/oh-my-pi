@@ -323,12 +323,15 @@ const CONTRACT_VERSION = "omp-delegation/v1";
 const DEFAULT_PROFILE_BY_DELEGATE: Record<string, InputProfileMode> = {
 	lint: "minimal",
 	"code-reviewer": "minimal",
+	commit: "minimal",
 	explore: "standard",
 	research: "standard",
 	"plan-verifier": "standard",
+	merge: "standard",
 	implement: "detailed",
 	debug: "detailed",
 	task: "detailed",
+	designer: "detailed",
 };
 
 const ROOT_FIELD_ORDER = [
