@@ -180,7 +180,9 @@ describe("orchestrator-mode policy", () => {
 		expect(prompt).toContain("create a detailed phased todo list with todo_write");
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");
-		expect(prompt).toContain("The only exception is await when background work is already running");
+		expect(prompt).toContain("Never park on indefinite await. Every await call MUST set timeout");
+		expect(prompt).toContain("After each await timeout or completion, immediately check whether independent work can be dispatched now.");
+		expect(prompt).toContain("Dispatch any ready independent work before issuing another await call.");
 		expect(prompt).toContain("Routing decision tree: bug reports, failing tests, and unexpected behavior MUST go to the debug subagent.");
 		expect(prompt).toContain("Routing decision tree: known-good scoped code changes go to implement after diagnosis is complete.");
 		expect(prompt).toContain("Routing decision tree: direct git-only handoff goes to commit only when no implementation-owned file set is pending.");
