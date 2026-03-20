@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { logger } from "@oh-my-pi/pi-utils";
 
 type InputProfileMode = "minimal" | "standard" | "detailed";
 
@@ -406,7 +407,6 @@ describe("toon delegation builder", () => {
 				["debug", "detailed"],
 				["designer", "detailed"],
 				["task", "detailed"],
-				["designer", "detailed"],
 			];
 
 			for (const [delegate, expectedMode] of cases) {
@@ -698,7 +698,7 @@ describe("token budget trimming", () => {
 	});
 	it("warns when envelope remains over budget after all trim steps", async () => {
 		await withTempDir(async cwd => {
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 			const builderModule = await loadBuilderModule();
 			try {
 				await builderModule.buildToonDelegation({

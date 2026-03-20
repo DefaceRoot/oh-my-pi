@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import { resolveLocalUrlToPath } from "../internal-urls/local-protocol";
 import { resolveToCwd } from "../tools/path-utils";
@@ -332,7 +333,6 @@ const DEFAULT_PROFILE_BY_DELEGATE: Record<string, InputProfileMode> = {
 	debug: "detailed",
 	designer: "detailed",
 	task: "detailed",
-	designer: "detailed",
 };
 
 const ROOT_FIELD_ORDER = [
@@ -1231,7 +1231,7 @@ function applyTokenBudgetTrim(metadata: DelegationMetadata): {
 	}
 	const finalToon = renderDelegationToon(current);
 	if (estimateTokenCount(finalToon) > TOKEN_BUDGET) {
-		console.warn(`[toon-delegation] envelope still exceeds ${TOKEN_BUDGET}-token budget after all trim steps`);
+		logger.warn(`[toon-delegation] envelope still exceeds ${TOKEN_BUDGET}-token budget after all trim steps`);
 	}
 	return { metadata: current, toon: finalToon, trimmed: true };
 }
@@ -1243,22 +1243,22 @@ export async function buildToonDelegation(input: BuildToonDelegationInput): Prom
 	// Quality linter runs before TOON serialization
 	const quality_report = await validateDelegationQuality(metadata, input.session.cwd);
 	for (const w of quality_report.warnings) {
-		console.warn(`[toon-delegation] warning: ${w}`);
+		logger.warn(`[toon-delegation] warning: ${w}`);
 	}
 	for (const e of quality_report.errors) {
-		console.error(`[toon-delegation] error: ${e}`);
+		logger.error(`[toon-delegation] error: ${e}`);
 	}
 
 	// Render, apply token budget trim, re-render if needed
 	const { metadata: finalMetadata, toon: finalToon, trimmed } = applyTokenBudgetTrim(metadata);
 	if (trimmed) {
-		console.warn(`[toon-delegation] envelope trimmed to fit ${TOKEN_BUDGET}-token budget`);
+		logger.warn(`[toon-delegation] envelope trimmed to fit ${TOKEN_BUDGET}-token budget`);
 	}
 
 	// Round-trip structural validation
 	const validation_passed = validateToonRoundTrip(finalToon, finalMetadata);
 	if (!validation_passed) {
-		console.warn("[toon-delegation] TOON round-trip validation failed");
+		logger.warn("[toon-delegation] TOON round-trip validation failed");
 	}
 
 	return {
