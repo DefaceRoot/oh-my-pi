@@ -98,6 +98,22 @@ describe("implementation quality-loop delegation", () => {
 		expect(dispatchSkill).toContain("Never use isolation for quality-loop delegations (`lint`, `code-reviewer`, `commit`)");
 	});
 
+
+	test("orchestrator guidance and prompt injection require `(P)`-driven progressive parallelism", async () => {
+		const orchestratorRule = await readFile(orchestratorModePath);
+		const dispatchSkill = await readFile(dispatchSkillPath);
+		const implementationEngine = await readFile(implementationEnginePath);
+
+		expect(orchestratorRule).toContain("sibling units explicitly marked `(P)` with `Parallel safety` proof");
+		expect(orchestratorRule).toContain("Start with 2-3 concurrent implementation subagents for the first clean batch");
+		expect(orchestratorRule).toContain("Do not invent extra planned parallel batches beyond the explicit `(P)` set");
+		expect(dispatchSkill).toContain("## Planned Work and `(P)` Markers");
+		expect(dispatchSkill).toContain("Treat them as strong evidence");
+		expect(dispatchSkill).toContain("Start with 2-3 agents in the first batch");
+		expect(implementationEngine).toContain("For planned work, parallel fan-out is driven by sibling units explicitly marked `(P)`");
+		expect(implementationEngine).toContain("Treat `(P)` as strong evidence, not blind trust");
+		expect(implementationEngine).toContain("Start planned parallel execution with 2-3 Task-tool subagents");
+	});
 	test("agent config disables worktree-policy extension", async () => {
 		const config = await readFile(configPath);
 		expect(config).toMatch(/disabledExtensions:\s*[\r\n]+\s*- extension-module:worktree-policy/);
