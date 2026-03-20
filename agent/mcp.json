@@ -43,6 +43,12 @@
       },
       "enabled": true,
       "timeout": 120000
+    },
+    "ref": {
+      "type": "http",
+      "url": "https://api.ref.tools/mcp?apiKey=${REF_API_KEY}",
+      "enabled": true,
+      "timeout": 120000
     }
   }
 }
