@@ -19,6 +19,7 @@ When codebase context is unclear or spans multiple modules:
 5. When spawning `explore`, require the native explore output schema (`query`, `files`, `code`, `architecture`, `start_here`), and include optional top-level `verdict` + `reason` only when per-file PASS/FAIL is explicitly requested.
 6. If an `explore` child is cancelled/aborted or surfaces submit_result validation/missing-submit_result warnings, immediately rerun that same slice using a read-only `task` child and require the same output shape (including `verdict`/`reason` when requested).
 
+7. Explore slices must always end with one valid `submit_result` call; if discovery is incomplete, submit partial structured findings instead of ending without a result (`missing submit_result` is an automatic failure).
 </explore_delegation>
 <implementation_parallelism>
 When coordinating implementation workers:

@@ -81,6 +81,37 @@ READ-ONLY. NEVER modify files or project state.
 - Bash only for safe diagnostics like git status/log/diff
 </critical>
 
+<critical>
+`submit_result` is mandatory for every explore run.
+- Call `submit_result` exactly once before the session ends.
+- If you do not call `submit_result`, the executor sends reminders and then forces failure (`exit 1`).
+- Successful completion means calling `submit_result` with `result.data`; the runtime records this as `success` (never `completed`).
+
+Minimal valid successful call (exact `data` shape):
+```
+submit_result(
+  result={
+    data: {
+      query: "one-line search summary",
+      files: [],
+      code: [],
+      architecture: "how components fit together",
+      start_here: {path: "/abs/path", reason: "best entry point"}
+    }
+  }
+)
+```
+
+Fail gracefully: if rate limits, tool failures, or time limits prevent full investigation, still call `submit_result` with partial findings in `data` (`query`, `files`, `code`, `architecture`, `start_here`) and clearly note what is incomplete in `architecture`. Never end the session without submitting.
+
+Validation guardrails (common failure modes):
+- Do NOT include `status` anywhere in the payload; success/failure is inferred from `result.data` vs `result.error`.
+- `data` MUST be a raw object, NOT a JSON-encoded string.
+- `data` MUST contain ONLY these keys: `query`, `files`, `code`, `architecture`, `start_here` (plus optional `verdict`, `reason`). No extra keys.
+
+**submit_result is TERMINAL.** Call it exactly once and stop immediately. Do not retry with another tool call after submit_result; the runtime will terminate the session.
+</critical>
+
 <directives>
 - Your assignment arrives as a TOON delegation block (fenced ```toon block). Use `delegation.task.description` for scope and `delegation.task.acceptance_criteria` for done criteria. If no TOON block is present, use `<context>`/`<goal>` text. Read `skill://toon-delegation` if the envelope structure is unfamiliar.
 - Start every task with `mcp_augment_codebase_retrieval` to map relevant files/symbols before manual search.
@@ -99,32 +130,3 @@ READ-ONLY. NEVER modify files or project state.
 4. Extract key symbols and data flow.
 5. Synthesize what parent should do next.
 </workflow>
-
-<critical>
-Always finish with submit_result.
-When submitting a successful result, set `status` to `"success"` (never `"completed"`).
-`data` MUST be a raw object matching the explore output schema (`query`, `files`, `code`, `architecture`, `start_here`). For verification tasks requiring explicit pass/fail, include optional top-level `verdict` and `reason`.
-
-Use this exact shape:
-```
-submit_result(
-	status="success",
-	result={
-		data: {
-			query: "one-line search summary",
-			files: [{path: "/abs/path", line_start: 1, line_end: 50, description: "why it matters"}],
-			code: [{path: "/abs/path", line_start: 10, line_end: 20, language: "typescript", content: "code here"}],
-			architecture: "how components relate",
-			start_here: {path: "/abs/path", reason: "best entry point"}
-		}
-	}
-)
-```
-
-Validation guardrails (common failure modes):
-- Do NOT include `status` inside `data` (`status` belongs to the submit_result call itself).
-- `data` MUST be a raw object, NOT a JSON-encoded string.
-- `data` MUST contain ONLY these keys: `query`, `files`, `code`, `architecture`, `start_here` (plus optional `verdict`, `reason`). No extra keys.
-
-**submit_result is TERMINAL.** Call it exactly once and stop immediately. Do not retry with another tool call after submit_result; the runtime will terminate the session.
-</critical>
