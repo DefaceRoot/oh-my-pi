@@ -118,7 +118,7 @@ function createMessageEntry(id: string, message: Record<string, unknown>, parent
 		parentId,
 		timestamp: new Date(0).toISOString(),
 		message,
-	} as SessionEntry;
+	} as unknown as SessionEntry;
 }
 
 function createCompactionEntry(
@@ -135,7 +135,7 @@ function createCompactionEntry(
 		firstKeptEntryId: parentId,
 		tokensBefore: 123,
 		preserveData,
-	} as SessionEntry;
+	} as unknown as SessionEntry;
 }
 
 describe("todo state compaction helpers", () => {
@@ -176,6 +176,9 @@ describe("todo bootstrap entries", () => {
 		const phases = getLatestTodoPhasesFromEntries([
 			{
 				type: "custom",
+				id: "bootstrap-1",
+				parentId: null,
+				timestamp: new Date(0).toISOString(),
 				customType: TODO_BOOTSTRAP_ENTRY_TYPE,
 				data: {
 					phases: [
@@ -192,7 +195,7 @@ describe("todo bootstrap entries", () => {
 						},
 					],
 				},
-			} as never,
+			},
 		]);
 
 		expect(phases).toEqual([
