@@ -246,6 +246,8 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 			metadata.repoRoot ||
 			metadata.branchName ||
 			metadata.baseBranch ||
+			metadata.parentEnvelopeId ||
+			metadata.envelopeId ||
 			metadata.planReference ||
 			metadata.planFilePath ||
 			metadata.planWorkspaceDir,
@@ -270,6 +272,12 @@ export function buildDelegationContext(session: ToolSession): string | undefined
 	}
 	if (metadata.baseBranch) {
 		lines.push(`base_branch: ${JSON.stringify(metadata.baseBranch)}`);
+	}
+	if (metadata.parentEnvelopeId) {
+		lines.push(`parent_envelope_id: ${JSON.stringify(metadata.parentEnvelopeId)}`);
+	}
+	if (metadata.envelopeId) {
+		lines.push(`envelope_id: ${JSON.stringify(metadata.envelopeId)}`);
 	}
 	if (metadata.planReference) {
 		lines.push(`plan_reference: ${JSON.stringify(metadata.planReference)}`);
