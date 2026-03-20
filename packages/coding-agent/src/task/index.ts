@@ -323,7 +323,7 @@ async function renderTaskWithDelegationToon(
 		delegationContext = buildFallbackDelegationToon(session, delegate, task);
 	}
 
-	return renderTemplate(delegationContext, task);
+	return renderTemplate(trimmedContext, task, { delegationContext });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
