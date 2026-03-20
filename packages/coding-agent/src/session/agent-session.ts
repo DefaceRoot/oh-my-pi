@@ -3592,6 +3592,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		}
 		const safeCount = Math.max(0, Math.min(checkpointState.checkpointMessageCount, this.agent.state.messages.length));
 		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
+		this.#closeCodexProviderSessionsForHistoryRewrite();
 		try {
 			this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
 				startedAt: checkpointState.startedAt,
@@ -5228,10 +5229,15 @@ Be thorough - include exact file paths, function names, error messages, and tech
 			estimatedFromMessages += estimateTokens(message);
 		}
 
+		const rewindReportIndex = messages.findLastIndex(
+			message => message.role === "custom" && message.customType === "rewind-report",
+		);
+
 		// Find last assistant message with usage
 		let lastUsageIndex: number | undefined;
 		let lastUsage: Usage | undefined;
 		for (let i = messages.length - 1; i >= 0; i--) {
+			if (rewindReportIndex >= 0 && i <= rewindReportIndex) break;
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
 			const assistantMsg = msg as AssistantMessage;
