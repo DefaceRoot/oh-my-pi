@@ -140,9 +140,11 @@ describe("orchestrator-mode policy", () => {
 		expectAllowed(emptyTodoContext(), "await");
 	});
 
-	it("blocks everything except todo_write and await when todo refresh is required", () => {
+	it("blocks everything except todo_write, await, and agent:// reads when todo refresh is required", () => {
 		expectBlocked(staleTodoContext(), "task", { agent: "implement" });
 		expectBlocked(staleTodoContext(), "ask");
+		expectBlocked(staleTodoContext(), "read", { path: "agent/AGENTS.md" });
+		expectAllowed(staleTodoContext(), "read", { path: "agent://del_abc/output" });
 		expectAllowed(staleTodoContext(), "todo_write");
 		expectAllowed(staleTodoContext(), "await");
 	});

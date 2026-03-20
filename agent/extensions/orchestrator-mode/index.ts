@@ -200,6 +200,13 @@ function isTodoGateExceptionTool(toolName: string): boolean {
 	return toolName === "todo_write" || toolName === "await";
 }
 
+function isAgentResultRead(event: OrchestratorPolicyEvent): boolean {
+	if (event.toolName !== "read") return false;
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const readPath = typeof input.path === "string" ? input.path.trim() : "";
+	return readPath.startsWith("agent://");
+}
+
 function buildOrchestratorPrompt(): string {
 	return [
 		"",
@@ -267,7 +274,10 @@ function shouldBlockTool(
 		return undefined;
 	}
 
-	if (context.todoRefreshRequired && !isTodoGateExceptionTool(event.toolName)) {
+	const allowTodoRefreshGateBypass =
+		isTodoGateExceptionTool(event.toolName) || isAgentResultRead(event);
+
+	if (context.todoRefreshRequired && !allowTodoRefreshGateBypass) {
 		return {
 			block: true,
 			reason:

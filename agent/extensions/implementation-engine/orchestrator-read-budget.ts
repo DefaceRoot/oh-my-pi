@@ -2,7 +2,7 @@ type BudgetState = "pre_delegation" | "post_task_verification";
 
 type ReadResult = { allowed: true } | { allowed: false; reason: string };
 
-const PROTOCOL_PREFIXES = ["skill://", "memory://", "rule://", "plan://"];
+const PROTOCOL_PREFIXES = ["skill://", "memory://", "rule://", "plan://", "agent://"];
 
 export function isOrchestratorReadProtocolPath(path: string): boolean {
 	return PROTOCOL_PREFIXES.some(prefix => path.startsWith(prefix));
