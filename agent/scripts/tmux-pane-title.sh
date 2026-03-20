@@ -229,6 +229,7 @@ compose_centered_title() {
   local width="$1"
   local left_text="$2"
   local center_text="$3"
+  local fill_char="═"
   local left_trunc
   local center_trunc
   local center_len
@@ -245,11 +246,12 @@ compose_centered_title() {
   fi
 
   left_trunc="$(truncate_text "$left_text" "$width")"
-  center_trunc="$(truncate_text "$center_text" "$width")"
+  center_trunc="$(truncate_text " ${center_text} " "$width")"
   center_len="${#center_trunc}"
   center_styled="#[bold]${center_trunc}#[nobold]"
 
   printf -v canvas '%*s' "$width" ''
+  canvas="${canvas// /$fill_char}"
   canvas="${left_trunc}${canvas:${#left_trunc}}"
 
   if ((center_len == 0)); then
