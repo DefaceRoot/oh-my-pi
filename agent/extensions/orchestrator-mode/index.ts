@@ -7,7 +7,9 @@ import { collectDelegationContext } from "@oh-my-pi/pi-coding-agent/task/delegat
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	getLatestTodoPhasesFromEntries,
+	getLatestTodoPhasesFromEntriesOrUndefined,
 	TODO_BOOTSTRAP_ENTRY_TYPE,
+	type TodoBootstrapEntryData,
 	type TodoPhase,
 } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
 import { resolveToCwd } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
@@ -59,7 +61,7 @@ function detectCurrentRole(ctx: ExtensionContext): string | undefined {
 
 function resolvePlanTodoBootstrap(
 	ctx: ExtensionContext,
-): ReturnType<typeof buildPlanTodoBootstrapData> | undefined {
+): TodoBootstrapEntryData | undefined {
 	const metadata = collectDelegationContext({
 		cwd: ctx.cwd,
 		hasUI: ctx.hasUI,
@@ -93,7 +95,7 @@ function resolvePlanTodoBootstrap(
 	return buildPlanTodoBootstrapData(planContent, planFilePath);
 }
 
-function persistPlanTodoBootstrap(ctx: ExtensionContext, data: NonNullable<ReturnType<typeof buildPlanTodoBootstrapData>>): void {
+function persistPlanTodoBootstrap(ctx: ExtensionContext, data: TodoBootstrapEntryData): void {
 	const sessionManager = ctx.sessionManager as { appendCustomEntry?: (customType: string, data?: unknown) => string };
 	if (!sessionManager.appendCustomEntry) return;
 	sessionManager.appendCustomEntry(TODO_BOOTSTRAP_ENTRY_TYPE, data);
@@ -328,17 +330,17 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			let todoPhases = getLatestTodoPhasesFromEntries(
+			let todoPhases = getLatestTodoPhasesFromEntriesOrUndefined(
 				ctx.sessionManager.getEntries() as never,
 			);
-			if (todoPhases.length === 0) {
+			if (todoPhases === undefined) {
 				const bootstrap = resolvePlanTodoBootstrap(ctx);
 				if (bootstrap) {
 					todoPhases = bootstrap.phases;
 					persistPlanTodoBootstrap(ctx, bootstrap);
 				}
 			}
-			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
+			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases ?? []);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 
 			pi.logger.debug("orchestrator-mode: enforcing delegation-only parent policy", {
