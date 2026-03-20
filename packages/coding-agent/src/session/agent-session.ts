@@ -88,6 +88,7 @@ import { executePython as executePythonCommand, type PythonResult } from "../ipy
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
 import { getLatestPlanModeActivePlanFilePath } from "../plan-mode/active-plan-file";
+import { buildPlanTodoBootstrapData } from "../plan-mode/plan-todos";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffOverflowFocusPrompt from "../prompts/system/auto-handoff-overflow-focus.md" with { type: "text" };
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
@@ -98,12 +99,13 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import { collectDelegationContext } from "../task/delegation-context";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase, withTodoPhasesPreserveData } from "../tools/todo-write";
+import { getLatestTodoPhasesFromEntriesOrUndefined, type TodoItem, type TodoPhase, withTodoPhasesPreserveData } from "../tools/todo-write";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
@@ -510,7 +512,6 @@ export class AgentSession {
 		this.#asyncJobManager.cancelAll();
 		return runningJobs.length;
 	}
-
 
 	// =========================================================================
 	// Event Subscription
@@ -1826,7 +1827,7 @@ export class AgentSession {
 		const state = this.#planModeState;
 		if (!state?.enabled) return state;
 		const reboundPlanFilePath = getLatestPlanModeActivePlanFilePath(
-			this.sessionManager.getEntries() as Array<Record<string, unknown>>,
+			this.sessionManager.getEntries() as unknown as Array<Record<string, unknown>>,
 			{
 				cwd: this.sessionManager.getCwd(),
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
@@ -2569,8 +2570,37 @@ export class AgentSession {
 		this.#todoPhases = this.#cloneTodoPhases(phases);
 	}
 
+	#loadPlanTodoPhases(): TodoPhase[] | undefined {
+		const metadata = collectDelegationContext({
+			cwd: this.sessionManager.getCwd(),
+			hasUI: false,
+			getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
+			getSessionSpawns: () => "*",
+			settings: {} as never,
+			getCompactContext: () => "",
+			getSessionEntries: () => this.sessionManager.getEntries() as unknown as Array<Record<string, unknown>>,
+			getPlanModeState: () => this.getPlanModeState(),
+		} as never);
+		const planFilePath = metadata.planFilePath?.trim();
+		if (!planFilePath) return undefined;
+		try {
+			const resolvedPlanPath = this.#resolvePlanPath(planFilePath);
+			if (!fs.existsSync(resolvedPlanPath)) return undefined;
+			const bootstrap = buildPlanTodoBootstrapData(fs.readFileSync(resolvedPlanPath, "utf8"), planFilePath);
+			return bootstrap?.phases;
+		} catch {
+			return undefined;
+		}
+	}
+
 	#syncTodoPhasesFromBranch(): void {
-		this.setTodoPhases(getLatestTodoPhasesFromEntries(this.sessionManager.getBranch()));
+		const phasesFromEntries = getLatestTodoPhasesFromEntriesOrUndefined(this.sessionManager.getBranch());
+		if (phasesFromEntries) {
+			this.setTodoPhases(phasesFromEntries);
+			return;
+		}
+		const planTodoPhases = this.#loadPlanTodoPhases();
+		this.setTodoPhases(planTodoPhases ?? []);
 	}
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {

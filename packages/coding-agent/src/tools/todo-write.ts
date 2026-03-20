@@ -32,6 +32,25 @@ export interface TodoPhase {
 	tasks: TodoItem[];
 }
 
+export interface TodoTaskInput {
+	content: string;
+	status?: TodoStatus;
+	notes?: string;
+}
+
+export interface TodoPhaseInput {
+	name: string;
+	tasks?: TodoTaskInput[];
+}
+
+export interface TodoBootstrapEntryData {
+	source: "plan";
+	planFilePath: string;
+	phases: TodoPhase[];
+	totalUnitHeadings: number;
+	extractedUnitTasks: number;
+}
+
 export interface TodoWriteToolDetails {
 	phases: TodoPhase[];
 	storage: "session" | "memory";
@@ -42,6 +61,7 @@ interface TodoCompactionPreserveData {
 }
 
 const TODO_COMPACTION_PRESERVE_KEY = "todoWrite";
+export const TODO_BOOTSTRAP_ENTRY_TYPE = "todo-write/bootstrap";
 
 // =============================================================================
 // Schema
@@ -124,7 +144,7 @@ function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
 }
 
 function buildPhaseFromInput(
-	input: { name: string; tasks?: Array<{ content: string; status?: TodoStatus; notes?: string }> },
+	input: TodoPhaseInput,
 	phaseId: string,
 	nextTaskId: number,
 ): { phase: TodoPhase; nextTaskId: number } {
@@ -165,6 +185,18 @@ function fileFromPhases(phases: TodoPhase[]): TodoFile {
 
 function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
+}
+
+export function createTodoPhasesFromInput(phases: TodoPhaseInput[]): TodoPhase[] {
+	const next = makeEmptyFile();
+	for (const inputPhase of phases) {
+		const phaseId = `phase-${next.nextPhaseId++}`;
+		const built = buildPhaseFromInput(inputPhase, phaseId, next.nextTaskId);
+		next.phases.push(built.phase);
+		next.nextTaskId = built.nextTaskId;
+	}
+	normalizeInProgressTask(next.phases);
+	return clonePhases(next.phases);
 }
 
 function normalizeInProgressTask(phases: TodoPhase[]): void {
@@ -210,25 +242,36 @@ export function withTodoPhasesPreserveData(
 	return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
-export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
+export function getLatestTodoPhasesFromEntriesOrUndefined(entries: SessionEntry[]): TodoPhase[] | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
+		const entry = entries[i] as SessionEntry & { customType?: string; data?: unknown };
 		if (entry.type === "compaction") {
 			const preserved = getTodoPhasesFromCompactionPreserveData(entry.preserveData?.[TODO_COMPACTION_PRESERVE_KEY]);
 			return preserved ?? [];
 		}
-		if (entry.type !== "message") continue;
-
-		const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };
-		if (message.role !== "toolResult" || message.toolName !== "todo_write" || message.isError) continue;
-
-		const details = message.details as { phases?: unknown } | undefined;
-		if (!details || !Array.isArray(details.phases)) continue;
-
-		return clonePhases(details.phases as TodoPhase[]);
+		if (entry.type === "message") {
+			const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };
+			if (message.role === "toolResult" && message.toolName === "todo_write" && !message.isError) {
+				const details = message.details as { phases?: unknown } | undefined;
+				if (details && Array.isArray(details.phases)) {
+					return clonePhases(details.phases as TodoPhase[]);
+				}
+			}
+			continue;
+		}
+		if (entry.type === "custom" && entry.customType === TODO_BOOTSTRAP_ENTRY_TYPE) {
+			const data = entry.data as { phases?: unknown } | undefined;
+			if (data && Array.isArray(data.phases)) {
+				return clonePhases(data.phases as TodoPhase[]);
+			}
+		}
 	}
 
-	return [];
+	return undefined;
+}
+
+export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
+	return getLatestTodoPhasesFromEntriesOrUndefined(entries) ?? [];
 }
 
 function applyOps(file: TodoFile, ops: TodoWriteParams["ops"]): { file: TodoFile; errors: string[] } {
