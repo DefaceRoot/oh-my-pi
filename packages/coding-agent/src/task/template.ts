@@ -2,7 +2,7 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import type { TaskItem } from "./types";
 
-interface RenderResult {
+export interface RenderResult {
 	/** Full task text sent to the subagent */
 	task: string;
 	id: string;

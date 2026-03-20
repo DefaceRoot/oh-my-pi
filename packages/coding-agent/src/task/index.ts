@@ -41,7 +41,7 @@ import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
-import { renderTemplate } from "./template";
+import { renderTemplate, type RenderResult } from "./template";
 import { buildToonDelegation, type DelegationTask, type ToonDelegationResult } from "./toon-delegation-builder";
 import {
 	type AgentDefinition,
@@ -282,7 +282,7 @@ async function renderTaskWithDelegationToon(
 	delegate: string,
 	task: TaskItem,
 	context?: string,
-): Promise<ReturnType<typeof renderTemplate>> {
+): Promise<RenderResult> {
 	const trimmedContext = context?.trim();
 	if (trimmedContext?.startsWith("delegation:")) {
 		return renderTemplate(trimmedContext, task);
