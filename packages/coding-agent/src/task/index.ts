@@ -439,7 +439,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
 		const renderedTasks = await Promise.all(
-			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem)),
+			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem, params.context)),
 		);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
