@@ -7,7 +7,7 @@ description: Compact reference for the `omp-delegation/v1` TOON envelope. Load w
 
 **TOON is internal-only.** Never emit TOON in user-facing messages or conversational responses.
 
-All delegating agents (Orchestrator, Default, Plan, Implement, Ask) must load this skill and emit a single fenced ` ```toon ` block as the subagent user prompt for every task delegation. The TOON block is the single source of truth for the delegation contract.
+All delegating agents (Orchestrator, Default, Plan, Implement, Debug, Ask) must load this skill and emit a single fenced ` ```toon ` block as the subagent user prompt for every task delegation. The TOON block is the single source of truth for the delegation contract.
 
 ## Schema — `omp-delegation/v1`
 
@@ -48,9 +48,9 @@ Emit fields in canonical order (below) to maximize prompt-cache alignment across
 ## Input-Shaping Profiles
 
 Default profile by delegate type:
-- **minimal**: `lint`, `code-reviewer`
-- **standard**: `explore`, `research`, `plan-verifier`
-- **detailed**: `implement`, `debug`, `task`
+- **minimal**: `lint`, `code-reviewer`, `commit`
+- **standard**: `explore`, `research`, `plan-verifier`, `merge`
+- **detailed**: `implement`, `debug`, `task`, `designer`
 
 Override via `options.profile` when a different richness level is warranted.
 
