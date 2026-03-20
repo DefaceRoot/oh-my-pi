@@ -1123,6 +1123,7 @@ export function resolveInputProfile(delegate: string, override?: InputProfileMod
 
 const TOKEN_BUDGET = 2000;
 
+/** Rough token estimate using a 4-chars-per-token heuristic. */
 export function estimateTokenCount(text: string): number {
 	return Math.ceil(text.length / 4);
 }
