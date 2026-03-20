@@ -255,6 +255,7 @@ describe("SubagentIndex delegation sidecar wiring", () => {
 		await writeFile(
 			nestedSidecar,
 			JSON.stringify({
+				contract_version: "omp-delegation/v1",
 				envelope: { id: "del_nested123" },
 				task: { id: "Scout", title: "Scout the area" },
 				roles: { delegator: "implement", delegate: "explore" },
