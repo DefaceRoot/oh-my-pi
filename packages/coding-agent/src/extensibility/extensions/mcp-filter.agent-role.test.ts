@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { renderPromptTemplate } from "../../config/prompt-templates";
-import { parseFrontmatter } from "../../utils/frontmatter";
-import subagentSystemPromptTemplate from "../../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import mcpFilterExtension from "../../../../../agent/extensions/mcp-filter/index";
+import { renderPromptTemplate } from "../../config/prompt-templates";
+import subagentSystemPromptTemplate from "../../prompts/system/subagent-system-prompt.md" with { type: "text" };
+import { parseFrontmatter } from "../../utils/frontmatter";
 
 const REPO_ROOT = new URL("../../../../../", import.meta.url);
 

@@ -1,7 +1,7 @@
-import type { Settings } from "../config/settings";
 import { extractExplicitThinkingSelector, isDefaultModelAlias } from "../config/model-resolver";
-import type { AgentDefinition } from "./types";
+import type { Settings } from "../config/settings";
 import { resolveSubagentRole } from "./model-role";
+import type { AgentDefinition } from "./types";
 
 interface SubagentLaunchSession {
 	settings: Settings;

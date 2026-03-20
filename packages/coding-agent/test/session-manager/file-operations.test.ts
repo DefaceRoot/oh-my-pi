@@ -8,7 +8,7 @@ import {
 	resolveResumableSession,
 	SessionManager,
 } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getAgentDir, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("loadEntriesFromFile", () => {
 	let tempDir: string;
