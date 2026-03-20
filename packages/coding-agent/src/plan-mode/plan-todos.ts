@@ -53,8 +53,9 @@ function extractPlanPhases(planContent: string): PhaseSection[] {
 	}
 
 	let selected = headings;
+	let planSectionEnd = lines.length;
 	if (planSectionStart) {
-		let planSectionEnd = lines.length;
+		planSectionEnd = lines.length;
 		for (let index = planSectionStart.line + 1; index < lines.length; index += 1) {
 			const headingMatch = lines[index]?.match(HEADING_RE);
 			if (!headingMatch) continue;
@@ -88,7 +89,7 @@ function extractPlanPhases(planContent: string): PhaseSection[] {
 
 	deduped.sort((left, right) => left.line - right.line);
 	return deduped.map((heading, index) => {
-		const nextLine = index < deduped.length - 1 ? deduped[index + 1].line : lines.length;
+		const nextLine = index < deduped.length - 1 ? deduped[index + 1].line : planSectionEnd;
 		return {
 			title: heading.title,
 			markdown: lines.slice(heading.line, nextLine).join("\n").trim(),
