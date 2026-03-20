@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -692,6 +692,30 @@ describe("token budget trimming", () => {
 				},
 			});
 			expect(result.metadata.progress?.lessons_learned).toBeUndefined();
+		});
+	});
+	it("warns when envelope remains over budget after all trim steps", async () => {
+		await withTempDir(async cwd => {
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const builderModule = await loadBuilderModule();
+			try {
+				await builderModule.buildToonDelegation({
+					session: createSession(cwd, { getCompactContext: () => makeImplementationContext(cwd) }),
+					delegate: "implement",
+					task: createSemanticTask({ description: "A".repeat(8500) }),
+					options: {
+						profile: "detailed",
+						retryContext: { overflow: "Z".repeat(28000) },
+					},
+				});
+				expect(
+					warnSpy.mock.calls.some(call =>
+						String(call[0]).includes("still exceeds 2000-token budget after all trim steps"),
+					),
+				).toBe(true);
+			} finally {
+				warnSpy.mockRestore();
+			}
 		});
 	});
 });

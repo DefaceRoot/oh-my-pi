@@ -1229,6 +1229,9 @@ function applyTokenBudgetTrim(metadata: DelegationMetadata): {
 		current = { ...current, task: { ...current.task, description: current.task.description.slice(0, 200) } };
 	}
 	const finalToon = renderDelegationToon(current);
+	if (estimateTokenCount(finalToon) > TOKEN_BUDGET) {
+		console.warn(`[toon-delegation] envelope still exceeds ${TOKEN_BUDGET}-token budget after all trim steps`);
+	}
 	return { metadata: current, toon: finalToon, trimmed: true };
 }
 
