@@ -12,7 +12,7 @@ export function parseCommitArgs(args: string[]): CommitCommandArgs | undefined {
 	}
 
 	const result: CommitCommandArgs = {
-		push: false,
+		push: true,
 		dryRun: false,
 		noChangelog: false,
 	};
@@ -23,6 +23,9 @@ export function parseCommitArgs(args: string[]): CommitCommandArgs | undefined {
 		switch (flag) {
 			case "--push":
 				result.push = true;
+				break;
+			case "--no-push":
+				result.push = false;
 				break;
 			case "--dry-run":
 				result.dryRun = true;
@@ -73,7 +76,8 @@ export function printCommitHelp(): void {
 		"  omp commit [options]",
 		"",
 		"Options:",
-		"  --push           Push after committing",
+		"  --push           Push after committing (default)",
+		"  --no-push        Do not push after committing",
 		"  --dry-run        Preview without committing",
 		"  --no-changelog   Skip changelog updates",
 		"  --legacy         Use legacy deterministic pipeline",
