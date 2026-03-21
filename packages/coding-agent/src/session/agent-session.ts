@@ -420,6 +420,7 @@ export class AgentSession {
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
+	#lastCheckpointTokens: number | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
@@ -774,9 +775,11 @@ export class AgentSession {
 				}
 				if (toolName === "checkpoint" && !isError) {
 					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
+					const checkpointTokens = this.getContextUsage()?.tokens;
 					this.#checkpointState = {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
+						contextTokensAtCheckpoint: typeof checkpointTokens === "number" ? checkpointTokens : undefined,
 						startedAt: details?.startedAt ?? new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
@@ -3590,6 +3593,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		if (!checkpointState) {
 			return;
 		}
+		this.#lastCheckpointTokens = checkpointState.contextTokensAtCheckpoint;
 		const safeCount = Math.max(0, Math.min(checkpointState.checkpointMessageCount, this.agent.state.messages.length));
 		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
 		this.#closeCodexProviderSessionsForHistoryRewrite();
@@ -5250,10 +5254,12 @@ Be thorough - include exact file paths, function names, error messages, and tech
 
 		if (!lastUsage || lastUsageIndex === undefined) {
 			return {
-				tokens: estimatedFromMessages,
+				tokens:
+					rewindReportIndex >= 0 ? (this.#lastCheckpointTokens ?? estimatedFromMessages) : estimatedFromMessages,
 			};
 		}
 
+		this.#lastCheckpointTokens = undefined;
 		const usageTokens = calculateContextTokens(lastUsage);
 		let trailingTokens = 0;
 		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
@@ -5536,9 +5542,7 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		if (recentUsers.length === 0) {
 			lines.push("No user messages available.");
 		} else {
-			lines.push(
-				`Recent user instructions (most recent first, up to ${MAX_RECENT_USER_MESSAGES} messages):`,
-			);
+			lines.push(`Recent user instructions (most recent first, up to ${MAX_RECENT_USER_MESSAGES} messages):`);
 			lines.push("");
 
 			for (const [index, msg] of recentUsers.entries()) {

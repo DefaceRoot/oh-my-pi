@@ -13,6 +13,8 @@ export interface CheckpointState {
 	checkpointMessageCount: number;
 	/** Session entry ID at checkpoint (for session tree branching) */
 	checkpointEntryId: string | null;
+	/** Estimated context token count at checkpoint time */
+	contextTokensAtCheckpoint?: number;
 	/** Timestamp */
 	startedAt: string;
 }
