@@ -1371,6 +1371,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			let mergeSummary = "";
+			let mergeAgentContext: TaskToolDetails["mergeAgentContext"];
 			let changesApplied: boolean | null = null;
 			let mergedBranchesForNestedPatches: Set<string> | null = null;
 			if (isIsolated && repoRoot) {
@@ -1390,11 +1391,34 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						if (changesApplied) {
 							mergeSummary = `\n\nMerged ${mergeResult.merged.length} branch${mergeResult.merged.length === 1 ? "" : "es"}: ${mergeResult.merged.join(", ")}`;
 						} else {
+							const failedEntries = branchEntries.filter(branchEntry =>
+								mergeResult.failed.includes(branchEntry.branchName),
+							);
+							const branchSummaryLines = failedEntries
+								.map(
+									branchEntry =>
+										`  - ${branchEntry.branchName} (task: ${branchEntry.taskId}): ${branchEntry.description || "No description"}`,
+								)
+								.join("\n");
 							const mergedPart =
 								mergeResult.merged.length > 0 ? `Merged: ${mergeResult.merged.join(", ")}.\n` : "";
 							const failedPart = `Failed: ${mergeResult.failed.join(", ")}.`;
 							const conflictPart = mergeResult.conflict ? `\nConflict: ${mergeResult.conflict}` : "";
-							mergeSummary = `\n\n<system-notification>Branch merge failed. ${mergedPart}${failedPart}${conflictPart}\nUnmerged branches remain for manual resolution.</system-notification>`;
+							const branchDetailsPart = branchSummaryLines ? `- Branch details:\n${branchSummaryLines}\n` : "";
+							mergeSummary = `\n\n<system-notification>Branch merge conflict detected.\n${mergedPart}${failedPart}${conflictPart}\n\nTo resolve, spawn a \`merge\` agent with context:\n- Conflicting branches: ${mergeResult.failed.join(", ")}\n${branchDetailsPart}The merge agent will rebase and cherry-pick to resolve conflicts.</system-notification>`;
+
+							if (mergeResult.conflict) {
+								mergeAgentContext = {
+									conflictingBranches: mergeResult.failed,
+									mergedBranches: mergeResult.merged,
+									conflict: mergeResult.conflict,
+									branchSummaries: failedEntries.map(branchEntry => ({
+										branch: branchEntry.branchName,
+										taskId: branchEntry.taskId,
+										description: branchEntry.description || "No description",
+									})),
+								};
+							}
 						}
 					}
 
@@ -1575,6 +1599,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					totalDurationMs: totalDuration,
 					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
 					outputPaths,
+					mergeAgentContext,
 				},
 			};
 		} catch (err) {

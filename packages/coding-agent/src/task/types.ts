@@ -227,6 +227,19 @@ export interface SingleResult {
 export type { TaskSubagentStopRequest };
 
 /** Tool details for TUI rendering */
+export interface MergeAgentBranchSummary {
+	branch: string;
+	taskId: string;
+	description: string;
+}
+
+export interface MergeAgentContext {
+	conflictingBranches: string[];
+	mergedBranches: string[];
+	conflict: string;
+	branchSummaries: MergeAgentBranchSummary[];
+}
+
 export interface TaskToolDetails {
 	projectAgentsDir: string | null;
 	results: SingleResult[];
@@ -235,6 +248,7 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	mergeAgentContext?: MergeAgentContext;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
