@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { renderOutputBlock } from "@oh-my-pi/pi-coding-agent/tui/output-block";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { ImageProtocol, TERMINAL, visibleWidth } from "@oh-my-pi/pi-tui";
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
@@ -34,5 +34,23 @@ describe("renderOutputBlock", () => {
 		const regularLine = lines.find(line => line.includes("regular line"));
 		expect(regularLine).toBeDefined();
 		expect(regularLine).not.toBe("regular line");
+	});
+	it("clamps wrapped URL lines to the block width", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const width = 48;
+		const longUrl = `https://example.com/${"x".repeat(500)}`;
+		const lines = renderOutputBlock(
+			{
+				width,
+				sections: [{ label: "Output", lines: [longUrl] }],
+			},
+			uiTheme,
+		);
+
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
 	});
 });

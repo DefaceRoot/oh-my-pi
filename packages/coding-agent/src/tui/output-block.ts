@@ -90,8 +90,10 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 			}
 			const wrappedLines = wrapTextWithAnsi(line.trimEnd(), contentWidth);
 			for (const wrappedLine of wrappedLines) {
-				const innerPadding = padding(Math.max(0, contentWidth - visibleWidth(wrappedLine)));
-				const fullLine = `${contentPrefix}${wrappedLine}${innerPadding}${contentSuffix}`;
+				const truncated =
+					visibleWidth(wrappedLine) > contentWidth ? truncateToWidth(wrappedLine, contentWidth) : wrappedLine;
+				const innerPadding = padding(Math.max(0, contentWidth - visibleWidth(truncated)));
+				const fullLine = `${contentPrefix}${truncated}${innerPadding}${contentSuffix}`;
 				lines.push(padToWidth(fullLine, lineWidth, bgFn));
 			}
 		}

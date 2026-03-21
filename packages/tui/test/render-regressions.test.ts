@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -21,9 +21,13 @@ class MutableLinesComponent implements Component {
 }
 
 class RawLinesComponent implements Component {
-	readonly #lines: unknown[];
+	#lines: unknown[];
 
 	constructor(lines: unknown[]) {
+		this.#lines = [...lines];
+	}
+
+	setLines(lines: unknown[]): void {
 		this.#lines = [...lines];
 	}
 
@@ -222,6 +226,42 @@ describe("TUI terminal-state regressions", () => {
 
 				const viewport = visible(term);
 				expect(viewport[0]?.trim()).toBe("");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	describe("overflow safety", () => {
+		it("truncates oversized lines without crashing", async () => {
+			const width = 20;
+			const term = new VirtualTerminal(width, 4);
+			const tui = new TUI(term);
+			const oversizedLine = `https://example.com/${"x".repeat(500)}`;
+			const component = new RawLinesComponent([oversizedLine]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const firstRenderRows = term
+					.getViewport()
+					.map(line => line.trimEnd())
+					.filter(line => line.length > 0);
+				expect(firstRenderRows).toHaveLength(1);
+				expect(visibleWidth(firstRenderRows[0] ?? "")).toBeLessThanOrEqual(width);
+
+				component.setLines([`https://example.com/${"y".repeat(500)}`]);
+				tui.requestRender();
+				await settle(term);
+
+				const secondRenderRows = term
+					.getViewport()
+					.map(line => line.trimEnd())
+					.filter(line => line.length > 0);
+				expect(secondRenderRows).toHaveLength(1);
+				expect(visibleWidth(secondRenderRows[0] ?? "")).toBeLessThanOrEqual(width);
 			} finally {
 				tui.stop();
 			}
