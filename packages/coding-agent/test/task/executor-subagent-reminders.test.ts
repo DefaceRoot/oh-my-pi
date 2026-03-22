@@ -159,6 +159,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toBe("User stopped from flight deck: duplicate workstream");
 		expect(result.stderr).toBe("User stopped from flight deck: duplicate workstream");
+		expect(result.error).toBe("User stopped from flight deck: duplicate workstream");
 	});
 
 	it("does not force object-shaped submit_result data when output schema allows primitives", async () => {
@@ -599,7 +600,24 @@ describe("runSubprocess submit_result reminders", () => {
 		});
 
 		expect(result.aborted).toBe(true);
-		expect(result.abortReason).toBe("Cancelled before start");
-		expect(result.stderr).toBe("Cancelled before start");
+		expect(result.abortReason).toBe("caller cancelled task");
+		expect(result.stderr).toBe("caller cancelled task");
+		expect(result.error).toBe("caller cancelled task");
+	});
+
+	it("uses error messages for pre-aborted signal reasons", async () => {
+		const abortController = new AbortController();
+		abortController.abort(new Error("caller failed validation"));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-cancelled-before-start-error",
+			signal: abortController.signal,
+		});
+
+		expect(result.aborted).toBe(true);
+		expect(result.abortReason).toBe("caller failed validation");
+		expect(result.stderr).toBe("caller failed validation");
+		expect(result.error).toBe("caller failed validation");
 	});
 });
