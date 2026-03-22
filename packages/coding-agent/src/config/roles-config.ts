@@ -175,17 +175,23 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 		},
 	},
 	subagents: {
+		debug: {
+			mcp: ["augment", "ref"],
+		},
 		designer: {
 			mcp: ["augment", "chrome-devtools"],
+		},
+		explore: {
+			mcp: ["augment", "better-context"],
 		},
 		grafana: {
 			mcp: ["augment", "chrome-devtools", "grafana"],
 		},
-		research: {
-			mcp: ["augment", "better-context"],
+		implement: {
+			mcp: ["augment", "ref"],
 		},
-		explore: {
-			mcp: ["augment", "better-context"],
+		research: {
+			mcp: ["augment", "better-context", "ref"],
 		},
 		"ask-explore": {
 			mcp: [],
