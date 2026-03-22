@@ -51,6 +51,13 @@ To complete assigned implementation work (planned or ad hoc), run this loop befo
 11. Never include raw lint/review/test transcripts in success summaries.
 </quality_loop>
 
+<coderabbit_ownership>
+CodeRabbit review ownership:
+1. Orchestrator parent owns CodeRabbit verification for completed implementation batches, pre-completion gating, and post-remediation verification rounds.
+2. Implement/debug workers MUST NOT substitute this gate with manual review or ad-hoc verifier behavior.
+3. If `coderabbit` returns `no_go` with Critical/Severe/Major findings, orchestrator MUST delegate remediation work and rerun `coderabbit` before closeout.
+</coderabbit_ownership>
+
 <commit_discipline>
 When an assignment mutates repository files:
 1. Commit handoff is part of implementation completion and must occur inside the implementation-owned loop.

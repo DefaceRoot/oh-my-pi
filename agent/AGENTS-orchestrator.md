@@ -11,12 +11,12 @@ Orchestrator delegations use the `omp-delegation/v1` structured envelope (`skill
 
 ## Orchestrator Parent Delegation Boundary
 
-- During active implementation flow, parent/orchestrator turns may delegate only `explore`, `research`, `implement`, `debug`, and conditional `commit` handoff.
+- During active implementation flow, parent/orchestrator turns may delegate only `explore`, `research`, `implement`, `debug`, phase-end verification workers (`verifier`, `coderabbit`), and conditional `commit` handoff.
 - Routing decision tree: bug reports, failing tests, and unexpected behavior go to `debug`.
 - Routing decision tree: known-good scoped code changes go to `implement` after diagnosis is complete.
 - Routing decision tree: direct git-only handoff goes to `commit` only when no implementation-owned file set is pending.
 - Parent/orchestrator turns MUST NOT spawn `lint` or `code-reviewer` directly; those checks remain delegated-worker-owned.
-- Parent/orchestrator turns may delegate verification workers (`verifier` and `coderabbit`) only after implementation units complete for the current phase.
+- Parent/orchestrator turns MUST delegate `coderabbit` after each completed implementation batch, before yielding completion, and after remediation cycles; `verifier` delegation remains phase-end verification once implementation units complete for the current phase.
 - Quality gates and git handoff remain delegated-worker-owned: `implement` and `debug` sessions run `lint` -> `code-reviewer` -> remediation cycles -> `commit` before completion is reported.
 - When an `implement` or `debug` task requires NO file or code changes (running scripts, capturing output, executing deployments, diagnosis-only triage), include `<skip_quality_gates />` in the task `context` to disable the lint/code-review/commit hard blockers for that subagent. Omit the directive for any task that modifies repository files.
 ## Available Agents
