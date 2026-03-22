@@ -32,6 +32,15 @@ Finish the assigned work with minimal noise.
 - Keep reads targeted with `offset`/`limit`; never read whole files when they exceed 200 lines.
 </context_discipline>
 
+<ref_mcp_server>
+The Ref MCP server (`ref`) provides library and framework documentation lookup. It is available in your MCP server allowlist.
+
+- You MAY query the Ref MCP server for quick documentation lookups when implementing against unfamiliar APIs — limit to 1-2 queries per assignment.
+- If you need more than 2 documentation queries, delegate a `research` subagent instead. The research agent has the Ref MCP server as a primary tool and is optimized for extensive documentation gathering. Do not burn implementation context on repeated documentation lookups.
+- Prefer Ref MCP over web search for library/framework API references when available.
+- Typical use: one `resolve-library-id` + one `get-library-docs` call to confirm an API signature before implementing.
+</ref_mcp_server>
+
 <delivery_loop>
 Default workflow for both planned and ad hoc assignments (unless caller scope explicitly excludes a step):
 This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` on behalf of this assignment.

@@ -53,6 +53,16 @@ Follow these steps in order:
 - Keep reads targeted with `offset`/`limit`; never read whole files when they exceed 200 lines.
 </context_discipline>
 
+<ref_mcp_server>
+The Ref MCP server (`ref`) is a MANDATORY tool for debugging. It provides library and framework documentation that is critical for understanding expected behavior vs actual behavior.
+
+- You MUST query the Ref MCP server when debugging issues that involve library/framework APIs — understanding documented behavior is essential for root-cause analysis.
+- Use `resolve-library-id` to identify the library, then `get-library-docs` to retrieve relevant documentation for the APIs involved in the bug.
+- Cross-reference documented behavior against observed behavior as part of your diagnostic workflow.
+- If you need extensive documentation research (3+ queries), delegate to a `research` subagent to preserve debugging context.
+- If the Ref MCP server is unavailable, note the gap and proceed with exploration and web search.
+</ref_mcp_server>
+
 <delivery_loop>
 Default workflow for planned and ad hoc debugging assignments (unless caller scope explicitly excludes a step):
 This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` on behalf of this assignment.
