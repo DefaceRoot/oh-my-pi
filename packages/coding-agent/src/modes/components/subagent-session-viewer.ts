@@ -13,6 +13,7 @@ export interface SubagentSessionViewerMetadata {
 	subagentId?: string;
 	sessionId?: string;
 	role?: string;
+	delegationChain?: string[];
 	provider?: string;
 	model?: string;
 	tokens?: number;
@@ -127,6 +128,7 @@ export class SubagentSessionViewerComponent implements Component {
 						...content.metadata,
 						agentName: content.metadata.agentName != null ? sanitizeText(content.metadata.agentName) : undefined,
 						role: content.metadata.role != null ? sanitizeText(content.metadata.role) : undefined,
+						delegationChain: sanitizeList(content.metadata.delegationChain),
 						subagentId:
 							content.metadata.subagentId != null ? sanitizeText(content.metadata.subagentId) : undefined,
 						sessionId: content.metadata.sessionId != null ? sanitizeText(content.metadata.sessionId) : undefined,
@@ -293,6 +295,7 @@ export class SubagentSessionViewerComponent implements Component {
 			meta.subagentId ||
 			meta.sessionId ||
 			meta.role ||
+			(meta.delegationChain?.length ?? 0) > 0 ||
 			meta.provider ||
 			meta.model ||
 			meta.tokens != null ||
@@ -311,6 +314,11 @@ export class SubagentSessionViewerComponent implements Component {
 		const titleLabel = ordinal ? `Subagent #${ordinal}` : "Subagent Session";
 		const titleSuffix = meta.agentName ? ` ${theme.fg("text", `· ${meta.agentName}`)}` : "";
 		lines.push(` ${theme.bold(theme.fg("accent", `${titleLabel}${titleSuffix}`))}`);
+		const delegationChain = meta.delegationChain;
+		if (delegationChain && delegationChain.length > 0) {
+			const breadcrumb = delegationChain.join(` ${theme.fg("statusLineSep", "›")} `);
+			lines.push(` ${theme.fg("dim", "Delegation")} ${theme.fg("text", breadcrumb)}`);
+		}
 		if (meta.subagentId) {
 			lines.push(` ${theme.fg("dim", "Subagent ID")} ${theme.fg("text", meta.subagentId)}`);
 		}

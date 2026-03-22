@@ -2312,6 +2312,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
+	private buildSubagentDelegationRoleChain(selected: SubagentViewRef, group: SubagentViewGroup): string[] | undefined {
+		const refsById = new Map(group.refs.map(ref => [ref.id, ref]));
+		const lineage: SubagentViewRef[] = [];
+		const visited = new Set<string>();
+		let current: SubagentViewRef | undefined = selected;
+		while (current && !visited.has(current.id)) {
+			lineage.push(current);
+			visited.add(current.id);
+			current = current.parentId ? refsById.get(current.parentId) : undefined;
+		}
+		lineage.reverse();
+		const chain: string[] = [];
+		const pushRole = (role: string | undefined): void => {
+			const normalizedRole = role?.trim();
+			if (!normalizedRole) return;
+			if (chain[chain.length - 1] === normalizedRole) return;
+			chain.push(normalizedRole);
+		};
+		for (const ref of lineage) {
+			pushRole(ref.delegatorRole);
+			pushRole(ref.delegateRole);
+		}
+		return chain.length > 0 ? chain : undefined;
+	}
+
 	private isSubagentDescendantOf(
 		ref: SubagentViewRef,
 		ancestorId: string,
@@ -2368,6 +2393,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const modelLabel = actualModelLabel ?? requestedModelLabel ?? "default";
 		const delegationHistory =
 			transcript.delegationHistory ?? this.buildSubagentDelegationHistory(selected, currentGroup);
+		const delegationChain = this.buildSubagentDelegationRoleChain(selected, currentGroup);
 		const contextLabel = this.clipPreview(
 			selected.description ?? selected.contextPreview ?? transcript.contextPreview ?? "(no context)",
 			120,
@@ -2456,6 +2482,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				subagentId: selected.id,
 				sessionId: transcript.sessionId ?? selected.sessionId,
 				role: resolvedSelectedAgent,
+				delegationChain,
 				provider: actualModelMeta.provider ?? selected.provider,
 				model: actualModelLabel ?? requestedModelLabel,
 				tokens: transcript.tokens ?? selected.tokens,
@@ -2695,7 +2722,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 
 			if (entry.type === "session_init" && typeof entry.task === "string") {
-				agentName = typeof entry.agentName === "string" && entry.agentName.trim().length > 0 ? entry.agentName : agentName;
+				agentName =
+					typeof entry.agentName === "string" && entry.agentName.trim().length > 0 ? entry.agentName : agentName;
 				assignment ??= entry.task;
 				contextPreview ??= extractTaskContextPreview(entry.task);
 				sessionId =

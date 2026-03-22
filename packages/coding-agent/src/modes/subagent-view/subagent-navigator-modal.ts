@@ -5,7 +5,6 @@ import { formatDuration } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
 import type { SubagentNavigatorSelection, SubagentStatus, SubagentViewGroup, SubagentViewRef } from "./types";
 
-const MAX_VISIBLE_ROWS = 18;
 const MIN_INDEX_WIDTH = 3;
 const MIN_TITLE_WIDTH = 12;
 const MIN_STATUS_WIDTH = 10;
@@ -25,6 +24,7 @@ interface FlatEntry {
 	groupIdx: number;
 	nestedIdx: number;
 	isRoot: boolean;
+	depth: number;
 }
 
 interface NavigatorColumns {
@@ -36,6 +36,10 @@ interface NavigatorColumns {
 	modelW: number;
 	lastActiveW: number;
 	tokensW: number;
+	showResult: boolean;
+	showModel: boolean;
+	showLastActive: boolean;
+	showTokens: boolean;
 }
 
 type StatusColor = "success" | "accent" | "error" | "warning" | "muted";
@@ -80,6 +84,11 @@ export class SubagentNavigatorModal extends Container {
 		this.#onStopSelection = options.onStopSelection;
 		this.#onClose = options.onClose;
 		this.setGroups(groups, selection);
+	}
+
+	get #maxVisibleRows(): number {
+		const termHeight = process.stdout.rows ?? 24;
+		return Math.max(5, Math.min(30, Math.floor(termHeight * 0.65)));
 	}
 
 	setGroups(groups: SubagentViewGroup[], selection?: SubagentNavigatorSelection): void {
@@ -152,6 +161,18 @@ export class SubagentNavigatorModal extends Container {
 		}
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.#onOpenSelection(this.getSelection());
+			return;
+		}
+		if (keyData === "g") {
+			this.#jumpToIndex(0);
+			return;
+		}
+		if (keyData === "G") {
+			this.#jumpToIndex(this.#flatRefs.length - 1);
+			return;
+		}
+		if (keyData === "p") {
+			this.#jumpToParent();
 			return;
 		}
 		if (keyData === "s" || keyData === "S") {
@@ -237,6 +258,27 @@ export class SubagentNavigatorModal extends Container {
 		this.#emitSelection();
 	}
 
+	#jumpToIndex(index: number): void {
+		if (this.#flatRefs.length === 0) return;
+		this.#flatIndex = Math.max(0, Math.min(index, this.#flatRefs.length - 1));
+		this.#clampSelection();
+		this.#emitSelection();
+	}
+
+	#jumpToParent(): void {
+		const current = this.#currentSelectionEntry();
+		if (!current || current.isRoot) return;
+		const parentRefId = this.#resolveParentRefId(current);
+		if (!parentRefId) return;
+		const parentIndex = this.#flatRefs.findIndex(
+			entry => entry.groupIdx === current.groupIdx && entry.ref.id === parentRefId,
+		);
+		if (parentIndex < 0) return;
+		this.#flatIndex = parentIndex;
+		this.#clampSelection();
+		this.#emitSelection();
+	}
+
 	#clampSelection(): void {
 		if (this.#flatRefs.length === 0) {
 			this.#flatIndex = 0;
@@ -244,17 +286,26 @@ export class SubagentNavigatorModal extends Container {
 			return;
 		}
 		this.#flatIndex = Math.max(0, Math.min(this.#flatIndex, this.#flatRefs.length - 1));
-		const maxOffset = Math.max(0, this.#flatRefs.length - MAX_VISIBLE_ROWS);
+		const maxVisibleRows = this.#maxVisibleRows;
+		const maxOffset = Math.max(0, this.#flatRefs.length - maxVisibleRows);
 		if (this.#flatIndex < this.#scrollOffset) {
 			this.#scrollOffset = this.#flatIndex;
-		} else if (this.#flatIndex >= this.#scrollOffset + MAX_VISIBLE_ROWS) {
-			this.#scrollOffset = this.#flatIndex - MAX_VISIBLE_ROWS + 1;
+		} else if (this.#flatIndex >= this.#scrollOffset + maxVisibleRows) {
+			this.#scrollOffset = this.#flatIndex - maxVisibleRows + 1;
 		}
 		this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset, maxOffset));
 	}
 
 	#emitSelection(): void {
 		this.#onSelectionChange(this.#flatIndexToSelection(this.#flatIndex));
+	}
+
+	#resolveEntryDepth(ref: SubagentViewRef, isRoot: boolean): number {
+		if (isRoot) return 0;
+		if (typeof ref.depth === "number" && Number.isFinite(ref.depth)) {
+			return Math.max(1, Math.floor(ref.depth));
+		}
+		return 1;
 	}
 
 	#buildFlatList(): void {
@@ -264,13 +315,25 @@ export class SubagentNavigatorModal extends Container {
 			if (!group) continue;
 			const rootRef = group.refs.find(r => r.id === group.rootId) ?? group.refs[0];
 			if (rootRef) {
-				this.#flatRefs.push({ ref: rootRef, groupIdx, nestedIdx: -1, isRoot: true });
+				this.#flatRefs.push({
+					ref: rootRef,
+					groupIdx,
+					nestedIdx: -1,
+					isRoot: true,
+					depth: this.#resolveEntryDepth(rootRef, true),
+				});
 			}
 			const nestedRefs = group.refs.filter(r => r.id !== (rootRef?.id ?? group.rootId));
 			for (let nestedIdx = 0; nestedIdx < nestedRefs.length; nestedIdx++) {
 				const ref = nestedRefs[nestedIdx];
 				if (!ref) continue;
-				this.#flatRefs.push({ ref, groupIdx, nestedIdx, isRoot: false });
+				this.#flatRefs.push({
+					ref,
+					groupIdx,
+					nestedIdx,
+					isRoot: false,
+					depth: this.#resolveEntryDepth(ref, false),
+				});
 			}
 		}
 	}
@@ -327,13 +390,14 @@ export class SubagentNavigatorModal extends Container {
 			lines.push(theme.fg("muted", `${" ".repeat(pad)}${msg}`));
 		} else {
 			const start = this.#scrollOffset;
-			const end = Math.min(this.#flatRefs.length, start + MAX_VISIBLE_ROWS);
+			const maxVisibleRows = this.#maxVisibleRows;
+			const end = Math.min(this.#flatRefs.length, start + maxVisibleRows);
 			let previousGroup: number | undefined;
 			for (let i = start; i < end; i++) {
 				const entry = this.#flatRefs[i];
 				if (!entry) continue;
 				if (previousGroup !== undefined && previousGroup !== entry.groupIdx) {
-					lines.push(theme.fg("border", "─".repeat(width)));
+					lines.push(theme.fg("dim", "─".repeat(width)));
 				}
 				lines.push(this.#renderRow(entry, i, width));
 				previousGroup = entry.groupIdx;
@@ -395,7 +459,21 @@ export class SubagentNavigatorModal extends Container {
 
 	#renderHeader(width: number): string {
 		const cols = buildColumnSpec(width, this.#flatRefs.length);
-		const header = `${"#".padStart(cols.indexW)}${COLUMN_SEPARATOR}${"Title".padEnd(cols.titleW)}${COLUMN_SEPARATOR}${"Status".padEnd(cols.statusW)}${COLUMN_SEPARATOR}${"Result".padEnd(cols.resultW)}${COLUMN_SEPARATOR}${"Role".padEnd(cols.roleW)}${COLUMN_SEPARATOR}${"Model".padEnd(cols.modelW)}${COLUMN_SEPARATOR}${"Last Active".padEnd(cols.lastActiveW)}${COLUMN_SEPARATOR}${"Tokens".padStart(cols.tokensW)}`;
+		const columns = ["#".padStart(cols.indexW), "Title".padEnd(cols.titleW), "Status".padEnd(cols.statusW)];
+		if (cols.showResult) {
+			columns.push("Result".padEnd(cols.resultW));
+		}
+		columns.push("Role".padEnd(cols.roleW));
+		if (cols.showModel) {
+			columns.push("Model".padEnd(cols.modelW));
+		}
+		if (cols.showLastActive) {
+			columns.push("Last Active".padEnd(cols.lastActiveW));
+		}
+		if (cols.showTokens) {
+			columns.push("Tokens".padStart(cols.tokensW));
+		}
+		const header = columns.join(COLUMN_SEPARATOR);
 		return theme.bold(theme.fg("accent", truncateToWidth(header, width)));
 	}
 
@@ -403,25 +481,96 @@ export class SubagentNavigatorModal extends Container {
 		const cols = buildColumnSpec(width, this.#flatRefs.length);
 		const selected = idx === this.#flatIndex;
 		const sep = theme.fg("border", COLUMN_SEPARATOR);
-		const titlePrefix = entry.isRoot ? "" : "↳ ";
+		const titlePrefix = this.#buildTreePrefix(entry, idx);
 		const index = String(idx + 1).padStart(cols.indexW);
 		const titleText = `${titlePrefix}${this.#resolveTitle(entry.ref)}`;
 		const title = padToWidth(truncateToWidth(titleText, cols.titleW), cols.titleW);
 		const status = padToWidth(truncateToWidth(renderStatusCell(entry.ref.status), cols.statusW), cols.statusW);
-		const result = padToWidth(truncateToWidth(formatOutcomeCell(entry.ref.outcome), cols.resultW), cols.resultW);
+		const columns: string[] = [theme.fg("text", index), theme.fg("text", title), status];
+
+		if (cols.showResult) {
+			const result = padToWidth(truncateToWidth(formatOutcomeCell(entry.ref.outcome), cols.resultW), cols.resultW);
+			columns.push(result);
+		}
+
 		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "\u2014", cols.roleW), cols.roleW);
-		const model = padToWidth(truncateToWidth(formatModelCell(entry.ref.model), cols.modelW), cols.modelW);
+		columns.push(theme.fg("text", role));
+
+		if (cols.showModel) {
+			const model = padToWidth(truncateToWidth(formatModelCell(entry.ref.model), cols.modelW), cols.modelW);
+			columns.push(theme.fg("text", model));
+		}
+
 		const lastActiveMs = entry.ref.lastUpdatedMs ?? this.#groups[entry.groupIdx]?.lastUpdatedMs;
 		const lastActiveLabel = formatLastActive(lastActiveMs);
-		const lastActive = padToWidth(truncateToWidth(lastActiveLabel, cols.lastActiveW), cols.lastActiveW);
-		const tokens = formatTokens(entry.ref.tokens).padStart(cols.tokensW);
-		const row = `${theme.fg("text", index)}${sep}${theme.fg("text", title)}${sep}${status}${sep}${result}${sep}${theme.fg("text", role)}${sep}${theme.fg("text", model)}${sep}${theme.fg(lastActiveLabel === "---" ? "dim" : "text", lastActive)}${sep}${theme.fg("text", tokens)}`;
+		if (cols.showLastActive) {
+			const lastActive = padToWidth(truncateToWidth(lastActiveLabel, cols.lastActiveW), cols.lastActiveW);
+			columns.push(theme.fg(lastActiveLabel === "---" ? "dim" : "text", lastActive));
+		}
+
+		if (cols.showTokens) {
+			const tokens = formatTokens(entry.ref.tokens).padStart(cols.tokensW);
+			columns.push(theme.fg("text", tokens));
+		}
+
+		const row = columns.join(sep);
 		const fitted = padToWidth(truncateToWidth(row, width), width);
 
 		if (selected) {
 			return theme.bg("selectedBg", theme.bold(fitted));
 		}
 		return fitted;
+	}
+
+	#resolveParentRefId(entry: FlatEntry): string | undefined {
+		if (entry.isRoot) return undefined;
+		return entry.ref.parentId ?? this.#groups[entry.groupIdx]?.rootId;
+	}
+
+	#findFlatIndexById(groupIdx: number, refId: string): number {
+		return this.#flatRefs.findIndex(candidate => candidate.groupIdx === groupIdx && candidate.ref.id === refId);
+	}
+
+	#isLastSibling(flatIndex: number): boolean {
+		const current = this.#flatRefs[flatIndex];
+		if (!current || current.isRoot) return true;
+		const parentRefId = this.#resolveParentRefId(current);
+		if (!parentRefId) return true;
+		for (let idx = flatIndex + 1; idx < this.#flatRefs.length; idx += 1) {
+			const candidate = this.#flatRefs[idx];
+			if (!candidate || candidate.groupIdx !== current.groupIdx) break;
+			if (candidate.depth === current.depth && this.#resolveParentRefId(candidate) === parentRefId) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	#hasFollowingSibling(entry: FlatEntry): boolean {
+		const flatIndex = this.#findFlatIndexById(entry.groupIdx, entry.ref.id);
+		if (flatIndex < 0) return false;
+		return !this.#isLastSibling(flatIndex);
+	}
+
+	#buildTreePrefix(entry: FlatEntry, flatIndex: number): string {
+		if (entry.isRoot) return "";
+		const cappedDepth = Math.max(1, Math.min(5, entry.depth));
+		let ancestorParentId = this.#resolveParentRefId(entry);
+		let levelsToRender = Math.max(0, cappedDepth - 1);
+		const trunkSegments: string[] = [];
+		while (ancestorParentId && levelsToRender > 0) {
+			const ancestorIndex = this.#findFlatIndexById(entry.groupIdx, ancestorParentId);
+			const ancestorEntry = ancestorIndex >= 0 ? this.#flatRefs[ancestorIndex] : undefined;
+			trunkSegments.unshift(ancestorEntry && this.#hasFollowingSibling(ancestorEntry) ? "  │ " : "    ");
+			ancestorParentId = ancestorEntry ? this.#resolveParentRefId(ancestorEntry) : undefined;
+			levelsToRender -= 1;
+		}
+		while (levelsToRender > 0) {
+			trunkSegments.unshift("    ");
+			levelsToRender -= 1;
+		}
+		const branch = this.#isLastSibling(flatIndex) ? "└─ " : "├─ ";
+		return `${trunkSegments.join("")}  ${branch}`;
 	}
 
 	#renderStatusSummary(width: number): string {
@@ -441,8 +590,11 @@ export class SubagentNavigatorModal extends Container {
 	}
 
 	#renderTopBorder(innerWidth: number): string {
-		const running = this.#flatRefs.reduce((count, entry) => count + (entry.ref.status === "running" ? 1 : 0), 0);
-		const titleText = `Subagent Flight Deck ${running}/${this.#flatRefs.length} active`;
+		const active = this.#flatRefs.reduce(
+			(count, entry) => count + (this.#isSelectionStoppable(entry.ref) ? 1 : 0),
+			0,
+		);
+		const titleText = `Subagents (${this.#flatRefs.length} total, ${active} active)`;
 		const h = theme.boxSharp.horizontal;
 		const topLeft = theme.fg("border", theme.boxSharp.topLeft);
 		const topRight = theme.fg("border", theme.boxSharp.topRight);
@@ -471,11 +623,9 @@ export class SubagentNavigatorModal extends Container {
 
 	#buildFooterHint(): string {
 		if (this.#filterMode) {
-			return "Enter apply  Esc cancel";
+			return "Enter apply · Esc cancel";
 		}
-		const selected = this.#currentSelectionEntry();
-		const stopHint = selected && this.#isSelectionStoppable(selected.ref) ? "  S stop" : "";
-		return `↑↓ nav  Enter open  / filter${stopHint}  q quit`;
+		return "↑↓ navigate · Enter open · / filter · s stop · p parent · g/G top/bottom · Esc close";
 	}
 
 	#currentSelectionEntry(): FlatEntry | undefined {
@@ -501,11 +651,27 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 	const roleW = clamp(Math.floor(safeWidth * 0.13), MIN_ROLE_WIDTH, 14);
 	const modelW = clamp(Math.floor(safeWidth * 0.2), MIN_MODEL_WIDTH, 26);
 	const lastActiveW = clamp(Math.floor(safeWidth * 0.12), MIN_LAST_ACTIVE_WIDTH, 12);
-	const separators = COLUMN_SEPARATOR.length * 7;
+
+	const viewportWidth = safeWidth + 2;
+	const showResult = viewportWidth >= 80;
+	const showModel = viewportWidth >= 80;
+	const showLastActive = viewportWidth >= 100;
+	const showTokens = viewportWidth >= 120;
+	const visibleColumnCount = 4 + (showResult ? 1 : 0) + (showModel ? 1 : 0) + (showLastActive ? 1 : 0) + (showTokens ? 1 : 0);
+	const separators = COLUMN_SEPARATOR.length * Math.max(0, visibleColumnCount - 1);
 	const titleW = Math.max(
 		MIN_TITLE_WIDTH,
-		safeWidth - indexW - statusW - resultW - roleW - modelW - lastActiveW - TOKENS_WIDTH - separators,
+		safeWidth -
+			indexW -
+			statusW -
+			roleW -
+			(showResult ? resultW : 0) -
+			(showModel ? modelW : 0) -
+			(showLastActive ? lastActiveW : 0) -
+			(showTokens ? TOKENS_WIDTH : 0) -
+			separators,
 	);
+
 	return {
 		indexW,
 		titleW,
@@ -515,6 +681,10 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 		modelW,
 		lastActiveW,
 		tokensW: TOKENS_WIDTH,
+		showResult,
+		showModel,
+		showLastActive,
+		showTokens,
 	};
 }
 
