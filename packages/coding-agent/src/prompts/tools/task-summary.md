@@ -4,6 +4,8 @@
 {{#each summaries}}
 <agent id="{{id}}" agent="{{agent}}">
 <status>{{status}}</status>
+{{#if statusDetail}}<status-detail>{{statusDetail}}</status-detail>{{/if}}
+<health>Health: {{health}}</health>
 {{#if meta}}<meta lines="{{meta.lineCount}}" size="{{meta.charSize}}" />{{/if}}
 {{#if abortReason}}<abort-reason>{{abortReason}}</abort-reason>{{/if}}
 {{#if truncated}}

@@ -1528,12 +1528,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			// Build final output - match plugin format
-			const successCount = results.filter(r => r.exitCode === 0 && !r.error).length;
 			const cancelledCount = results.filter(r => r.aborted).length;
 			const totalDuration = Date.now() - startTime;
 
 			const summaries = results.map(r => {
-				const status = r.aborted
+				const tokenCount = r.tokens ?? 0;
+				let status = r.aborted
 					? isUserStoppedAbortReason(r.abortReason)
 						? "user stopped"
 						: "cancelled"
@@ -1542,6 +1542,21 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						: r.exitCode === 0
 							? "completed"
 							: `failed (exit ${r.exitCode})`;
+				let statusDetail: string | undefined;
+				if (!r.aborted && r.exitCode === 0 && !r.error) {
+					const isSilentFailure = tokenCount === 0 && !r.hasSubmitResult;
+
+					if (isSilentFailure) {
+						status = "failed";
+						statusDetail =
+							"Session produced no output (0 tokens, no submit_result). The subagent may have failed to initialize.";
+					} else {
+						const isLowTokenWarning = tokenCount > 0 && tokenCount < 100 && !r.hasSubmitResult;
+						if (isLowTokenWarning) {
+							statusDetail = `Warning: Session used only ${tokenCount} tokens without calling submit_result.`;
+						}
+					}
+				}
 				const output = r.output.trim() || r.stderr.trim() || "(no output)";
 				const outputCharCount = r.outputMeta?.charCount ?? output.length;
 				const fullOutputThreshold = 5000;
@@ -1556,8 +1571,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				return {
 					agent: r.agent,
 					status,
+					statusDetail,
 					id: r.id,
 					abortReason: r.aborted && r.abortReason?.trim() ? r.abortReason.trim() : undefined,
+					health: `tokens=${tokenCount}, submit_result=${r.hasSubmitResult ? "yes" : "no"}, elapsed=${r.durationMs}ms`,
 					preview,
 					truncated,
 					meta: r.outputMeta
@@ -1568,6 +1585,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						: undefined,
 				};
 			});
+			const successCount = summaries.filter(summary => summary.status === "completed").length;
 
 			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";

@@ -192,6 +192,8 @@ export interface SingleResult {
 	truncated: boolean;
 	durationMs: number;
 	tokens: number;
+	/** Whether the subagent called submit_result before session ended */
+	hasSubmitResult?: boolean;
 	startedAt?: number;
 	lastUpdatedMs?: number;
 	provider?: string;

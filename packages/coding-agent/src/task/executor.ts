@@ -1379,6 +1379,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		truncated,
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
+		hasSubmitResult,
 		startedAt: progress.startedAt,
 		lastUpdatedMs: progress.lastUpdatedMs,
 		provider: progress.provider,
