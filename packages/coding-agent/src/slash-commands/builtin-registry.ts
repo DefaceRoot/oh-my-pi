@@ -491,7 +491,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 	{
 		name: "merge-omp",
-		description: "Fetch upstream OMP changes, merge safely, install dependencies, and relaunch",
+		description: "Fetch upstream OMP changes into a merge worktree for review and conflict resolution",
 		handle: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.mergeUpstreamFork();

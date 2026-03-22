@@ -14,7 +14,7 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
-import { FORK_REINSTALL_COMMAND, FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
+import { FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
 import type { BashResult } from "../../exec/bash-executor";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
@@ -28,7 +28,7 @@ import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
-import { buildOmpResumeArgs, resolveOmpCommand } from "../../task/omp-command";
+import { resolveOmpCommand } from "../../task/omp-command";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
@@ -703,10 +703,11 @@ export class CommandController {
 		}
 	}
 
-	private relaunchOmpSession(): void {
+	private launchDetachedOmpSession(cwd: string, initialPrompt?: string): void {
 		const { cmd, args, shell } = resolveOmpCommand();
-		const child = spawn(cmd, [...args, ...buildOmpResumeArgs(this.ctx.sessionManager.getSessionFile())], {
-			cwd: this.ctx.sessionManager.getCwd(),
+		const launchArgs = initialPrompt ? [...args, initialPrompt] : args;
+		const child = spawn(cmd, launchArgs, {
+			cwd,
 			detached: true,
 			shell,
 			stdio: "inherit",
@@ -716,6 +717,111 @@ export class CommandController {
 
 	private isShellSafeGitRef(ref: string): boolean {
 		return !/[\r\n\0"'`$&|;<>()[\]{}*!?~\\ ]/.test(ref);
+	}
+
+	private async allocateMergeWorktreeTarget(): Promise<{ branchName: string; worktreePath: string } | undefined> {
+		const dateStamp = new Date().toISOString().slice(0, 10);
+		const baseBranchName = `merge-upstream-${dateStamp}`;
+		const worktreeRoot = path.join(FORK_REPO_ROOT, ".worktrees");
+		await fs.mkdir(worktreeRoot, { recursive: true });
+
+		for (let suffix = 1; suffix < 200; suffix += 1) {
+			const branchName = suffix === 1 ? baseBranchName : `${baseBranchName}-${suffix}`;
+			const worktreePath = path.join(worktreeRoot, branchName);
+
+			const worktreePathExists = await fs
+				.access(worktreePath)
+				.then(() => true)
+				.catch(() => false);
+			if (worktreePathExists) {
+				continue;
+			}
+
+			const branchCheck = await this.runBashCommand(
+				`cd ${FORK_REPO_ROOT} && git show-ref --verify --quiet refs/heads/${branchName}`,
+				false,
+			);
+			if (!branchCheck) return undefined;
+			if (branchCheck.cancelled) {
+				this.ctx.showWarning("Merge cancelled while checking merge worktree branch names.");
+				return undefined;
+			}
+			if (branchCheck.exitCode === 1) {
+				return { branchName, worktreePath };
+			}
+			if (branchCheck.exitCode !== 0) {
+				this.ctx.showError("Could not inspect existing branch names for merge worktree creation.");
+				return undefined;
+			}
+		}
+
+		this.ctx.showError(
+			"Could not allocate a merge worktree branch name. Remove stale merge-upstream branches and retry.",
+		);
+		return undefined;
+	}
+
+	private async cleanupMergeWorktree(worktreePath: string, branchName: string): Promise<void> {
+		const removeWorktreeResult = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git worktree remove -f ${worktreePath}`,
+			false,
+		);
+		if (removeWorktreeResult && !removeWorktreeResult.cancelled && removeWorktreeResult.exitCode !== 0) {
+			const cleanupOutput = removeWorktreeResult.output.toLowerCase();
+			if (!cleanupOutput.includes("not a working tree") && !cleanupOutput.includes("does not exist")) {
+				this.ctx.showWarning(`Cleanup warning: failed to remove merge worktree ${worktreePath}.`);
+			}
+		}
+		try {
+			await fs.rm(worktreePath, { recursive: true, force: true });
+		} catch {
+			// best-effort cleanup
+		}
+
+		const deleteBranchResult = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git branch -D ${branchName}`,
+			false,
+		);
+		if (deleteBranchResult && !deleteBranchResult.cancelled && deleteBranchResult.exitCode !== 0) {
+			const cleanupOutput = deleteBranchResult.output.toLowerCase();
+			if (
+				!cleanupOutput.includes("not found") &&
+				!cleanupOutput.includes("cannot delete branch") &&
+				!cleanupOutput.includes("not fully merged")
+			) {
+				this.ctx.showWarning(`Cleanup warning: failed to delete branch ${branchName}.`);
+			}
+		}
+	}
+
+	private buildMergeWorktreePrompt(params: {
+		mergeBranchName: string;
+		worktreePath: string;
+		newCommitCount: number;
+		conflictingFiles: string[];
+	}): string {
+		const conflictLines =
+			params.conflictingFiles.length > 0
+				? [
+						`Conflicting files (${params.conflictingFiles.length}):`,
+						...params.conflictingFiles.map(file => `- ${file}`),
+					]
+				: ["Conflicting files: none detected by git merge."];
+
+		return [
+			"You are in a merge worktree prepared by /merge-omp.",
+			`Merge branch: ${params.mergeBranchName}`,
+			`Worktree path: ${params.worktreePath}`,
+			`Upstream commits included: ${params.newCommitCount}`,
+			"",
+			...conflictLines,
+			"",
+			"Required steps:",
+			"1. Resolve merge conflicts and verify each resolution.",
+			"2. Run lint, typecheck, and tests needed for confidence.",
+			"3. Commit the merge in this worktree when validation is complete.",
+			"4. Merge this branch back into defaceroot/main after review.",
+		].join("\n");
 	}
 
 	async handleMergeUpstreamFork(): Promise<void> {
@@ -755,11 +861,11 @@ export class CommandController {
 			this.ctx.showError("Could not determine the current branch in the fork repository.");
 			return;
 		}
-		const branchName = currentBranch.output.trim() || "main";
-		const upstreamBranchRef = `${FORK_UPSTREAM_REMOTE}/${branchName}`;
+		const currentBranchName = currentBranch.output.trim() || "main";
+		const upstreamBranchRef = `${FORK_UPSTREAM_REMOTE}/${currentBranchName}`;
 		if (!this.isShellSafeGitRef(upstreamBranchRef)) {
 			this.ctx.showError(
-				`Current branch '${branchName}' contains unsupported shell characters. Rename the branch before running /merge-omp.`,
+				`Current branch '${currentBranchName}' contains unsupported shell characters. Rename the branch before running /merge-omp.`,
 			);
 			return;
 		}
@@ -779,102 +885,125 @@ export class CommandController {
 			return;
 		}
 
-		const upstreamFiles = await this.runBashCommand(
-			`cd ${FORK_REPO_ROOT} && git diff --name-only HEAD...${upstreamBranchRef}`,
-			false,
+		const worktreeTarget = await this.allocateMergeWorktreeTarget();
+		if (!worktreeTarget) return;
+		const { branchName: mergeBranchName, worktreePath } = worktreeTarget;
+
+		this.ctx.showStatus(`Creating merge worktree '${mergeBranchName}' from defaceroot/main...`);
+		const createWorktreeResult = await this.runBashCommand(
+			`cd ${FORK_REPO_ROOT} && git worktree add ${worktreePath} -b ${mergeBranchName} defaceroot/main`,
+			true,
 		);
-		if (!upstreamFiles || upstreamFiles.exitCode !== 0) {
-			this.ctx.showError("Could not inspect upstream file changes.");
+		if (!createWorktreeResult) return;
+		if (createWorktreeResult.cancelled) {
+			this.ctx.showWarning("Merge worktree creation cancelled before completion.");
 			return;
 		}
-		const forkFiles = await this.runBashCommand(
-			`cd ${FORK_REPO_ROOT} && git diff --name-only ${upstreamBranchRef}...HEAD`,
-			false,
-		);
-		if (!forkFiles || forkFiles.exitCode !== 0) {
-			this.ctx.showError("Could not inspect fork-local file changes.");
-			return;
-		}
-
-		const upstreamFileList = upstreamFiles.output.trim().split("\n").filter(Boolean);
-		const forkFileList = new Set(forkFiles.output.trim().split("\n").filter(Boolean));
-		const conflictingFiles = upstreamFileList.filter(file => forkFileList.has(file));
-
-		if (conflictingFiles.length > 0) {
-			const summaryLines = [
-				`Upstream has ${newCommitCount} new commit(s).`,
-				`${conflictingFiles.length} file(s) overlap with fork-local modifications:`,
-				"",
-				...conflictingFiles.slice(0, 20).map(file => `  - ${file}`),
-				...(conflictingFiles.length > 20 ? [`  ... and ${conflictingFiles.length - 20} more`] : []),
-				"",
-				"These files changed in both upstream and your fork.",
-				"Proceed with merge?",
-			];
-			const summary = summaryLines.join("\n");
-			this.ctx.showStatus(summary);
-			const confirmed = await this.ctx.showHookConfirm("Potentially breaking upstream changes", summary);
-			if (!confirmed) {
-				this.ctx.showWarning("Merge cancelled.");
-				return;
-			}
-		} else {
-			this.ctx.showStatus(
-				`Upstream has ${newCommitCount} new commit(s) with no overlapping changes. Merging automatically...`,
-			);
-		}
-
-		const rebaseResult = await this.runBashCommand(`cd ${FORK_REPO_ROOT} && git rebase ${upstreamBranchRef}`, true);
-		if (!rebaseResult) return;
-		if (rebaseResult.cancelled) {
-			const abortResult = await this.runBashCommand(`cd ${FORK_REPO_ROOT} && git rebase --abort`, false);
-			if (!abortResult || abortResult.cancelled) {
-				this.ctx.showError(
-					"Merge cancelled, but automatic rebase abort failed. Resolve manually in the fork repository.\n" +
-						`To abort manually: cd ${FORK_REPO_ROOT} && git rebase --abort`,
-				);
-				return;
-			}
-			if (abortResult.exitCode !== 0 && !abortResult.output.toLowerCase().includes("no rebase in progress")) {
-				this.ctx.showError(
-					"Merge cancelled, but automatic rebase abort failed. Resolve manually in the fork repository.\n" +
-						`To abort manually: cd ${FORK_REPO_ROOT} && git rebase --abort`,
-				);
-				return;
-			}
-			this.ctx.showWarning("Merge cancelled. Rebase aborted.");
-			return;
-		}
-		if (rebaseResult.exitCode !== 0) {
+		if (createWorktreeResult.exitCode !== 0) {
 			this.ctx.showError(
-				"Rebase encountered conflicts. Resolve them in the fork repo, then run /merge-omp again.\n" +
-					`To abort: cd ${FORK_REPO_ROOT} && git rebase --abort`,
+				"Failed to create merge worktree from defaceroot/main. Inspect existing merge-upstream worktrees/branches before retrying.",
 			);
 			return;
 		}
 
-		this.ctx.showStatus("Merge successful. Installing dependencies...");
-		const installResult = await this.runBashCommand(FORK_REINSTALL_COMMAND, true);
-		if (!installResult) return;
-		if (installResult.cancelled) {
-			this.ctx.showWarning("Dependency install cancelled. OMP was not relaunched.");
+		this.ctx.showStatus("Applying upstream/main into the merge worktree...");
+		const mergeResult = await this.runBashCommand(
+			`cd ${worktreePath} && git merge ${FORK_UPSTREAM_REMOTE}/main --no-commit`,
+			true,
+		);
+		if (!mergeResult) {
+			await this.cleanupMergeWorktree(worktreePath, mergeBranchName);
+			this.ctx.showError(
+				"Merge command failed before producing output. The temporary merge worktree was cleaned up.",
+			);
 			return;
 		}
-		if (installResult.exitCode !== 0) {
-			this.ctx.showError("Dependency install failed after merge. Check the output above.");
+		if (mergeResult.cancelled) {
+			await this.cleanupMergeWorktree(worktreePath, mergeBranchName);
+			this.ctx.showWarning("Merge cancelled while applying upstream changes.");
 			return;
 		}
 
-		this.ctx.showStatus("Merge complete. Relaunching OMP...");
+		const conflictResult = await this.runBashCommand(
+			`cd ${worktreePath} && git diff --name-only --diff-filter=U`,
+			false,
+		);
+		if (!conflictResult || conflictResult.exitCode !== 0) {
+			await this.cleanupMergeWorktree(worktreePath, mergeBranchName);
+			this.ctx.showError("Could not inspect merge conflict files in the merge worktree.");
+			return;
+		}
+
+		const stagedResult = await this.runBashCommand(`cd ${worktreePath} && git diff --name-only --cached`, false);
+		if (!stagedResult || stagedResult.exitCode !== 0) {
+			await this.cleanupMergeWorktree(worktreePath, mergeBranchName);
+			this.ctx.showError("Could not inspect cleanly merged files in the merge worktree.");
+			return;
+		}
+
+		const conflictingFiles = conflictResult.output.trim().split("\n").filter(Boolean);
+		const conflictingFileSet = new Set(conflictingFiles);
+		const stagedFiles = stagedResult.output.trim().split("\n").filter(Boolean);
+		const cleanMergedFiles = stagedFiles.filter(file => !conflictingFileSet.has(file));
+
+		if (mergeResult.exitCode !== 0 && conflictingFiles.length === 0) {
+			await this.cleanupMergeWorktree(worktreePath, mergeBranchName);
+			this.ctx.showError(
+				"Merge failed before conflicts could be reviewed. The temporary merge worktree was cleaned up.",
+			);
+			return;
+		}
+
+		const summaryLines = [
+			`Created merge worktree: ${worktreePath}`,
+			`Branch: ${mergeBranchName}`,
+			`Upstream commits available: ${newCommitCount}`,
+			`Conflicting files: ${conflictingFiles.length}`,
+			`Cleanly merged files: ${cleanMergedFiles.length}`,
+			"",
+			"A merge worktree has been created. Run omp in the worktree to resolve conflicts and test.",
+			`To continue manually: cd ${worktreePath} && omp`,
+			"After validation, merge the worktree branch back into defaceroot/main.",
+		];
+		if (conflictingFiles.length > 0) {
+			summaryLines.push("", "Conflicting files:");
+			summaryLines.push(...conflictingFiles.slice(0, 25).map(file => `  - ${file}`));
+			if (conflictingFiles.length > 25) {
+				summaryLines.push(`  ... and ${conflictingFiles.length - 25} more`);
+			}
+		}
+		this.ctx.showStatus(summaryLines.join("\n"));
+
+		const launchMessageLines = [
+			`Open a new OMP session in ${worktreePath}?`,
+			"Use that session to resolve conflicts, run tests, and commit the merge.",
+		];
+		if (conflictingFiles.length > 0) {
+			launchMessageLines.push("", `Conflicting files detected: ${conflictingFiles.length}`);
+		}
+		const shouldLaunch = await this.ctx.showHookConfirm(
+			"Launch OMP in merge worktree?",
+			launchMessageLines.join("\n"),
+		);
+		if (!shouldLaunch) {
+			this.ctx.showStatus(`Merge worktree ready at ${worktreePath}.`);
+			return;
+		}
+
+		const launchPrompt = this.buildMergeWorktreePrompt({
+			mergeBranchName,
+			worktreePath,
+			newCommitCount,
+			conflictingFiles,
+		});
 		try {
-			this.relaunchOmpSession();
+			this.launchDetachedOmpSession(worktreePath, launchPrompt);
+			this.ctx.showStatus(`Launched OMP in merge worktree: ${worktreePath}`);
 		} catch (error) {
 			this.ctx.showError(
-				`Merge succeeded, but automatic relaunch failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+				`Merge worktree is ready at ${worktreePath}, but launching OMP failed: ${error instanceof Error ? error.message : "Unknown error"}`,
 			);
-			return;
 		}
-		await this.ctx.shutdown();
 	}
 
 	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {

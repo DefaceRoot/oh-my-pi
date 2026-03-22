@@ -3,7 +3,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
 describe("/merge-omp slash command", () => {
-	it("delegates fork merge to interactive mode so successful merges can relaunch omp", async () => {
+	it("delegates merge-omp handling to interactive mode", async () => {
 		let mergeCalls = 0;
 		let editorText = "unchanged";
 		const runtime = {
