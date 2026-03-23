@@ -137,6 +137,26 @@ export function detectWorktreeGroup(cwd: string): string {
   return "main";
 }
 
+/**
+ * Resolve the root repository path from a CWD that may be inside a git worktree.
+ * Strips `/.worktrees/<branch>` suffix to get the base repo path.
+ * Returns the path unchanged when it is not inside a `.worktrees` subtree.
+ */
+export function resolveRepoRoot(cwdPath: string): string {
+  const idx = cwdPath.indexOf("/.worktrees/");
+  if (idx >= 0) return cwdPath.slice(0, idx);
+  return cwdPath;
+}
+
+/**
+ * Check if a project path belongs to the same repository family as the
+ * current CWD.  Matches when both share the same repo root — covering the
+ * main worktree, the current worktree, and all sibling worktrees.
+ */
+export function isRelatedProject(projectPath: string, currentCwd: string): boolean {
+  return resolveRepoRoot(projectPath) === resolveRepoRoot(currentCwd);
+}
+
 /** Fuzzy match for filter */
 export function fuzzyMatch(query: string, ...texts: (string | undefined)[]): boolean {
   if (!query) return true;
@@ -202,7 +222,7 @@ export function buildProjectGroups(
       path: projectPath,
       displayName: shortenPath(projectPath),
       sessions: enriched,
-      isCurrentProject: currentCwd.startsWith(projectPath) || projectPath.startsWith(currentCwd),
+      isCurrentProject: isRelatedProject(projectPath, currentCwd),
     });
   }
   // Sort: current project first, then by most recent session
