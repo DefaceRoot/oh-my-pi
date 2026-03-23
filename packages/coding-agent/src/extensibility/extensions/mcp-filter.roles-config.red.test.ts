@@ -112,4 +112,24 @@ describe("Phase 7 RED: mcp-filter roles config source of truth", () => {
 			reason: "MCP tools are not available for this agent role.",
 		});
 	});
+
+	it("uses subagent _default MCP allowlist for unmatched subagent prompts", async () => {
+		const handlers = await createRegisteredHandlers();
+		await runBeforeAgentStart(
+			handlers,
+			"BASE SYSTEM PROMPT\nYou are operating on a delegated sub-task.\nUNKNOWN SUBAGENT PAYLOAD",
+		);
+
+		const toolCall = handlers.get("tool_call")?.[0];
+		if (!toolCall) throw new Error("tool_call handler not registered");
+
+		const chromeResult = await toolCall({ toolName: "mcp_chrome_devtools_click" }, {});
+		expect(chromeResult).toEqual({
+			block: true,
+			reason: "This MCP tool is not available for this agent role.",
+		});
+
+		const augmentResult = await toolCall({ toolName: "mcp_augment_codebase_retrieval" }, {});
+		expect(augmentResult).toBeUndefined();
+	});
 });

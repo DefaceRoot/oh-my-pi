@@ -12,6 +12,7 @@ type KnownAgentPrompt = {
 
 const DEFAULT_AGENT_DIR = path.join(os.homedir(), ".omp", "agent");
 const SUBAGENT_ROLE_MARKER = "You are operating on a delegated sub-task.";
+const SUBAGENT_DEFAULT_NAME = "_default";
 
 let knownAgentPromptsPromise: Promise<KnownAgentPrompt[]> | undefined;
 
@@ -27,7 +28,7 @@ function detectAgentNameFromPrompt(systemPrompt: string, knownAgentPrompts: Know
 	if (match) return match[1];
 	if (!systemPrompt.includes(SUBAGENT_ROLE_MARKER)) return "default";
 	const matchedAgent = knownAgentPrompts.find(({ body }) => body.length > 0 && systemPrompt.includes(body));
-	return matchedAgent?.name ?? "default";
+	return matchedAgent?.name ?? SUBAGENT_DEFAULT_NAME;
 }
 
 async function loadKnownAgentPrompts(): Promise<KnownAgentPrompt[]> {
