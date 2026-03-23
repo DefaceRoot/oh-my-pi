@@ -46,7 +46,9 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 
 		return createDeferredResult(id);
 	},
+	resumeCancelledSubagent: async () => null,
 }));
+
 
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
 	discoverAgents: async () => ({
@@ -80,6 +82,8 @@ function createMinimalSession(overrides: Record<string, unknown> = {}) {
 		getSessionFile: () => "/tmp/test-session.jsonl",
 		getSessionSpawns: () => "*",
 		taskDepth: 0,
+		// Return IDs as-is so signal lookups in the test use declared task IDs.
+		agentOutputManager: { allocateBatch: async (ids: string[]) => ids },
 		...overrides,
 	} as Parameters<typeof TaskTool.create>[0];
 }
@@ -106,16 +110,20 @@ describe("TaskTool targeted subagent stop requests", () => {
 		while (capturedSignals.size < 2) {
 			await Bun.sleep(1);
 		}
-
+		let respondArg: boolean | undefined;
 		let handled = false;
 		bus.emit(TASK_SUBAGENT_STOP_REQUEST_CHANNEL, {
 			id: "StopMe",
 			reason: "User stopped from flight deck: duplicate workstream",
-			respond: () => {
+			respond: (v: boolean) => {
+				respondArg = v;
 				handled = true;
 			},
 		});
 
+		console.log('DBG respond arg (abortSubtask returned):', respondArg);
+		console.log('DBG StopMe aborted:', capturedSignals.get('StopMe')?.aborted);
+		
 		expect(handled).toBe(true);
 		expect(capturedSignals.get("StopMe")?.aborted).toBe(true);
 		expect(capturedSignals.get("StopMe")?.reason).toBe("User stopped from flight deck: duplicate workstream");

@@ -65,6 +65,8 @@ export class SubagentIndex {
 	#seenOrder = 0;
 	#reconcileToken = 0;
 	#delegationSidecars = new Map<string, ParsedDelegationSidecar[]>();
+	#editStatsCache = new Map<string, { filesChanged: number; linesAdded: number; linesDeleted: number } | null>();
+	#statsComputing = false;
 
 	constructor(options: SubagentIndexOptions) {
 		this.#artifactsDir = options.artifactsDir;
@@ -539,6 +541,12 @@ export class SubagentIndex {
 		next.depth ??= hierarchy.depth;
 		next.status ??= next.sessionPath || next.outputPath ? "completed" : "pending";
 		this.#applyDelegationSidecar(next);
+		const stats = next.sessionPath ? this.#editStatsCache.get(next.sessionPath) : undefined;
+		if (stats) {
+			next.filesChanged = stats.filesChanged > 0 ? stats.filesChanged : undefined;
+			next.linesAdded = stats.linesAdded;
+			next.linesDeleted = stats.linesDeleted;
+		}
 		return next;
 	}
 
@@ -884,6 +892,79 @@ export class SubagentIndex {
 		const sidecarsInDir = this.#delegationSidecars.get(sessionDir);
 		if (!sidecarsInDir) return undefined;
 		return sidecarsInDir.find(sc => sc.taskId === taskItemId);
+	}
+
+/** Compute and cache edit stats for all completed sessions not yet scanned.
+	 * Returns true if any sessions were updated.
+	 */
+	async computeAllEditStats(): Promise<boolean> {
+		if (this.#statsComputing) return false;
+		this.#statsComputing = true;
+		try {
+			const toProcess = this.#snapshot.refs.filter(
+				ref =>
+					ref.sessionPath &&
+					!this.#editStatsCache.has(ref.sessionPath) &&
+					ref.status !== "running" &&
+					ref.status !== "pending",
+			);
+			if (toProcess.length === 0) return false;
+			for (const ref of toProcess) {
+				if (!ref.sessionPath) continue;
+				const stats = await this.#scanEditStatsFromFile(ref.sessionPath);
+				this.#editStatsCache.set(ref.sessionPath, stats.filesChanged > 0 ? stats : null);
+			}
+			this.#rebuildSnapshot();
+			return true;
+		} finally {
+			this.#statsComputing = false;
+		}
+	}
+
+	async #scanEditStatsFromFile(
+		sessionPath: string,
+	): Promise<{ filesChanged: number; linesAdded: number; linesDeleted: number }> {
+		const filePaths = new Set<string>();
+		let linesAdded = 0;
+		let linesDeleted = 0;
+		try {
+			const content = await Bun.file(sessionPath).text();
+			for (const rawLine of content.split("\n")) {
+				if (!rawLine.includes('"toolResult"')) continue;
+				const isEdit =
+					rawLine.includes('"edit"') && /"toolName"\s*:\s*"edit"/.test(rawLine);
+				const isWrite =
+					!isEdit &&
+					rawLine.includes('"write"') &&
+					/"toolName"\s*:\s*"write"/.test(rawLine);
+				if (!isEdit && !isWrite) continue;
+				const textRegex = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+				let textMatch: RegExpExecArray | null;
+				while ((textMatch = textRegex.exec(rawLine)) !== null) {
+					try {
+						const text = JSON.parse(`"${textMatch[1]}"`);
+						if (typeof text !== "string") continue;
+						if (isEdit) {
+							const pathLine = /^Updated\s+(.+?)$/m.exec(text);
+							if (pathLine?.[1]) filePaths.add(pathLine[1].trim());
+							const changesLine = /^Changes:\s*\+(\d+)\s+-(\d+)/m.exec(text);
+							if (changesLine) {
+								linesAdded += Number(changesLine[1]) || 0;
+								linesDeleted += Number(changesLine[2]) || 0;
+							}
+						} else if (isWrite) {
+							const pathLine = /Successfully wrote\s+\S+\s+to\s+(.+?)$/.exec(text);
+							if (pathLine?.[1]) filePaths.add(pathLine[1].trim());
+						}
+					} catch {
+						// Skip malformed text content
+					}
+				}
+			}
+		} catch {
+			// Ignore file read errors
+		}
+		return { filesChanged: filePaths.size, linesAdded, linesDeleted };
 	}
 
 	#applyDelegationSidecar(ref: SubagentViewRef): void {

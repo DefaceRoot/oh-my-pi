@@ -14,11 +14,13 @@ describe("subagent runtime registry", () => {
 
 	it("stops a registered subagent by runtime id", async () => {
 		const stop = vi.fn(async () => true);
+		const resume = vi.fn(async () => true);
 		registerSubagentRuntime({
 			id: "22-VerifyPhase07",
 			sessionId: "omp-session-1497",
 			sessionPath: "/tmp/22-VerifyPhase07.jsonl",
 			stop,
+			resume,
 		});
 
 		await expect(
@@ -29,11 +31,13 @@ describe("subagent runtime registry", () => {
 
 	it("can resolve a registered subagent by OMP session id", async () => {
 		const stop = vi.fn(async () => true);
+		const resume = vi.fn(async () => true);
 		registerSubagentRuntime({
 			id: "22-VerifyPhase07",
 			sessionId: "omp-session-1497",
 			sessionPath: "/tmp/22-VerifyPhase07.jsonl",
 			stop,
+			resume,
 		});
 
 		await expect(
@@ -44,11 +48,13 @@ describe("subagent runtime registry", () => {
 
 	it("does not stop an unregistered subagent", async () => {
 		const stop = vi.fn(async () => true);
+		const resume = vi.fn(async () => true);
 		registerSubagentRuntime({
 			id: "22-VerifyPhase07",
 			sessionId: "omp-session-1497",
 			sessionPath: "/tmp/22-VerifyPhase07.jsonl",
 			stop,
+			resume,
 		});
 		unregisterSubagentRuntime("22-VerifyPhase07");
 

@@ -52,7 +52,7 @@ export class ResumeModal extends Container {
       filterText: "",
       filterMode: false,
       showArchived: false,
-      focusPanel: projects.length > 0 ? "projects" : "sessions",
+      focusPanel: "sessions",
       layoutMode: "full",
     };
   }

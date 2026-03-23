@@ -211,7 +211,8 @@ export function renderSessionList(
       0,
       width - visibleWidth(leftSide) - visibleWidth(rightSide),
     );
-    lines.push(padLine(leftSide + " ".repeat(spaceCount) + rightSide, width));
+    const row = padLine(leftSide + " ".repeat(spaceCount) + rightSide, width);
+    lines.push(isSelected && isFocused ? theme.bg("selectedBg", row) : row);
   }
 
   while (lines.length < height) {

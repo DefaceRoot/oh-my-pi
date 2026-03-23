@@ -7,6 +7,7 @@ export interface SubagentRuntimeLookup {
 export interface RegisteredSubagentRuntime extends SubagentRuntimeLookup {
 	id: string;
 	stop: (reason: string) => boolean | Promise<boolean>;
+	resume: () => boolean | Promise<boolean>;
 }
 
 const runtimesById = new Map<string, RegisteredSubagentRuntime>();
@@ -56,6 +57,14 @@ export async function stopSubagentRuntime(lookup: SubagentRuntimeLookup, reason:
 	const runtime = runtimesById.get(runtimeId);
 	if (!runtime) return false;
 	return await runtime.stop(reason);
+}
+
+export async function resumeSubagentRuntime(lookup: SubagentRuntimeLookup): Promise<boolean> {
+	const runtimeId = resolveRuntimeId(lookup);
+	if (!runtimeId) return false;
+	const runtime = runtimesById.get(runtimeId);
+	if (!runtime) return false;
+	return await runtime.resume();
 }
 
 export function clearSubagentRuntimeRegistry(): void {

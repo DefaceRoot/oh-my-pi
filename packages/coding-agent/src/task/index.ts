@@ -1164,6 +1164,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
 				const taskAbortController = new AbortController();
 				subtaskAbortControllers.set(task.id, taskAbortController);
+				// Also register by declared task ID so stop events using the original ID are resolved.
+				const declaredTaskId = tasks[index]?.id;
+				if (declaredTaskId && declaredTaskId !== task.id) {
+					subtaskAbortControllers.set(declaredTaskId, taskAbortController);
+				}
 				const taskSignal = signal
 					? AbortSignal.any([signal, taskAbortController.signal])
 					: taskAbortController.signal;
@@ -1338,6 +1343,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					}
 				} finally {
 					subtaskAbortControllers.delete(task.id);
+					const declaredId = tasks[index]?.id;
+					if (declaredId && declaredId !== task.id) {
+						subtaskAbortControllers.delete(declaredId);
+					}
 				}
 			};
 
