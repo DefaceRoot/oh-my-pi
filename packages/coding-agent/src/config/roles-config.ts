@@ -42,6 +42,7 @@ export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
 		"using-git-worktrees",
 		"using-tmux-for-interactive-commands",
 	],
+	orchestration: ["commit-hygiene", "verification-before-completion", "dispatching-parallel-agents"],
 	planning: ["brainstorming", "generate-creative-ideas", "writing-plans", "validate-implementation-plan"],
 	implementation: [
 		"test-driven-development",
@@ -109,7 +110,7 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			tools: ["read", "bash", "task", "await", "todo_write", "ask"],
 			mcp: ["augment"],
 			skills: {
-				categories: ["workflow", "infra"],
+				categories: ["orchestration"],
 			},
 		},
 		plan: {

@@ -70,23 +70,43 @@ export interface LoadSkillsOptions extends SkillsSettings {
 	categories?: string[];
 }
 
-const SKILL_NAME_TO_CATEGORY = new Map<string, string>(
-	Object.entries(SKILL_CATEGORY_TO_SKILLS).flatMap(([category, skillNames]) =>
-		skillNames.map(skillName => [skillName, category]),
-	),
-);
+const SKILL_NAME_TO_CATEGORIES = new Map<string, Set<string>>();
+for (const [category, skillNames] of Object.entries(SKILL_CATEGORY_TO_SKILLS)) {
+	for (const skillName of skillNames) {
+		let categories = SKILL_NAME_TO_CATEGORIES.get(skillName);
+		if (!categories) {
+			categories = new Set<string>();
+			SKILL_NAME_TO_CATEGORIES.set(skillName, categories);
+		}
+		categories.add(category);
+	}
+}
 
 export function getSkillCategoryForSkillName(skillName: string): string | null {
-	return SKILL_NAME_TO_CATEGORY.get(skillName) ?? null;
+	const categories = SKILL_NAME_TO_CATEGORIES.get(skillName);
+	if (!categories || categories.size === 0) {
+		return null;
+	}
+	return categories.values().next().value ?? null;
+}
+
+function matchesCategorySet(skillName: string, categorySet: ReadonlySet<string>): boolean {
+	const skillCategories = SKILL_NAME_TO_CATEGORIES.get(skillName);
+	if (!skillCategories) {
+		return false;
+	}
+	for (const category of skillCategories) {
+		if (categorySet.has(category)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 export function filterSkillsByCategories(skills: Skill[], categories: readonly string[]): Skill[] {
 	if (categories.length === 0) return [];
 	const categorySet = new Set(categories);
-	return skills.filter(skill => {
-		const category = getSkillCategoryForSkillName(skill.name);
-		return category !== null && categorySet.has(category);
-	});
+	return skills.filter(skill => matchesCategorySet(skill.name, categorySet));
 }
 
 /**
@@ -146,12 +166,13 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		return ignoredSkills.some(pattern => new Bun.Glob(pattern).match(name));
 	}
 
+	const categorySet = categories === undefined ? null : new Set(categories);
+
 	// Check if skill name is allowed by category filter
 	function matchesCategoryFilter(name: string): boolean {
-		if (categories === undefined) return true;
-		if (categories.length === 0) return false;
-		const category = getSkillCategoryForSkillName(name);
-		return category !== null && categories.includes(category);
+		if (categorySet === null) return true;
+		if (categorySet.size === 0) return false;
+		return matchesCategorySet(name, categorySet);
 	}
 
 	// Filter skills by source and patterns first
