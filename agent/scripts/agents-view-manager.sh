@@ -79,6 +79,14 @@ ensure_all() {
 respawn_session() {
   local session="$1"
   local session_path
+  local window_name
+
+  # Verify window at WINDOW_INDEX is actually the Agents window
+  window_name="$(tmux display-message -p -t "$session:${WINDOW_INDEX}" '#{window_name}' 2>/dev/null || echo '')"
+  if [[ "$window_name" != "$WINDOW_NAME" ]]; then
+    echo "[agents-view-manager] respawn: window $WINDOW_INDEX is '$window_name', not '$WINDOW_NAME' — skipping" >&2
+    return 0
+  fi
 
   session_path="$(tmux display-message -p -t "$session" '#{session_path}' 2>/dev/null || echo '')"
   # Send quit to gracefully stop the dashboard
