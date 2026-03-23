@@ -3923,7 +3923,7 @@ const notifyWorktreeProgress = (
 		const changedFiles = computeFilesDelta(preTaskSnapshot, postTaskSnapshot);
 		readBudget.transitionToPostTask(changedFiles);
 
-		const taskResultText = flattenMessageContent(event.content);
+		const taskResultText = extractTextContent(event.content);
 		const hasSubmitResultDeadlock =
 			/SYSTEM WARNING:\s*Subagent exited without calling submit_result/i.test(
 				taskResultText,

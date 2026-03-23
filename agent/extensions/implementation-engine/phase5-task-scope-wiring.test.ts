@@ -63,12 +63,21 @@ describe("implementation worker scope wiring", () => {
 		const source = await readExtensionSource();
 		const toolResultBlock = extractToolResultBlock(source);
 
-
 		expect(toolResultBlock).toMatch(/collectTaskUnitsFromTaskInput\(taskInput\)/);
 		expect(toolResultBlock).toMatch(/collectTaskUnitsFromTaskResultDetails\(event\.details\)/);
 		expect(toolResultBlock).toMatch(/mergeTaskUnitsForScope\(inputUnits,\s*resultUnits\)/);
 		expect(toolResultBlock).toMatch(/createImplementationTaskScopeMetadata\(/);
 		expect(toolResultBlock).toMatch(/implementationTaskScopeMetadata/);
 		expect(toolResultBlock).toMatch(/implementationUnitScopeById\s*=\s*new Map/);
+	});
+
+	test("task result deadlock detection reads event content with extractTextContent", async () => {
+		const source = await readExtensionSource();
+		const toolResultBlock = extractToolResultBlock(source);
+
+		expect(toolResultBlock).toMatch(
+			/const taskResultText = extractTextContent\(event\.content\);/,
+		);
+		expect(toolResultBlock).not.toMatch(/flattenMessageContent\(event\.content\)/);
 	});
 });
