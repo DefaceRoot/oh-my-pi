@@ -1174,7 +1174,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					: taskAbortController.signal;
 				try {
 					if (!isIsolated) {
-						return runSubprocess({
+						return await runSubprocess({
 							cwd: this.session.cwd,
 							agent: effectiveAgent,
 							runtimeRole: effectiveAgent.name,

@@ -110,20 +110,15 @@ describe("TaskTool targeted subagent stop requests", () => {
 		while (capturedSignals.size < 2) {
 			await Bun.sleep(1);
 		}
-		let respondArg: boolean | undefined;
 		let handled = false;
 		bus.emit(TASK_SUBAGENT_STOP_REQUEST_CHANNEL, {
 			id: "StopMe",
 			reason: "User stopped from flight deck: duplicate workstream",
-			respond: (v: boolean) => {
-				respondArg = v;
+			respond: () => {
 				handled = true;
 			},
 		});
 
-		console.log('DBG respond arg (abortSubtask returned):', respondArg);
-		console.log('DBG StopMe aborted:', capturedSignals.get('StopMe')?.aborted);
-		
 		expect(handled).toBe(true);
 		expect(capturedSignals.get("StopMe")?.aborted).toBe(true);
 		expect(capturedSignals.get("StopMe")?.reason).toBe("User stopped from flight deck: duplicate workstream");
