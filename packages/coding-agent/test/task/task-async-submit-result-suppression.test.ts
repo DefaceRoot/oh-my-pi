@@ -99,7 +99,7 @@ function createSession(asyncJobManager: FakeAsyncJobManager) {
 		agentOutputManager: {
 			allocateBatch: async (ids: string[]) => ids.map((id, index) => `${index}-${id}`),
 		},
-	} as Parameters<typeof TaskTool.create>[0];
+	} as unknown as Parameters<typeof TaskTool.create>[0];
 }
 
 describe("TaskTool async submit_result suppression", () => {
