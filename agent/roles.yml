@@ -111,6 +111,7 @@ roles:
       - resolve
     mcp: 
       - augment
+      - ref
     skills: all
   implement: 
     tools: 

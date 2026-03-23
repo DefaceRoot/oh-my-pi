@@ -23,6 +23,14 @@ thinking-level: high
 - You MUST NOT run `git commit` or `git push` directly; hand commit ownership to the `commit` agent.
 </directives>
 
+<ref_mcp_server>
+The Ref MCP server (`ref`) provides library and framework documentation lookup, useful for CSS frameworks, component libraries, and UI framework APIs.
+
+- You MAY query the Ref MCP server for quick documentation lookups when implementing against unfamiliar UI framework APIs or CSS libraries — limit to 1-2 queries.
+- If you need extensive documentation research, delegate to a `research` subagent instead.
+- Prefer Ref MCP over web search for framework API references when available.
+</ref_mcp_server>
+
 <delivery_loop>
 When this assignment mutates repository files:
 1. Spawn a `lint` subagent first for lint, typecheck, and tests in the changed scope.
