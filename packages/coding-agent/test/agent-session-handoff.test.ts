@@ -8,6 +8,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession handoff", () => {
@@ -54,6 +55,7 @@ describe("AgentSession handoff", () => {
 		});
 
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
+		Bun.env.PI_NO_TITLE = "1";
 
 		sessionManager.appendMessage({
 			role: "user",
@@ -86,6 +88,7 @@ describe("AgentSession handoff", () => {
 		try {
 			await tempDir.remove();
 		} catch {}
+		delete Bun.env.PI_NO_TITLE;
 		vi.restoreAllMocks();
 	});
 
@@ -132,6 +135,59 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	it("generates a title for the new handoff session", async () => {
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		delete Bun.env.PI_NO_TITLE;
+		const handoffText = "## Goal\nContinue from here";
+		const handoffAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: handoffText }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 190_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		const generateSessionTitleSpy = vi
+			.spyOn(titleGenerator, "generateSessionTitle")
+			.mockResolvedValue("Continue from here");
+		const setTerminalTitleSpy = vi.spyOn(titleGenerator, "setTerminalTitle").mockImplementation(() => {});
+		const setSessionNameSpy = vi.spyOn(sessionManager, "setSessionName");
+		vi.spyOn(session, "prompt").mockImplementation(async () => {
+			session.agent.replaceMessages([handoffAssistant]);
+			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
+		});
+
+		const result = await session.handoff();
+		await Bun.sleep(20);
+
+		expect(result?.document).toBe(handoffText);
+		expect(generateSessionTitleSpy).toHaveBeenCalledTimes(1);
+		expect(generateSessionTitleSpy).toHaveBeenCalledWith(
+			handoffText,
+			modelRegistry,
+			session.settings.getModelRole("curator"),
+			session.sessionId,
+		);
+		expect(setSessionNameSpy).toHaveBeenCalledWith("Continue from here");
+		expect(sessionManager.getSessionName()).toBe("Continue from here");
+		expect(setTerminalTitleSpy).toHaveBeenCalledWith("π: Continue from here");
 	});
 
 	it("does not run auto maintenance when strategy is off", async () => {
@@ -358,12 +414,36 @@ describe("AgentSession handoff", () => {
 			timestamp: Date.now(),
 		};
 
-		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		const handoffText = "## Goal\nContinue from here";
+		const handoffAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: handoffText }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 190_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		const handoffSpy = vi.spyOn(session, "handoff");
+		vi.spyOn(session, "prompt").mockImplementation(async () => {
+			session.agent.replaceMessages([handoffAssistant]);
+			session.agent.emitExternalEvent({ type: "message_end", message: handoffAssistant });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [handoffAssistant] });
+		});
 		const agentPromptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await Bun.sleep(50);
 
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		expect(agentPromptSpy).toHaveBeenCalledTimes(1);

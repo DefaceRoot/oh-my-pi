@@ -114,6 +114,7 @@ import {
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
+import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -3461,6 +3462,22 @@ Be thorough - include exact file paths, function names, error messages, and tech
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#syncTodoPhasesFromBranch();
+
+			if (!this.sessionManager.getSessionName() && !Bun.env.PI_NO_TITLE) {
+				const curatorModel = this.settings.getModelRole("curator");
+				const titleSessionId = this.sessionId;
+				generateSessionTitle(handoffText, this.modelRegistry, curatorModel, titleSessionId)
+					.then(async title => {
+						if (!title) return;
+						if (this.sessionId !== titleSessionId) return;
+						if (this.sessionManager.getSessionName()) return;
+						await this.sessionManager.setSessionName(title);
+						if (this.sessionId !== titleSessionId) return;
+						if (this.sessionManager.getSessionName() !== title) return;
+						setTerminalTitle(`π: ${title}`);
+					})
+					.catch(() => {});
+			}
 
 			return { document: handoffText, savedPath };
 		} finally {
