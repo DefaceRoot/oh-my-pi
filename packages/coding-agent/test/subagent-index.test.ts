@@ -180,6 +180,52 @@ describe("SubagentIndex", () => {
 		});
 	});
 
+	test("ingestTaskResults derives outcome from submit_result data payload", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "2-LintOutcome",
+				extractedToolData: {
+					submit_result: [{ data: { passed: true, summary: "No lint violations" } }],
+				},
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]?.outcome).toEqual({
+			status: "pass",
+			label: "lint",
+			summary: "No lint violations",
+		});
+	});
+
+	test("ingestTaskResults prefers explicit submit_result outcome over derived data", () => {
+		const index = new SubagentIndex({ artifactsDir });
+
+		index.ingestTaskResults([
+			buildTaskResult({
+				id: "2-ExplicitOutcome",
+				extractedToolData: {
+					submit_result: [
+						{
+							outcome: { status: "go", label: "review", summary: "Explicit approval" },
+							data: { verdict: "no_go", summary: "Derived block" },
+						},
+					],
+				},
+			}),
+		]);
+
+		const snapshot = index.getSnapshot();
+		expect(snapshot.refs[0]?.outcome).toEqual({
+			status: "go",
+			label: "review",
+			summary: "Explicit approval",
+		});
+	});
+
+
 	test("ingestTaskResults skips template boilerplate when deriving context preview", () => {
 		const index = new SubagentIndex({ artifactsDir });
 		const task = [
