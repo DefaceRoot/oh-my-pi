@@ -7,6 +7,7 @@ import { theme } from "../theme/theme";
 
 const MIN_WIDTH = 24;
 const MIN_BODY_HEIGHT = 4;
+const SIDEBAR_WIDTH = 36;
 
 export interface SubagentSessionViewerMetadata {
 	agentName?: string;
@@ -271,11 +272,12 @@ export class SubagentSessionViewerComponent implements Component {
 	render(width: number): string[] {
 		this.#lastRenderWidth = Math.max(MIN_WIDTH, width);
 		const innerWidth = Math.max(1, this.#lastRenderWidth - 2);
+		const { sidebarOpen, sidebarWidth, bodyWidth } = this.#sidebarLayout(innerWidth);
 		const titleRows = this.#wrapLines(this.#buildTitleLines(), innerWidth);
 		const metadataRows = this.#wrapLines(this.#buildMetadataLines(), innerWidth);
 		const headerRows = this.#contextExpanded ? this.#wrapLines(this.#content.headerLines, innerWidth) : [];
-		const hierarchyPanelRows = this.#buildHierarchyPanelLines(innerWidth);
-		const bodyRows = this.#bodyRows(innerWidth);
+		const sidebarRows = sidebarOpen ? this.#buildHierarchyPanelLines(sidebarWidth) : [];
+		const bodyRows = this.#bodyRows(bodyWidth);
 		const footerRowCount = this.#footerRowCount(innerWidth);
 		const bodyHeight = this.#bodyHeight(
 			this.#lastRenderWidth,
@@ -284,9 +286,7 @@ export class SubagentSessionViewerComponent implements Component {
 			footerRowCount,
 			metadataRows.length,
 		);
-		const maxHierarchyRows = Math.max(0, bodyHeight - 1);
-		const visibleHierarchyRows = hierarchyPanelRows.slice(0, maxHierarchyRows);
-		const transcriptViewportHeight = Math.max(1, bodyHeight - visibleHierarchyRows.length);
+		const transcriptViewportHeight = bodyHeight;
 		this.#lastBodyViewportHeight = transcriptViewportHeight;
 		const maxOffset = Math.max(0, bodyRows.length - transcriptViewportHeight);
 		this.#scrollOffset = this.#followTail ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
@@ -295,10 +295,17 @@ export class SubagentSessionViewerComponent implements Component {
 			this.#scrollOffset,
 			this.#scrollOffset + transcriptViewportHeight,
 		);
-		let visibleBodyRows =
-			visibleHierarchyRows.length > 0 ? [...visibleHierarchyRows, ...visibleTranscriptRows] : [...visibleTranscriptRows];
-		while (visibleBodyRows.length < bodyHeight) {
-			visibleBodyRows.push("");
+		const visibleBodyRows: string[] = [];
+		for (let index = 0; index < bodyHeight; index += 1) {
+			const transcriptRow = visibleTranscriptRows[index] ?? "";
+			if (!sidebarOpen) {
+				visibleBodyRows.push(transcriptRow);
+				continue;
+			}
+			const sidebarRow = sidebarRows[index] ?? "";
+			const paddedTranscript = this.#padOrTruncate(transcriptRow, bodyWidth);
+			const paddedSidebar = this.#padOrTruncate(sidebarRow, sidebarWidth);
+			visibleBodyRows.push(`${paddedTranscript}${theme.fg("dim", "│")}${paddedSidebar}`);
 		}
 
 		const lines: string[] = [this.#frameTop(innerWidth)];
@@ -532,6 +539,26 @@ export class SubagentSessionViewerComponent implements Component {
 		return wrappedRows;
 	}
 
+	#sidebarLayout(innerWidth: number): { sidebarOpen: boolean; sidebarWidth: number; bodyWidth: number } {
+		const hasHierarchy = (this.#content.hierarchyLines?.length ?? 0) > 0;
+		const wantsSidebar = this.#hierarchyPanelOpen && hasHierarchy;
+		if (!wantsSidebar) {
+			return { sidebarOpen: false, sidebarWidth: 0, bodyWidth: innerWidth };
+		}
+		const maxSidebarWidth = innerWidth - MIN_WIDTH - 1;
+		if (maxSidebarWidth < 1) {
+			return { sidebarOpen: false, sidebarWidth: 0, bodyWidth: innerWidth };
+		}
+		const sidebarWidth = Math.min(SIDEBAR_WIDTH, maxSidebarWidth);
+		return { sidebarOpen: true, sidebarWidth, bodyWidth: innerWidth - sidebarWidth - 1 };
+	}
+
+	#padOrTruncate(content: string, width: number): string {
+		const truncated = truncateToWidth(content, width);
+		const remaining = Math.max(0, width - visibleWidth(truncated));
+		return `${truncated}${padding(remaining)}`;
+	}
+
 	#invalidateBodyCache(): void {
 		this.#cachedBodyRows = [];
 		this.#cachedBodyWidth = -1;
@@ -559,16 +586,13 @@ export class SubagentSessionViewerComponent implements Component {
 	}
 
 	#transcriptViewportHeight(width: number): number {
-		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
-		const bodyHeight = this.#bodyHeight(width);
-		const hierarchyRows = this.#buildHierarchyPanelLines(innerWidth).length;
-		const visibleHierarchyRows = Math.min(hierarchyRows, Math.max(0, bodyHeight - 1));
-		return Math.max(1, bodyHeight - visibleHierarchyRows);
+		return this.#bodyHeight(width);
 	}
 
 	#maxScrollOffset(width: number): number {
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
-		const bodyRows = this.#bodyRows(innerWidth);
+		const { bodyWidth } = this.#sidebarLayout(innerWidth);
+		const bodyRows = this.#bodyRows(bodyWidth);
 		return Math.max(0, bodyRows.length - this.#transcriptViewportHeight(width));
 	}
 

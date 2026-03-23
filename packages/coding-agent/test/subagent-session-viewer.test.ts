@@ -201,7 +201,50 @@ describe("SubagentSessionViewerComponent", () => {
 		viewer.handleInput("h");
 		text = renderText(viewer, 100);
 		expect(text).toContain("Hierarchy (h close)");
-		expect(text).toContain("(21) explore-agent | CodeRabbitReview");
+		expect(text).toContain("(21) explore-agent |");
+		expect(text).toContain("CodeRabbitReview");
+
+	});
+
+	test("uses pane widths for transcript rendering when hierarchy sidebar toggles", () => {
+		const transcriptWidths: number[] = [];
+		const viewer = createViewer({ getTerminalRows: () => 24 });
+		viewer.setContent({
+			headerLines: ["header"],
+			hierarchyLines: ["  ▸ (21) explore-agent | CodeRabbitReview"],
+			renderTranscriptLines: width => {
+				transcriptWidths.push(width);
+				return ["body"];
+			},
+			nestedArrowMode: false,
+		});
+
+		viewer.render(80);
+		expect(transcriptWidths.at(-1)).toBe(78);
+
+		viewer.handleInput("h");
+		viewer.render(80);
+		expect(transcriptWidths.at(-1)).toBe(41);
+
+		viewer.render(40);
+		expect(transcriptWidths.at(-1)).toBe(24);
+	});
+
+	test("renders hierarchy rows beside transcript rows", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["session header"],
+			hierarchyLines: ["  ▸ (21) explore-agent | CodeRabbitReview"],
+			bodyLines: ["body row"],
+			nestedArrowMode: false,
+		});
+		viewer.handleInput("h");
+
+		const lines = renderText(viewer, 100).split("\n");
+		const bodyLineIndex = lines.findIndex(line => line.includes("body row"));
+		const hierarchyLineIndex = lines.findIndex(line => line.includes("Hierarchy (h close)"));
+		expect(bodyLineIndex).toBeGreaterThanOrEqual(0);
+		expect(hierarchyLineIndex).toBe(bodyLineIndex);
 	});
 
 	test("renders richer session metadata and stop controls for running subagents", () => {
