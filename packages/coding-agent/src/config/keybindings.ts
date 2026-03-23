@@ -71,7 +71,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	togglePlanMode: "alt+shift+p",
 	toggleAskMode: [],
 	toggleSTT: "alt+h",
-	historySearch: "ctrl+r",
+	historySearch: "alt+r",
 	expandTools: "ctrl+o",
 	toggleThinking: "ctrl+t",
 	toggleSessionNamedFilter: "ctrl+n",
@@ -85,7 +85,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	newSession: [],
 	tree: [],
 	fork: [],
-	resume: [],
+	resume: ["ctrl+r"],
 	toggleWorktreeMenu: "alt+w",
 	lazygit: "ctrl+g",
 };

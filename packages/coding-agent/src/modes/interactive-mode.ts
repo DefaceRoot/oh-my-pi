@@ -77,6 +77,7 @@ import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
+import { ResumeModal } from "./resume-modal/resume-modal";
 import { SubagentIndex } from "./subagent-view/subagent-index";
 import { SubagentNavigatorModal } from "./subagent-view/subagent-navigator-modal";
 import { SubagentArtifactsWatchManager } from "./subagent-view/subagent-watch";
@@ -297,6 +298,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	private subagentNavigatorComponent: SubagentNavigatorModal | undefined;
 	private subagentNavigatorOverlay: ReturnType<TUI["showOverlay"]> | undefined;
 	private subagentNavigatorGroups: SubagentViewGroup[] = [];
+	private resumeModalComponent: ResumeModal | undefined;
+	private resumeModalOverlay: ReturnType<TUI["showOverlay"]> | undefined;
 	private sidebarModifiedFiles: SidebarModel["modifiedFiles"] = [];
 	private sidebarModifiedFilesLastRefreshMs = 0;
 	private sidebarModifiedFilesCwd: string | undefined;
@@ -1353,6 +1356,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	renderInitialMessages(): void {
+		this.closeResumeModal();
 		this.subagentNavigatorOverlay?.hide();
 		this.subagentSessionOverlay?.hide();
 		this.subagentViewRequestToken += 1;
@@ -1484,10 +1488,78 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.selectorController.showSessionSelector();
 	}
 
+	async openResumeModal(): Promise<void> {
+		const grouped = await SessionManager.listAllGroupedByProject();
+		const currentCwd = this.sessionManager.getCwd();
+
+		if (this.resumeModalComponent && this.resumeModalOverlay) {
+			this.resumeModalComponent.updateSessions(grouped, currentCwd);
+			if (this.resumeModalOverlay.isHidden()) {
+				this.resumeModalOverlay.setHidden(false);
+			}
+			this.ui.requestRender();
+			return;
+		}
+
+		const modal = new ResumeModal(grouped, currentCwd, {
+			onSelect: (sessionPath, sessionCwd) => {
+				this.closeResumeModal();
+				void this.handleResumeModalSelection(sessionPath, sessionCwd);
+			},
+			onClose: () => {
+				this.closeResumeModal();
+				this.ui.requestRender();
+			},
+		});
+
+		this.resumeModalComponent = modal;
+		this.resumeModalOverlay = this.ui.showOverlay(modal, {
+			width: "92%",
+			maxHeight: "85%",
+			anchor: "center",
+			margin: 1,
+		});
+	}
+
 	handleResumeSession(sessionPath: string): Promise<void> {
 		return this.selectorController.handleResumeSession(sessionPath);
 	}
 
+	private closeResumeModal(): void {
+		this.resumeModalOverlay?.hide();
+		this.resumeModalOverlay = undefined;
+		this.resumeModalComponent = undefined;
+	}
+
+	private async handleResumeModalSelection(
+		sessionPath: string,
+		sessionCwd: string,
+	): Promise<void> {
+		const previousCwd = process.cwd();
+		let switchedCwd = false;
+
+		if (sessionCwd) {
+			try {
+				process.chdir(sessionCwd);
+				switchedCwd = process.cwd() !== previousCwd;
+			} catch {
+				// Keep current cwd when target no longer exists or is inaccessible.
+			}
+		}
+
+		try {
+			await this.selectorController.handleResumeSession(sessionPath);
+		} catch (error) {
+			if (switchedCwd) {
+				try {
+					process.chdir(previousCwd);
+				} catch {
+					// Ignore restore failures; report original error below.
+				}
+			}
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		return this.selectorController.showOAuthSelector(mode, providerId);
 	}
@@ -1541,6 +1613,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleSessionRootChange(): void {
+		this.closeResumeModal();
 		this.exitSubagentView();
 		this.disposeSubagentWatchCleanup();
 		this.subagentRefreshGeneration += 1;

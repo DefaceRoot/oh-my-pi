@@ -299,13 +299,18 @@ export class InputController {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
 		this.ctx.editor.onCtrlL = () => this.ctx.showModelSelector();
-		this.ctx.editor.onCtrlR = () => this.ctx.showHistorySearch();
+		this.ctx.editor.onCtrlR = undefined;
 		this.ctx.editor.onCtrlT = () => this.ctx.toggleTodoExpansion();
 		for (const key of this.ctx.keybindings.getKeys("lazygit")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.openLazygit());
 		}
 		for (const key of this.ctx.keybindings.getKeys("externalEditor")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.openExternalEditor());
+		}
+		for (const key of this.ctx.keybindings.getKeys("historySearch")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showHistorySearch();
+			});
 		}
 		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
@@ -367,14 +372,7 @@ export class InputController {
 
 		for (const key of this.ctx.keybindings.getKeys("resume")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
-				const hasResumeUiCommand = Boolean(this.ctx.session.extensionRunner?.getCommand("resume-ui"));
-				if (hasResumeUiCommand) {
-					void this.ctx.session.prompt("/resume-ui").catch(() => {
-						this.ctx.showSessionSelector();
-					});
-					return;
-				}
-				this.ctx.showSessionSelector();
+				void this.ctx.openResumeModal();
 			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("followUp")) {

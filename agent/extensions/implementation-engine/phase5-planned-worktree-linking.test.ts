@@ -73,7 +73,7 @@ describe("implementation-engine phase 5 planned flow plan linking (RED)", () => 
 		const source = await readExtensionSource();
 		const inputBlock = extractInputHookBlock(source);
 
-		expect(inputBlock).toMatch(/if \(text === "\/resume" \|\| text\?\.startsWith\("\/resume "\)\) \{[\s\S]*return \{ text: "\/resume-ui" \ };/);
+		expect(inputBlock).not.toMatch(/\/resume-ui/);
 		expect(inputBlock).toMatch(/if\s*\(\s*!pendingPlannedWorktree\s*\)\s*\{[\s\S]*return;[\s\S]*\}/);
 	});
 

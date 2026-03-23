@@ -485,7 +485,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		name: "resume",
 		description: "Resume a different session",
 		handle: (_command, runtime) => {
-			runtime.ctx.showSessionSelector();
+			void runtime.ctx.openResumeModal();
 			runtime.ctx.editor.setText("");
 		},
 	},
