@@ -257,6 +257,60 @@ async function deriveWorktreeInfo(worktreePath: string): Promise<{
 	}
 }
 
+/**
+ * Extracts base_branch, repo_root, and worktree_path from a TOON delegation block.
+ * Mirrors the logic in parseToonBlockFields from toon-delegation-builder.ts, scoped
+ * to only the three fields needed for the CodeRabbit handoff fallback.
+ */
+function parseToonGitContext(text: string | undefined): {
+	baseBranch?: string;
+	repoRoot?: string;
+	worktreePath?: string;
+} {
+	if (!text) return {};
+	let lastIdx = -1;
+	for (const match of text.matchAll(/^delegation:\s*$/gm)) {
+		lastIdx = match.index ?? -1;
+	}
+	if (lastIdx < 0) return {};
+	const afterStart = text.slice(lastIdx);
+	const blockLines: string[] = [];
+	for (const [i, line] of afterStart.split("\n").entries()) {
+		if (i > 0 && line.length > 0 && !/^\s/.test(line)) break;
+		blockLines.push(line);
+	}
+	// Build flat dotted-path field map (mirrors parseToonBlockFields logic)
+	const fields: Record<string, string> = {};
+	const stack: Array<{ indent: number; key: string }> = [];
+	for (const rawLine of blockLines) {
+		if (!rawLine.trim()) continue;
+		const indent = rawLine.length - rawLine.trimStart().length;
+		const line = rawLine.trim();
+		if (line === "delegation:") { stack.length = 0; continue; }
+		if (/\[\d*\]/.test((line.split(":")[0] ?? ""))) continue;
+		if (line.startsWith("-")) continue;
+		const ci = line.indexOf(":");
+		if (ci <= 0) continue;
+		while (stack.length > 0 && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
+		const key = line.slice(0, ci).trim();
+		const rawVal = line.slice(ci + 1).trim();
+		const fieldPath = stack.length > 0 ? `${stack.map(s => s.key).join(".")}.${key}` : key;
+		if (rawVal) {
+			try {
+				const parsed = JSON.parse(rawVal);
+				if (typeof parsed === "string") fields[fieldPath] = parsed;
+			} catch { fields[fieldPath] = rawVal; }
+		} else {
+			stack.push({ indent, key });
+		}
+	}
+	return {
+		baseBranch: fields["context.git.base_branch"],
+		repoRoot: fields["context.repo_root"],
+		worktreePath: fields["context.worktree.path"],
+	};
+}
+
 export default function implementationEngine(pi: ExtensionAPI) {
 	let setupDone = false;
 	let pendingTaskResultCompaction = false;
@@ -280,6 +334,9 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		| undefined;
 	let actionButtonStage: ActionButtonStage = "plan";
 	let sessionTitleCaptured = false;
+	let sessionToonContextCaptured = false;
+	let sessionInheritedBaseBranch: string | undefined;
+	let sessionInheritedRepoRoot: string | undefined;
 	let hasInjectedSessionWorktreePrompt = false;
 	let activeAgentIsParentTurn = true;
 	let activeParentRuntimeRole: ParentRuntimeRole = "default";
@@ -3735,19 +3792,22 @@ const notifyWorktreeProgress = (
 					}
 				}
 				if (taskAgent === "coderabbit") {
+					const effectiveBaseBranch = last.baseBranch || sessionInheritedBaseBranch;
+					const effectiveWorktreePath =
+						last.worktreePath ?? last.repoRoot ?? sessionInheritedRepoRoot;
 					const didRewriteCodeRabbitTask = rewriteCodeRabbitTaskInput({
 						input: taskInput,
 						scopeByUnitId: implementationUnitScopeById,
 						fallbackScope: ownedFiles,
-						baseBranch: last.baseBranch,
-						worktreePath: last.worktreePath,
+						baseBranch: effectiveBaseBranch,
+						worktreePath: effectiveWorktreePath,
 					});
 					if (didRewriteCodeRabbitTask) {
 						pi.logger.debug("implementation-engine: canonicalized coderabbit task handoff", {
 							units: implementationUnitScopeById.size,
 							fallbackScopeSize: ownedFiles.size,
-							baseBranch: last.baseBranch,
-							worktreePath: last.worktreePath,
+							baseBranch: effectiveBaseBranch,
+							worktreePath: effectiveWorktreePath,
 						});
 					}
 				}
@@ -4177,6 +4237,17 @@ const notifyWorktreeProgress = (
 	});
 	pi.on("before_agent_start", async (event, ctx) => {
 		const promptText = event.prompt?.trim() ?? "";
+		// Capture TOON delegation context from the initial orchestrator prompt once per session.
+		// This provides a fallback for baseBranch/worktreePath at the CodeRabbit call site when
+		// the orchestrator spawns coderabbit directly without a prior worktree setup.
+		if (!sessionToonContextCaptured && promptText && /^delegation:\s*$/m.test(promptText)) {
+			sessionToonContextCaptured = true;
+			const toonCtx = parseToonGitContext(promptText);
+			if (toonCtx.baseBranch) sessionInheritedBaseBranch = toonCtx.baseBranch;
+			if (toonCtx.repoRoot) sessionInheritedRepoRoot = toonCtx.repoRoot;
+			if (!sessionInheritedRepoRoot && toonCtx.worktreePath)
+				sessionInheritedRepoRoot = toonCtx.worktreePath;
+		}
 		if (/your assignment is below\./i.test(promptText) || /═══════════Task═══════════/.test(promptText)) {
 			activeAgentIsParentTurn = false;
 			activeParentRuntimeRole = "default";

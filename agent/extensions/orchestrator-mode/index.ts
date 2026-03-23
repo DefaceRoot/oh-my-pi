@@ -263,7 +263,7 @@ function buildOrchestratorPrompt(): string {
 		"- After any remediation cycle completes",
 		"",
 		"CodeRabbit invocation:",
-		"1. Spawn coderabbit with: base branch, scope (changed files)",
+		"1. Spawn coderabbit with: base_branch (e.g. `origin/main`), list of changed files in the assignment",
 		"2. If coderabbit returns `no_go` with blocking findings (critical/severe/major):",
 		"   - Spawn implement agent to fix blocking findings",
 		"   - Re-run coderabbit",

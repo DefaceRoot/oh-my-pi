@@ -290,6 +290,31 @@ describe("task unit scope metadata", () => {
 	});
 
 
+	test("rewrites coderabbit task without blocked handoff when baseBranch and worktreePath are provided", () => {
+		const input = {
+			agent: "coderabbit",
+			tasks: [
+				{
+					id: "CodeRabbitCheck",
+					assignment: "Review the implementation and report findings.",
+				},
+			],
+		};
+
+		const didMutate = rewriteCodeRabbitTaskInput({
+			input,
+			scopeByUnitId: new Map(),
+			baseBranch: "origin/main",
+			worktreePath: "/repo",
+		});
+
+		expect(didMutate).toBe(true);
+		expect(input.context).not.toContain("Parent handoff is incomplete");
+		expect(input.context).toContain("`--base origin/main`");
+		expect(input.context).toContain("`/repo`");
+		expect(input.tasks[0]?.assignment).not.toContain("Parent handoff is incomplete");
+	});
+
 	test("creates phase-end metadata with per-unit scopes and coderrabbit context", () => {
 		const metadata = createImplementationTaskScopeMetadata({
 			agent: "implement",
