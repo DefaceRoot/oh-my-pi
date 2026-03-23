@@ -3,6 +3,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { SubagentOutcome } from "./subagent-outcome";
+import type { SubagentResumeRequest } from "./subagent-resume-request";
 import type { TaskSubagentStopRequest } from "./subagent-stop-request";
 import type { NestedRepoPatch } from "./worktree";
 
@@ -35,6 +36,9 @@ export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
 
 /** EventBus channel for targeted subagent stop requests from the UI */
 export const TASK_SUBAGENT_STOP_REQUEST_CHANNEL = "task:subagent:stop-request";
+
+/** EventBus channel for targeted subagent resume requests from the UI */
+export const TASK_SUBAGENT_RESUME_REQUEST_CHANNEL = "task:subagent:resume-request";
 
 /** Single task item for parallel execution */
 export const taskItemSchema = Type.Object({
@@ -227,6 +231,8 @@ export interface SingleResult {
 }
 
 export type { TaskSubagentStopRequest };
+
+export type { SubagentResumeRequest };
 
 /** Tool details for TUI rendering */
 export interface MergeAgentBranchSummary {
