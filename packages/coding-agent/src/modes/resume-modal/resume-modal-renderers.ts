@@ -188,17 +188,22 @@ export function renderSessionList(
     }
 
     const role = detectAgentMode(session.session);
-    const roleText =
-      role === "orchestrator"
-        ? warning("orch")
-        : role === "default"
-          ? success("def")
-          : dim("?");
+
+    // Fixed-width columns for aligned metadata (pad raw text before colorizing)
+    const timeRaw = session.timeAgo.padStart(8);
+    const msgRaw = `${session.session.messageCount}m`.padStart(5);
+    const roleRaw =
+      role === "orchestrator" ? "orch"
+        : role === "default" ? " def"
+        : "   ?";
+
     const separator = dim(" · ");
     const rightSide = [
-      colorizeTime(session.timeAgo, session.timeColor),
-      dim(`${session.session.messageCount}m`),
-      roleText,
+      colorizeTime(timeRaw, session.timeColor),
+      dim(msgRaw),
+      role === "orchestrator" ? warning(roleRaw)
+        : role === "default" ? success(roleRaw)
+        : dim(roleRaw),
     ].join(separator);
 
     const leftSide = `${prefix}${worktreeBadge}${archivedBadge}${title}`;
@@ -262,9 +267,13 @@ export function renderDetailPanel(
     { label: "Session", value: session.session.id },
   ];
 
+  const labelColWidth = 10;
+  const valueColWidth = Math.max(1, width - 2 - labelColWidth - 2);
+
   for (const detail of details) {
-    const label = dim(padLine(detail.label, 9));
-    lines.push(padLine(`  ${label}  ${detail.value}`, width));
+    const label = dim(padLine(detail.label, labelColWidth));
+    const value = truncateToWidth(detail.value, valueColWidth);
+    lines.push(padLine(`  ${label}  ${value}`, width));
   }
 
   while (lines.length < height) {
