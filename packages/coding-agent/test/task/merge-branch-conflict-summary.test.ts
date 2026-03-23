@@ -6,6 +6,7 @@ let mergeScenario: "conflict" | "success" = "conflict";
 const capturedRunSubprocessImages: Array<ImageContent[] | undefined> = [];
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
+	resumeCancelledSubagent: async () => null,
 	runSubprocess: async (params: {
 		index: number;
 		id: string;

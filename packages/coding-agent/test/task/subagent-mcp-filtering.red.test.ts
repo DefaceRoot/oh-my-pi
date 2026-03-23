@@ -19,6 +19,7 @@ const stubResult: SingleResult = {
 };
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
+	resumeCancelledSubagent: async () => null,
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		const agent = opts.agent as { name?: string };
 		capturedCalls.push({
