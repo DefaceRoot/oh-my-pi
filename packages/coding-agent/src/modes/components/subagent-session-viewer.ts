@@ -27,12 +27,19 @@ export interface SubagentSessionViewerMetadata {
 	abortReason?: string;
 	outcome?: SubagentOutcome;
 	canStop?: boolean;
+	canResume?: boolean;
+	/** File edit statistics for display */
+	filesChanged?: number;
+	linesAdded?: number;
+	linesDeleted?: number;
 }
 
 export interface SubagentSessionViewerContent {
 	headerLines: string[];
+	hierarchyLines?: string[];
 	renderTranscriptLines: (width: number) => string[];
 	nestedArrowMode: boolean;
+	metadataExpanded?: boolean;
 	metadata?: SubagentSessionViewerMetadata;
 }
 
@@ -44,6 +51,7 @@ export interface SubagentSessionViewerOptions {
 	onNavigateNested: (direction: 1 | -1) => void;
 	onCycleAgentMode: () => void;
 	onStop?: () => void;
+	onResume?: () => void;
 }
 
 function renderStatusGlyph(status?: SubagentStatus): string {
@@ -91,6 +99,8 @@ export class SubagentSessionViewerComponent implements Component {
 		renderTranscriptLines: () => [],
 		nestedArrowMode: false,
 	};
+	#contextExpanded: boolean = false;
+	#hierarchyPanelOpen: boolean = false;
 	#lastRenderWidth = 80;
 	#lastBodyViewportHeight = MIN_BODY_HEIGHT;
 	#scrollOffset = 0;
@@ -106,6 +116,7 @@ export class SubagentSessionViewerComponent implements Component {
 	readonly #onNavigateNested: (direction: 1 | -1) => void;
 	readonly #onCycleAgentMode: () => void;
 	readonly #onStop?: () => void;
+	readonly #onResume?: () => void;
 
 	constructor(options: SubagentSessionViewerOptions) {
 		this.#getTerminalRows = options.getTerminalRows;
@@ -115,12 +126,16 @@ export class SubagentSessionViewerComponent implements Component {
 		this.#onNavigateNested = options.onNavigateNested;
 		this.#onCycleAgentMode = options.onCycleAgentMode;
 		this.#onStop = options.onStop;
+		this.#onResume = options.onResume;
 	}
 
 	setContent(content: SubagentSessionViewerContent): void {
 		const wasAtBottom = this.#followTail || this.#isAtBottom();
+		// Persist expand state across refreshes unless caller explicitly overrides
+		this.#contextExpanded = content.metadataExpanded ?? this.#contextExpanded;
 		this.#content = {
 			headerLines: content.headerLines.map(line => sanitizeText(line)),
+			hierarchyLines: content.hierarchyLines?.map(line => sanitizeText(line)),
 			renderTranscriptLines: content.renderTranscriptLines,
 			nestedArrowMode: content.nestedArrowMode,
 			metadata: content.metadata
@@ -229,12 +244,23 @@ export class SubagentSessionViewerComponent implements Component {
 			}
 			return;
 		}
+		if (keyData === "m" || keyData === "M") {
+			this.#contextExpanded = !this.#contextExpanded;
+			return;
+		}
+		if (keyData === "h" || keyData === "H") {
+			this.#hierarchyPanelOpen = !this.#hierarchyPanelOpen;
+			return;
+		}
 		if (keyData === "a" || keyData === "A") {
 			this.#onCycleAgentMode();
 			return;
 		}
 		if ((keyData === "s" || keyData === "S") && this.#content.metadata?.canStop) {
 			this.#onStop?.();
+		}
+		if ((keyData === "r" || keyData === "R") && this.#content.metadata?.canResume) {
+			this.#onResume?.();
 		}
 	}
 
@@ -245,36 +271,50 @@ export class SubagentSessionViewerComponent implements Component {
 	render(width: number): string[] {
 		this.#lastRenderWidth = Math.max(MIN_WIDTH, width);
 		const innerWidth = Math.max(1, this.#lastRenderWidth - 2);
-		const metadataRows = this.#buildMetadataLines();
-		const headerRows = this.#wrapLines(this.#content.headerLines, innerWidth);
+		const titleRows = this.#wrapLines(this.#buildTitleLines(), innerWidth);
+		const metadataRows = this.#wrapLines(this.#buildMetadataLines(), innerWidth);
+		const headerRows = this.#contextExpanded ? this.#wrapLines(this.#content.headerLines, innerWidth) : [];
+		const hierarchyPanelRows = this.#buildHierarchyPanelLines(innerWidth);
 		const bodyRows = this.#bodyRows(innerWidth);
 		const footerRowCount = this.#footerRowCount(innerWidth);
 		const bodyHeight = this.#bodyHeight(
 			this.#lastRenderWidth,
+			titleRows.length,
 			headerRows.length,
 			footerRowCount,
 			metadataRows.length,
 		);
-		this.#lastBodyViewportHeight = bodyHeight;
-		const maxOffset = Math.max(0, bodyRows.length - bodyHeight);
+		const maxHierarchyRows = Math.max(0, bodyHeight - 1);
+		const visibleHierarchyRows = hierarchyPanelRows.slice(0, maxHierarchyRows);
+		const transcriptViewportHeight = Math.max(1, bodyHeight - visibleHierarchyRows.length);
+		this.#lastBodyViewportHeight = transcriptViewportHeight;
+		const maxOffset = Math.max(0, bodyRows.length - transcriptViewportHeight);
 		this.#scrollOffset = this.#followTail ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
-		const footerRows = this.#footerLines(bodyRows.length, bodyHeight, innerWidth);
-		const visibleBodyRows = bodyRows.slice(this.#scrollOffset, this.#scrollOffset + bodyHeight);
+		const footerRows = this.#footerLines(bodyRows.length, transcriptViewportHeight, innerWidth);
+		const visibleTranscriptRows = bodyRows.slice(
+			this.#scrollOffset,
+			this.#scrollOffset + transcriptViewportHeight,
+		);
+		let visibleBodyRows =
+			visibleHierarchyRows.length > 0 ? [...visibleHierarchyRows, ...visibleTranscriptRows] : [...visibleTranscriptRows];
 		while (visibleBodyRows.length < bodyHeight) {
 			visibleBodyRows.push("");
 		}
 
 		const lines: string[] = [this.#frameTop(innerWidth)];
-		if (metadataRows.length > 0) {
-			for (const row of metadataRows) {
+		for (const row of titleRows) {
+			lines.push(this.#frameLine(row, innerWidth));
+		}
+		for (const row of metadataRows) {
+			lines.push(this.#frameLine(row, innerWidth));
+		}
+		lines.push(this.#frameSeparator(innerWidth));
+		if (this.#contextExpanded) {
+			for (const row of headerRows) {
 				lines.push(this.#frameLine(row, innerWidth));
 			}
 			lines.push(this.#frameSeparator(innerWidth));
 		}
-		for (const row of headerRows) {
-			lines.push(this.#frameLine(row, innerWidth));
-		}
-		lines.push(this.#frameSeparator(innerWidth));
 		for (const row of visibleBodyRows) {
 			lines.push(this.#frameLine(row, innerWidth));
 		}
@@ -286,12 +326,44 @@ export class SubagentSessionViewerComponent implements Component {
 		return lines.map(line => theme.overlaySurface(line));
 	}
 
+	#buildTitleLines(): string[] {
+		const meta = this.#content.metadata;
+		const dotSep = ` ${theme.fg("statusLineSep", theme.sep.dot)} `;
+		const titleParts: string[] = [];
+		const ordinal = extractSubagentOrdinal(meta?.subagentId);
+		const agentLabel = meta?.agentName ?? meta?.role;
+
+		titleParts.push(theme.bold(theme.fg("accent", ordinal != null ? `Subagent #${ordinal}` : "Subagent")));
+		if (agentLabel) {
+			titleParts.push(theme.fg("text", agentLabel));
+		}
+		if (meta?.filesChanged != null && meta.filesChanged > 0) {
+			const added = meta.linesAdded ?? 0;
+			const deleted = meta.linesDeleted ?? 0;
+			titleParts.push(
+				`${theme.fg("accent", `◆${meta.filesChanged}`)} ${theme.fg("success", `+${added}`)}${theme.fg("error", `-${deleted}`)}`,
+			);
+		}
+		titleParts.push(renderStatusGlyph(meta?.status));
+		if (meta?.provider || meta?.model) {
+			titleParts.push(theme.fg("dim", [meta.provider, meta.model].filter(Boolean).join("/")));
+		}
+		if (meta?.tokens != null) {
+			titleParts.push(`${theme.fg("dim", "tokens")} ${theme.fg("accent", formatTokenCount(meta.tokens))}`);
+		}
+		titleParts.push(theme.fg("dim", this.#contextExpanded ? "[m ▾]" : "[m ·]"));
+		if ((this.#content.hierarchyLines?.length ?? 0) > 0) {
+			titleParts.push(theme.fg("dim", "[h hier]"));
+		}
+
+		return [` ${titleParts.join(dotSep)}`];
+	}
+
 	#buildMetadataLines(): string[] {
 		const meta = this.#content.metadata;
 		if (!meta) return [];
 
 		const hasContent =
-			meta.agentName ||
 			meta.subagentId ||
 			meta.sessionId ||
 			meta.role ||
@@ -307,13 +379,13 @@ export class SubagentSessionViewerComponent implements Component {
 			(meta.mcpServers?.length ?? 0) > 0 ||
 			(meta.mcpAllowlist?.length ?? 0) > 0 ||
 			meta.outcome ||
-			meta.abortReason;
+			meta.abortReason ||
+			meta.canStop ||
+			meta.canResume;
 		if (!hasContent) return [];
+
+		const dotSep = ` ${theme.fg("statusLineSep", theme.sep.dot)} `;
 		const lines: string[] = [];
-		const ordinal = extractSubagentOrdinal(meta.subagentId);
-		const titleLabel = ordinal ? `Subagent #${ordinal}` : "Subagent Session";
-		const titleSuffix = meta.agentName ? ` ${theme.fg("text", `· ${meta.agentName}`)}` : "";
-		lines.push(` ${theme.bold(theme.fg("accent", `${titleLabel}${titleSuffix}`))}`);
 		const delegationChain = meta.delegationChain;
 		if (delegationChain && delegationChain.length > 0) {
 			const breadcrumb = delegationChain.join(` ${theme.fg("statusLineSep", "›")} `);
@@ -326,13 +398,15 @@ export class SubagentSessionViewerComponent implements Component {
 			lines.push(` ${theme.fg("dim", "OMP Session")} ${theme.fg("text", meta.sessionId)}`);
 		}
 		lines.push(` ${theme.fg("dim", "Status")} ${renderStatusGlyph(meta.status)}`);
+
 		const infoParts: string[] = [];
 		if (meta.role) infoParts.push(`${theme.fg("dim", "Role")} ${theme.fg("text", meta.role)}`);
 		if (meta.provider) infoParts.push(`${theme.fg("dim", "Provider")} ${theme.fg("text", meta.provider)}`);
 		if (meta.model) infoParts.push(`${theme.fg("dim", "Model")} ${theme.fg("text", meta.model)}`);
 		if (infoParts.length > 0) {
-			lines.push(` ${infoParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+			lines.push(` ${infoParts.join(dotSep)}`);
 		}
+
 		const stats: string[] = [];
 		if (meta.tokens != null) {
 			stats.push(`${theme.fg("dim", "Tokens")} ${theme.fg("accent", formatTokenCount(meta.tokens))}`);
@@ -347,8 +421,9 @@ export class SubagentSessionViewerComponent implements Component {
 			stats.push(`${theme.fg("dim", "Elapsed")} ${theme.fg("text", formatDuration(meta.elapsedMs))}`);
 		}
 		if (stats.length > 0) {
-			lines.push(` ${stats.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+			lines.push(` ${stats.join(dotSep)}`);
 		}
+
 		const toolCount = meta.toolNames?.length ?? 0;
 		const usedMcpServers = meta.mcpServers ?? [];
 		const configuredMcpAllowlist = meta.mcpAllowlist ?? [];
@@ -363,8 +438,9 @@ export class SubagentSessionViewerComponent implements Component {
 			if (configuredMcpAllowlist.length > 0) {
 				detailParts.push(`${theme.fg("dim", "Allowed MCP")} ${theme.fg("text", formatList(configuredMcpAllowlist))}`);
 			}
-			lines.push(` ${detailParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+			lines.push(` ${detailParts.join(dotSep)}`);
 		}
+
 		if (meta.abortReason) {
 			lines.push(` ${theme.fg("dim", "Abort")} ${theme.fg("warning", meta.abortReason)}`);
 		}
@@ -375,19 +451,41 @@ export class SubagentSessionViewerComponent implements Component {
 			if (meta.outcome.summary) {
 				outcomeParts.push(theme.fg("dim", truncateToWidth(meta.outcome.summary, 80)));
 			}
-			lines.push(` ${outcomeParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
+			lines.push(` ${outcomeParts.join(dotSep)}`);
 		}
 		if (meta.canStop) {
 			lines.push(` ${theme.fg("dim", "Action")} ${theme.fg("warning", "S stop")}`);
+		}
+		if (meta.canResume) {
+			lines.push(` ${theme.fg("dim", "Action")} ${theme.fg("success", "R resume")}`);
 		}
 
 		return lines;
 	}
 
+	#buildHierarchyPanelLines(innerWidth: number): string[] {
+		const hierarchyLines = this.#content.hierarchyLines;
+		if (!this.#hierarchyPanelOpen || !hierarchyLines || hierarchyLines.length === 0) return [];
+
+		const headingLabel = "Hierarchy (h close)";
+		const headingPrefix = "─── ";
+		const headingBase = `${headingPrefix}${headingLabel} `;
+		const fillWidth = Math.max(0, innerWidth - visibleWidth(headingBase));
+		const heading = `${theme.fg("borderAccent", headingPrefix)}${theme.bold(theme.fg("accent", headingLabel))}${theme.fg("borderAccent", ` ${"─".repeat(fillWidth)}`)}`;
+		return this.#wrapLines([heading, ...hierarchyLines], innerWidth);
+	}
+
 	#footerControlsLine(): string {
 		const controls = ["↑↓/j/k scroll", "PgUp/PgDn page", "Home/End", "←/→ task", "Tab/Shift+Tab nested"];
+		controls.push(this.#contextExpanded ? "m collapse" : "m details");
+		if ((this.#content.hierarchyLines?.length ?? 0) > 0) {
+			controls.push("h hierarchy");
+		}
 		if (this.#content.metadata?.canStop) {
 			controls.push("S stop");
+		}
+		if (this.#content.metadata?.canResume) {
+			controls.push("R resume");
 		}
 		controls.push(`${this.#leaderKey} close`);
 		return theme.fg("dim", controls.join("  "));
@@ -397,10 +495,10 @@ export class SubagentSessionViewerComponent implements Component {
 		return 1 + this.#wrapLines([this.#footerControlsLine()], innerWidth).length;
 	}
 
-	#footerLines(totalBodyRows: number, bodyHeight: number, innerWidth: number): string[] {
-		const maxOffset = Math.max(0, totalBodyRows - bodyHeight);
+	#footerLines(totalBodyRows: number, transcriptViewportHeight: number, innerWidth: number): string[] {
+		const maxOffset = Math.max(0, totalBodyRows - transcriptViewportHeight);
 		const start = totalBodyRows === 0 ? 0 : Math.min(totalBodyRows, this.#scrollOffset + 1);
-		const end = Math.min(totalBodyRows, this.#scrollOffset + bodyHeight);
+		const end = Math.min(totalBodyRows, this.#scrollOffset + transcriptViewportHeight);
 		const isFollowingTail = maxOffset === 0 || this.#scrollOffset >= maxOffset;
 		const tailMode = isFollowingTail ? "FOLLOWING TAIL" : "TAIL PAUSED";
 		const status = `${theme.fg("dim", `lines ${start}-${end}/${totalBodyRows}`)} ${theme.fg(isFollowingTail ? "success" : "warning", tailMode)}`;
@@ -440,23 +538,38 @@ export class SubagentSessionViewerComponent implements Component {
 		this.#cachedBodyVersion = -1;
 	}
 
-	#bodyHeight(width: number, headerRows?: number, footerRows?: number, metadataRows?: number): number {
+	#bodyHeight(
+		width: number,
+		titleRows?: number,
+		headerRows?: number,
+		footerRows?: number,
+		metadataRows?: number,
+	): number {
 		const maxHeight = Math.max(12, Math.floor(this.#getTerminalRows() * 0.82));
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
-		const resolvedHeaderRows = headerRows ?? this.#wrapLines(this.#content.headerLines, innerWidth).length;
+		const resolvedTitleRows = titleRows ?? this.#wrapLines(this.#buildTitleLines(), innerWidth).length;
+		const resolvedMetadataRows = metadataRows ?? this.#wrapLines(this.#buildMetadataLines(), innerWidth).length;
+		const resolvedHeaderRows = headerRows ?? (this.#contextExpanded ? this.#wrapLines(this.#content.headerLines, innerWidth).length : 0);
 		const resolvedFooterRows = footerRows ?? 2;
-		const resolvedMetadataRows = metadataRows ?? this.#buildMetadataLines().length;
-		const metaSep = resolvedMetadataRows > 0 ? 1 : 0;
+		const headerSectionRows = this.#contextExpanded ? resolvedHeaderRows + 1 : 0;
 		return Math.max(
 			MIN_BODY_HEIGHT,
-			maxHeight - resolvedHeaderRows - resolvedFooterRows - resolvedMetadataRows - metaSep - 4,
+			maxHeight - resolvedTitleRows - resolvedMetadataRows - 1 - headerSectionRows - resolvedFooterRows - 3,
 		);
+	}
+
+	#transcriptViewportHeight(width: number): number {
+		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
+		const bodyHeight = this.#bodyHeight(width);
+		const hierarchyRows = this.#buildHierarchyPanelLines(innerWidth).length;
+		const visibleHierarchyRows = Math.min(hierarchyRows, Math.max(0, bodyHeight - 1));
+		return Math.max(1, bodyHeight - visibleHierarchyRows);
 	}
 
 	#maxScrollOffset(width: number): number {
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
 		const bodyRows = this.#bodyRows(innerWidth);
-		return Math.max(0, bodyRows.length - this.#bodyHeight(width));
+		return Math.max(0, bodyRows.length - this.#transcriptViewportHeight(width));
 	}
 
 	#scrollBy(delta: number): void {

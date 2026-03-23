@@ -27,6 +27,7 @@ function createViewer(
 
 type ViewerTestContent = {
 	headerLines: string[];
+	hierarchyLines?: string[];
 	bodyLines: string[];
 	nestedArrowMode: boolean;
 	metadata?: Parameters<SubagentSessionViewerComponent["setContent"]>[0]["metadata"];
@@ -35,6 +36,7 @@ type ViewerTestContent = {
 function setViewerContent(viewer: SubagentSessionViewerComponent, content: ViewerTestContent): void {
 	viewer.setContent({
 		headerLines: content.headerLines,
+		hierarchyLines: content.hierarchyLines,
 		renderTranscriptLines: () => content.bodyLines,
 		nestedArrowMode: content.nestedArrowMode,
 		metadata: content.metadata,
@@ -107,6 +109,19 @@ describe("SubagentSessionViewerComponent", () => {
 		const refreshedPaused = renderText(viewer, 72);
 		expect(refreshedPaused).toContain("TAIL PAUSED");
 		expect(refreshedPaused).not.toContain("line-39");
+
+		const hierarchyViewer = createViewer({ getTerminalRows: () => 14 });
+		setViewerContent(hierarchyViewer, {
+			headerLines: ["header"],
+			hierarchyLines: ["  ▸ (21) explore-agent | CodeRabbitReview", "    (20) implement | SomeTask"],
+			bodyLines: Array.from({ length: 30 }, (_value, index) => `line-${index}`),
+			nestedArrowMode: false,
+		});
+		hierarchyViewer.handleInput("h");
+		const withHierarchy = renderText(hierarchyViewer, 72);
+		expect(withHierarchy).toContain("Hierarchy (h close)");
+		expect(withHierarchy).toContain("line-29");
+		expect(withHierarchy).toContain("FOLLOWING TAIL");
 	});
 
 	test("supports Home/End and j/k scrolling", () => {
@@ -150,10 +165,11 @@ describe("SubagentSessionViewerComponent", () => {
 		}
 	});
 
-	test("renders metadata hierarchy with separate provider and exact token count", () => {
+	test("renders metadata by default and toggles context and hierarchy panels", () => {
 		const viewer = createViewer();
 		setViewerContent(viewer, {
 			headerLines: ["session header"],
+			hierarchyLines: ["  ▸ (21) explore-agent | CodeRabbitReview", "    (20) implement | SomeTask"],
 			bodyLines: ["body"],
 			nestedArrowMode: false,
 			metadata: {
@@ -167,8 +183,7 @@ describe("SubagentSessionViewerComponent", () => {
 				thinkingLevel: "medium",
 			} as any,
 		});
-		const text = renderText(viewer, 100);
-		expect(text).toContain("Subagent Session · explore-agent");
+		let text = renderText(viewer, 100);
 		expect(text).toContain("Status ● RUNNING");
 		expect(text).toContain("Role explorer");
 		expect(text).toContain("Provider anthropic");
@@ -176,7 +191,17 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("Tokens 12,450");
 		expect(text).not.toContain("12.4k/200.0k");
 		expect(text).toContain("Thinking medium");
+		expect(text).not.toContain("session header");
+		expect(text).not.toContain("Hierarchy (h close)");
+
+		viewer.handleInput("m");
+		text = renderText(viewer, 100);
 		expect(text).toContain("session header");
+
+		viewer.handleInput("h");
+		text = renderText(viewer, 100);
+		expect(text).toContain("Hierarchy (h close)");
+		expect(text).toContain("(21) explore-agent | CodeRabbitReview");
 	});
 
 	test("renders richer session metadata and stop controls for running subagents", () => {
@@ -198,6 +223,9 @@ describe("SubagentSessionViewerComponent", () => {
 				mcpServers: ["augment", "grafana"],
 				toolNames: ["read", "grep", "submit_result"],
 				canStop: true,
+				filesChanged: 3,
+				linesAdded: 11,
+				linesDeleted: 4,
 			},
 		});
 		const text = renderText(viewer, 120);
@@ -208,6 +236,8 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("MCP augment, grafana");
 		expect(text).toContain("Tools 3");
 		expect(text).toContain("S stop");
+		expect(text).toContain("◆3");
+		expect(text).toContain("+11-4");
 	});
 
 	test("renders delegation breadcrumb when a role chain is available", () => {

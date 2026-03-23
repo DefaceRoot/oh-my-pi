@@ -746,14 +746,14 @@ describe("InteractiveMode subagent token loading", () => {
 
 		expect(setContent).toHaveBeenCalledTimes(1);
 		const payload = setContent.mock.calls[0]?.[0];
-		const headerText = plain(payload.headerLines.join("\n"));
+		const hierarchyText = plain((payload.hierarchyLines ?? []).join("\n"));
 		const statusText = plain(String(statusLine.setHookStatus.mock.calls.at(-1)?.[1] ?? ""));
 		expect(payload.metadata).toMatchObject({
 			agentName: "code-reviewer",
 			role: "code-reviewer",
 			subagentId: "0-TokenRollup.1-ReviewTotals",
 		});
-		expect(headerText).toContain("↳ (1) code-reviewer | Review token totals");
+		expect(hierarchyText).toContain("↳ (1) code-reviewer | Review token totals");
 		expect(statusText).toContain("agent:1/1 code-reviewer");
 	});
 
@@ -798,11 +798,11 @@ describe("InteractiveMode subagent token loading", () => {
 
 		expect(setContent).toHaveBeenCalledTimes(1);
 		const payload = setContent.mock.calls[0]?.[0];
-		const headerText = plain(payload.headerLines.join("\n"));
+		const hierarchyText = plain((payload.hierarchyLines ?? []).join("\n"));
 		const statusText = plain(String(statusLine.setHookStatus.mock.calls.at(-1)?.[1] ?? ""));
 		expect(payload.metadata).toMatchObject({ agentName: "—", subagentId: "0-LegacyRoot.0-LegacyChild" });
-		expect(headerText).toContain("(0) — | Legacy root assignment");
-		expect(headerText).toContain("↳ (0) — | Legacy nested assignment");
+		expect(hierarchyText).toContain("(0) — | Legacy root assignment");
+		expect(hierarchyText).toContain("↳ (0) — | Legacy nested assignment");
 		expect(statusText).toContain("task 1/1");
 		expect(statusText).toContain("agent:1/1 —");
 		expect(statusText).not.toContain("agent:1/1 task");
