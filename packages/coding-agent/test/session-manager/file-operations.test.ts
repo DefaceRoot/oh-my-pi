@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	decodeSessionDirName,
 	findMostRecentSession,
+	getSessionsRoot,
 	loadEntriesFromFile,
 	resolveResumableSession,
 	SessionManager,
@@ -200,6 +202,145 @@ describe("resolveResumableSession", () => {
 		expect(match?.session.path).toBe(path.join(sessionDir, "2025-01-01_moved.jsonl"));
 	});
 });
+
+describe("session directory encoding helpers", () => {
+	const originalAgentDir = getAgentDir();
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `session-test-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		setAgentDir(path.join(tempDir, "agent"));
+	});
+
+	afterEach(() => {
+		setAgentDir(originalAgentDir);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("returns the configured sessions root", () => {
+		expect(getSessionsRoot()).toBe(path.join(getAgentDir(), "sessions"));
+	});
+
+	function writeSessionForDecode(cwd: string): string {
+		const manager = SessionManager.create(cwd);
+		const sessionDir = manager.getSessionDir();
+		const sessionFile = path.join(sessionDir, `2025-01-01T00-00-00-000Z_${Snowflake.next()}.jsonl`);
+		const sessionId = Snowflake.next();
+		fs.writeFileSync(
+			sessionFile,
+			`${[
+				JSON.stringify({ type: "session", id: sessionId, timestamp: "2025-01-01T00:00:00Z", cwd }),
+				JSON.stringify({
+					type: "message",
+					id: `msg-${sessionId}`,
+					parentId: null,
+					timestamp: "2025-01-01T00:00:01Z",
+					message: { role: "user", content: "hello", timestamp: 1 },
+				}),
+			].join("\n")}\n`,
+		);
+		return path.basename(sessionDir);
+	}
+
+	it("decodes home-relative encoded session directories", () => {
+		const cwd = path.join(os.homedir(), "omp", `session-${Snowflake.next()}`);
+		const encodedDirName = writeSessionForDecode(cwd);
+
+		expect(decodeSessionDirName(encodedDirName)).toBe(cwd);
+	});
+
+	it("decodes absolute encoded session directories", () => {
+		const cwd = path.join(os.tmpdir(), `session-${Snowflake.next()}`, "repo");
+		const encodedDirName = writeSessionForDecode(cwd);
+
+		expect(decodeSessionDirName(encodedDirName)).toBe(cwd);
+	});
+});
+
+describe("SessionManager.listAllGroupedByProject", () => {
+	const originalAgentDir = getAgentDir();
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `session-test-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		setAgentDir(path.join(tempDir, "agent"));
+	});
+
+	afterEach(() => {
+		setAgentDir(originalAgentDir);
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	function writeSession(cwd: string, id: string, branch?: string, modelRole?: string): void {
+		fs.mkdirSync(cwd, { recursive: true });
+		const manager = SessionManager.create(cwd);
+		const sessionDir = manager.getSessionDir();
+		const sessionFile = path.join(sessionDir, `2025-01-01T00-00-00-000Z_${id}.jsonl`);
+		fs.writeFileSync(
+			sessionFile,
+			`${[
+				JSON.stringify({
+					type: "session",
+					id,
+					timestamp: "2025-01-01T00:00:00Z",
+					cwd,
+					branch,
+					modelRole,
+				}),
+				JSON.stringify({
+					type: "message",
+					id: `msg-${id}`,
+					parentId: null,
+					timestamp: "2025-01-01T00:00:01Z",
+					message: { role: "user", content: "hello", timestamp: 1 },
+				}),
+			].join("\n")}\n`,
+		);
+	}
+
+	it("groups sessions by decoded project path with header metadata", async () => {
+		const projectA = path.join(os.tmpdir(), `session-project-a-${Snowflake.next()}`);
+		const projectB = path.join(os.tmpdir(), `session-project-b-${Snowflake.next()}`);
+		writeSession(projectA, "session-a", "feature/a", "orchestrator");
+		writeSession(projectB, "session-b", "feature/b", "worker");
+
+		const grouped = await SessionManager.listAllGroupedByProject();
+
+		expect(Array.from(grouped.keys()).sort()).toEqual([projectA, projectB].sort());
+		expect(grouped.get(projectA)?.[0]).toMatchObject({
+			id: "session-a",
+			cwd: projectA,
+			branch: "feature/a",
+			modelRole: "orchestrator",
+		});
+		expect(grouped.get(projectB)?.[0]).toMatchObject({
+			id: "session-b",
+			cwd: projectB,
+			branch: "feature/b",
+			modelRole: "worker",
+		});
+	});
+
+	it("separates sessions when encoded directory names collide", async () => {
+		const token = Snowflake.next();
+		const dashedProject = path.join(os.tmpdir(), `repo-${token}`);
+		const nestedProject = path.join(os.tmpdir(), "repo", token);
+		writeSession(dashedProject, "session-dashed", "feature/dashed", "orchestrator");
+		writeSession(nestedProject, "session-nested", "feature/nested", "worker");
+
+		const grouped = await SessionManager.listAllGroupedByProject();
+
+		expect(Array.from(grouped.keys()).sort()).toEqual([dashedProject, nestedProject].sort());
+		expect(grouped.get(dashedProject)?.every(session => session.cwd === dashedProject)).toBe(true);
+		expect(grouped.get(nestedProject)?.every(session => session.cwd === nestedProject)).toBe(true);
+		expect(grouped.get(dashedProject)?.map(session => session.id)).toContain("session-dashed");
+		expect(grouped.get(nestedProject)?.map(session => session.id)).toContain("session-nested");
+	});
+});
+
+
 
 describe("SessionManager.moveTo", () => {
 	const originalAgentDir = getAgentDir();
