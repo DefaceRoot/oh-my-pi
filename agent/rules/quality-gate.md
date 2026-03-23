@@ -17,3 +17,10 @@ The `merge` agent handles full rebase lifecycle:
 - Also auto-triggered when `! Sync Needed` badge is clicked
 - Resolves conflicts semantically using three-way diff + git log context
 - Only flags human when truly unresolvable after exhaustive analysis
+
+## CodeRabbit Verification Gate
+- Orchestrator/verifier flow MUST spawn `coderabbit` after each completed implementation batch, before reporting completion, and after every remediation pass.
+- Each `coderabbit` invocation MUST include a base branch selector and explicit review scope (changed files or equivalent diff selector).
+- Any `coderabbit` result of `no_go` with Critical/Severe/Major findings is a blocking gate failure.
+- Blocking findings MUST trigger delegated implementation remediation, followed by another `coderabbit` run, repeated until `go` or an explicit unresolved blocker is reported.
+- Completion is prohibited while `coderabbit` is pending, blocked, or `no_go`.

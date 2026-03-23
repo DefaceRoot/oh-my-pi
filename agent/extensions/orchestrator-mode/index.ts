@@ -1,4 +1,18 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { buildPlanTodoBootstrapData } from "@oh-my-pi/pi-coding-agent/plan-mode/plan-todos";
+import { collectDelegationContext } from "@oh-my-pi/pi-coding-agent/task/delegation-context";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import {
+	getLatestTodoPhasesFromEntries,
+	getLatestTodoPhasesFromEntriesOrUndefined,
+	TODO_BOOTSTRAP_ENTRY_TYPE,
+	type TodoBootstrapEntryData,
+	type TodoPhase,
+} from "@oh-my-pi/pi-coding-agent/tools/todo-write";
+import { resolveToCwd } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import {
 	isOrchestratorParentToolAllowed,
 	resolveParentRuntimeRole,
@@ -10,32 +24,6 @@ type OrchestratorPolicyEvent = {
 	toolName: string;
 	input?: unknown;
 };
-
-type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
-
-type TodoTask = {
-	id: string;
-	content: string;
-	status: TodoStatus;
-	notes?: string;
-};
-
-type TodoPhase = {
-	id: string;
-	name: string;
-	tasks: TodoTask[];
-};
-
-type SessionMessageEntry = {
-	type?: string;
-	message?: {
-		role?: string;
-		toolName?: string;
-		details?: { phases?: unknown };
-		isError?: boolean;
-	};
-};
-
 type OrchestratorPolicyContext = {
 	orchestratorModeThisTurn: boolean;
 	activeAgentIsParentTurn: boolean;
@@ -71,38 +59,46 @@ function detectCurrentRole(ctx: ExtensionContext): string | undefined {
 	return undefined;
 }
 
-function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map((phase) => ({
-		id: phase.id,
-		name: phase.name,
-		tasks: phase.tasks.map((task) => ({
-			id: task.id,
-			content: task.content,
-			status: task.status,
-			notes: task.notes,
-		})),
-	}));
-}
+function resolvePlanTodoBootstrap(
+	ctx: ExtensionContext,
+): TodoBootstrapEntryData | undefined {
+	const metadata = collectDelegationContext({
+		cwd: ctx.cwd,
+		hasUI: ctx.hasUI,
+		getSessionFile: () => {
+			const manager = ctx.sessionManager as { getSessionFile?: () => string | undefined };
+			return manager.getSessionFile?.() ?? null;
+		},
+		getSessionSpawns: () => "*",
+		settings: {} as ToolSession["settings"],
+		getCompactContext: () => "",
+		getSessionEntries: () => ctx.sessionManager.getEntries() as Array<Record<string, unknown>>,
+		getPlanModeState: () => undefined,
+	} as ToolSession);
+	const planFilePath = metadata.planFilePath?.trim();
+	if (!planFilePath) return undefined;
 
-function getLatestTodoPhasesFromEntries(entries: SessionMessageEntry[]): TodoPhase[] {
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-
-		const message = entry.message;
-		if (
-			message?.role !== "toolResult" ||
-			message.toolName !== "todo_write" ||
-			message.isError ||
-			!Array.isArray(message.details?.phases)
-		) {
-			continue;
-		}
-
-		return cloneTodoPhases(message.details.phases as TodoPhase[]);
+	let resolvedPlanPath: string;
+	try {
+		resolvedPlanPath = planFilePath.startsWith("local://")
+			? resolveLocalUrlToPath(planFilePath, {
+				getArtifactsDir: () => ctx.sessionManager.getArtifactsDir?.() ?? null,
+				getSessionId: () => ctx.sessionManager.getSessionId?.() ?? null,
+			})
+			: path.normalize(resolveToCwd(planFilePath, ctx.cwd));
+	} catch {
+		return undefined;
 	}
 
-	return [];
+	if (!fs.existsSync(resolvedPlanPath)) return undefined;
+	const planContent = fs.readFileSync(resolvedPlanPath, "utf8");
+	return buildPlanTodoBootstrapData(planContent, planFilePath);
+}
+
+function persistPlanTodoBootstrap(ctx: ExtensionContext, data: TodoBootstrapEntryData): void {
+	const sessionManager = ctx.sessionManager as { appendCustomEntry?: (customType: string, data?: unknown) => string };
+	if (!sessionManager.appendCustomEntry) return;
+	sessionManager.appendCustomEntry(TODO_BOOTSTRAP_ENTRY_TYPE, data);
 }
 
 function getTodoPlanDeficiency(phases: TodoPhase[]): string | undefined {
@@ -204,6 +200,13 @@ function isTodoGateExceptionTool(toolName: string): boolean {
 	return toolName === "todo_write" || toolName === "await";
 }
 
+function isAgentResultRead(event: OrchestratorPolicyEvent): boolean {
+	if (event.toolName !== "read") return false;
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const readPath = typeof input.path === "string" ? input.path.trim() : "";
+	return readPath.startsWith("agent://");
+}
+
 function buildOrchestratorPrompt(): string {
 	return [
 		"",
@@ -219,9 +222,16 @@ function buildOrchestratorPrompt(): string {
 		"That todo list is the live source of truth for the session. Keep it deep, specific, and continuously updated.",
 		"Do not keep a shallow todo list. Break every stage into concrete subtasks the user can follow.",
 		"After every subagent result or new user instruction, update todo_write before any other orchestration action.",
-		"The only exception is await when background work is already running and you need to wait before the next todo update.",
+		"Never park on indefinite await. Every await call MUST set timeout (typically 60-120 seconds).",
+		"After each await timeout or completion, immediately check whether independent work can be dispatched now.",
+		"Dispatch any ready independent work before issuing another await call.",
+		"Only await when background work is already running and no independent dispatch is currently available.",
 		"You do not edit files, write files, run discovery tools, or provide implementation details yourself.",
 		"All investigation beyond the small read budget, all code changes, all tests, and all verification are delegated.",
+		"Routing decision tree: bug reports, failing tests, and unexpected behavior MUST go to the debug subagent.",
+		"Routing decision tree: known-good scoped code changes go to implement after diagnosis is complete.",
+		"Routing decision tree: direct git-only handoff goes to commit only when no implementation-owned file set is pending.",
+		"Do not delegate lint or code-reviewer directly from the parent turn; those run only inside implement/debug quality loops.",
 		"Grafana-specific investigation, debugging, and dashboard work MUST be delegated to the grafana subagent.",
 		"Only the grafana subagent has direct Grafana MCP access.",
 		"</critical>",
@@ -230,6 +240,7 @@ function buildOrchestratorPrompt(): string {
 		"- explore       : read-only codebase scout; use for all discovery and reconnaissance",
 		"- research      : web search + semantic codebase research specialist",
 		"- implement     : implementation worker (owns lint → code-reviewer → commit loop)",
+		"- debug         : root-cause debugging specialist (diagnose, reproduce, and fix)",
 		"- designer      : frontend/UI specialist",
 		"- grafana       : Grafana investigation and dashboard specialist",
 		"- lint          : quality gate runner (implementation-owned; do not spawn directly)",
@@ -244,10 +255,27 @@ function buildOrchestratorPrompt(): string {
 		"- worktree-setup: git worktree setup specialist",
 		"There is no 'code', 'coder', 'worker', or any other agent. Use only the names above.",
 		"",
+		"## Mandatory CodeRabbit Review",
+		"",
+		"You MUST spawn a `coderabbit` agent for review:",
+		"- After completing each implementation batch (all implementation tasks in a todo phase are done)",
+		"- Before claiming any work is complete or yielding to the user",
+		"- After any remediation cycle completes",
+		"",
+		"CodeRabbit invocation:",
+		"1. Spawn coderabbit with: base branch, scope (changed files)",
+		"2. If coderabbit returns `no_go` with blocking findings (critical/severe/major):",
+		"   - Spawn implement agent to fix blocking findings",
+		"   - Re-run coderabbit",
+		"   - Repeat until go or resolved",
+		"3. Only proceed after coderabbit passes",
+		"",
+		"Skipping CodeRabbit review is PROHIBITED.",
+		"",
 		"Parent tool contract:",
 		"- task for discovery, implementation, review, and verification",
 		"- ask only when user input is truly required",
-		"- await only to wait on background work that is already running",
+		"- await only with timeout to poll running background work; dispatch any ready independent work before awaiting again",
 		"- todo_write for detailed visible tracking from kickoff through closeout",
 		"- read only for narrow decomposition, capped at 5 distinct files per user request",
 		"- bash only for git status",
@@ -266,7 +294,10 @@ function shouldBlockTool(
 		return undefined;
 	}
 
-	if (context.todoRefreshRequired && !isTodoGateExceptionTool(event.toolName)) {
+	const allowTodoRefreshGateBypass =
+		isTodoGateExceptionTool(event.toolName) || isAgentResultRead(event);
+
+	if (context.todoRefreshRequired && !allowTodoRefreshGateBypass) {
 		return {
 			block: true,
 			reason:
@@ -329,10 +360,17 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const todoPhases = getLatestTodoPhasesFromEntries(
-				ctx.sessionManager.getEntries() as SessionMessageEntry[],
+			let todoPhases = getLatestTodoPhasesFromEntriesOrUndefined(
+				ctx.sessionManager.getEntries() as never,
 			);
-			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
+			if (todoPhases === undefined) {
+				const bootstrap = resolvePlanTodoBootstrap(ctx);
+				if (bootstrap) {
+					todoPhases = bootstrap.phases;
+					persistPlanTodoBootstrap(ctx, bootstrap);
+				}
+			}
+			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases ?? []);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 
 			pi.logger.debug("orchestrator-mode: enforcing delegation-only parent policy", {
@@ -407,8 +445,8 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 
 		if (event.toolName === "todo_write") {
 			const todoPhases = Array.isArray((event.details as { phases?: unknown } | undefined)?.phases)
-				? cloneTodoPhases((event.details as { phases: TodoPhase[] }).phases)
-				: getLatestTodoPhasesFromEntries(ctx.sessionManager.getEntries() as SessionMessageEntry[]);
+				? ((event.details as { phases: TodoPhase[] }).phases)
+				: getLatestTodoPhasesFromEntries(ctx.sessionManager.getEntries() as never);
 			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 			todoRefreshRequired = false;

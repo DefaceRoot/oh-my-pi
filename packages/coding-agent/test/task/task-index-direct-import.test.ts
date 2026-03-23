@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { BUILTIN_TOOLS } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { BUILTIN_TOOLS } from "@oh-my-pi/pi-coding-agent/tools";
 
 const repoRoot = path.resolve(import.meta.dir, "../../../..");
 

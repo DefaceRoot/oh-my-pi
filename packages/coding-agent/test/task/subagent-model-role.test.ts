@@ -13,4 +13,8 @@ describe("resolveSubagentRole", () => {
 	it("falls back to implement for unknown subagents", () => {
 		expect(resolveSubagentRole("totally-unknown-agent")).toBe("implement");
 	});
+
+	it("resolves debug agent to debug model role", () => {
+		expect(resolveSubagentRole("debug")).toBe("debug");
+	});
 });

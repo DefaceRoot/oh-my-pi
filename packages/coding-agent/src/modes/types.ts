@@ -162,6 +162,7 @@ export interface InteractiveModeContext {
 	showUserMessageSelector(): void;
 	showTreeSelector(): void;
 	showSessionSelector(): void;
+	openResumeModal(): Promise<void>;
 	handleResumeSession(sessionPath: string): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;

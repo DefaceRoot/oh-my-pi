@@ -12,6 +12,7 @@
  *   - Progress tracking via JSON events
  *   - Session artifacts for debugging
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
@@ -31,6 +32,7 @@ import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
+import { collectDelegationContext } from "./delegation-context";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
@@ -39,12 +41,14 @@ import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
-import { renderTemplate } from "./template";
+import { renderTemplate, type RenderResult } from "./template";
+import { buildToonDelegation, type DelegationTask, type ToonDelegationResult } from "./toon-delegation-builder";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
+	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
 	type TaskSubagentStopRequest,
@@ -70,7 +74,7 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer", "commit"]);
+const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer"]);
 
 function normalizeRuntimeRole(role: string | undefined): string | undefined {
 	const normalized = role?.trim().toLowerCase();
@@ -221,6 +225,111 @@ function renderDescription(
 	});
 }
 
+function buildDelegationTask(task: TaskItem): DelegationTask {
+	return {
+		id: task.id,
+		title: task.description.trim(),
+		description: task.assignment.trim(),
+		constraints: [],
+		acceptance_criteria: [],
+	};
+}
+
+function buildFallbackDelegationToon(session: ToolSession, delegate: string, task: TaskItem): string {
+	const inherited = collectDelegationContext(session);
+	const delegator = normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole ?? "unknown";
+	const repoRoot = inherited.repoRoot ?? session.cwd;
+	const envelopeSeed = [
+		repoRoot,
+		delegate,
+		task.id,
+		task.description,
+		task.assignment,
+		inherited.worktreePath ?? "",
+		inherited.branchName ?? "",
+		inherited.baseBranch ?? "",
+		inherited.planFilePath ?? "",
+		inherited.planWorkspaceDir ?? "",
+	].join("\n");
+	const envelopeId = `del_${createHash("sha256").update(envelopeSeed).digest("hex").slice(0, 12)}`;
+
+	return [
+		"delegation:",
+		'  contract_version: "omp-delegation/v1"',
+		"  envelope:",
+		`    id: ${JSON.stringify(envelopeId)}`,
+		...(inherited.parentEnvelopeId ? [`    parent_envelope_id: ${JSON.stringify(inherited.parentEnvelopeId)}`] : []),
+		`    created_at: ${JSON.stringify(new Date().toISOString())}`,
+		"  context:",
+		`    repo_root: ${JSON.stringify(repoRoot)}`,
+		...(inherited.worktreePath ? [`    worktree:`, `      path: ${JSON.stringify(inherited.worktreePath)}`] : []),
+		...(inherited.branchName || inherited.baseBranch
+			? [
+				`    git:`,
+				...(inherited.branchName ? [`      branch: ${JSON.stringify(inherited.branchName)}`] : []),
+				...(inherited.baseBranch ? [`      base_branch: ${JSON.stringify(inherited.baseBranch)}`] : []),
+			]
+			: []),
+		...(inherited.planFilePath ? [`    plan_path: ${JSON.stringify(inherited.planFilePath)}`] : []),
+		...(inherited.planWorkspaceDir ? [`    plan_workspace_dir: ${JSON.stringify(inherited.planWorkspaceDir)}`] : []),
+		"  roles:",
+		`    delegator: ${JSON.stringify(delegator)}`,
+		`    delegate: ${JSON.stringify(delegate)}`,
+		"  task:",
+		`    id: ${JSON.stringify(task.id)}`,
+		`    title: ${JSON.stringify(task.description.trim())}`,
+		`    description: ${JSON.stringify(task.assignment.trim())}`,
+		"    constraints: []",
+		"    acceptance_criteria: []",
+	].join("\n");
+}
+
+async function writeDelegationSidecar(session: ToolSession, result: ToonDelegationResult): Promise<void> {
+	const artifactsDir = session.getArtifactsDir?.();
+	if (!artifactsDir) return;
+	const envelopeId = result.metadata.envelope.id;
+	const sidecarPath = path.join(artifactsDir, `${envelopeId}-delegation-meta.json`);
+	const sidecarData = {
+		...result.metadata,
+		quality_report: result.quality_report,
+		validation_passed: result.validation_passed,
+	};
+	await fs.mkdir(artifactsDir, { recursive: true });
+	await fs.writeFile(sidecarPath, JSON.stringify(sidecarData, null, 2));
+}
+
+async function renderTaskWithDelegationToon(
+	session: ToolSession,
+	delegate: string,
+	task: TaskItem,
+	context?: string,
+): Promise<RenderResult> {
+	const trimmedContext = context?.trim();
+	if (trimmedContext?.startsWith("delegation:")) {
+		return renderTemplate(trimmedContext, task);
+	}
+
+	let delegationContext: string;
+	try {
+		const result = await buildToonDelegation({
+			session,
+			delegate,
+			task: buildDelegationTask(task),
+		});
+		// Fire-and-forget sidecar write; failures are non-fatal
+		writeDelegationSidecar(session, result).catch(() => {});
+		if (result.validation_passed === false) {
+			delegationContext = buildFallbackDelegationToon(session, delegate, task);
+		} else {
+			delegationContext = result.toon;
+		}
+	} catch {
+		delegationContext = buildFallbackDelegationToon(session, delegate, task);
+	}
+
+	return renderTemplate(trimmedContext, task, { delegationContext });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -271,7 +380,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	#orchestratorBoundaryMessage(agentName: string): string {
 		return (
 			`Cannot spawn '${agentName}' from orchestrator parent sessions. ` +
-			"Delegate an 'implement' worker first; lint, code-reviewer, and commit must run inside that implement session's quality loop before handoff."
+			"Delegate an 'implement' or 'debug' worker first; lint and code-reviewer must run inside that worker's quality loop before handoff."
 		);
 	}
 
@@ -329,7 +438,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
-		const renderedTasks = taskItems.map(taskItem => renderTemplate(params.context, taskItem));
+		const renderedTasks = await Promise.all(
+			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem, params.context)),
+		);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
@@ -408,7 +519,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				continue;
 			}
 
-			const singleParams: TaskParams = { ...params, tasks: [taskItem] };
+			const singleParams: TaskParams = { ...params, context: renderedTasks[i].task, tasks: [taskItem] };
 			const label = uniqueId;
 			try {
 				const jobId = manager.register(
@@ -982,7 +1093,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				await Bun.write(contextFilePath, compactContext);
 			}
 
-			// Build full prompts with context prepended
+			// Build full prompts from delegation TOON
 			// Allocate unique IDs across the session to prevent artifact collisions
 			let uniqueIds: string[];
 			if (preAllocatedIds && preAllocatedIds.length === tasks.length) {
@@ -994,8 +1105,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
-			// Build full prompts with context prepended
-			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(context, t));
+			// Build full prompts from delegation TOON
+			const tasksWithContext = await Promise.all(
+				tasksWithUniqueIds.map(taskItem =>
+					renderTaskWithDelegationToon(this.session, agentName, taskItem, context),
+				),
+			);
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles;
 			const promptTemplates = this.session.promptTemplates;
@@ -1256,6 +1371,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			let mergeSummary = "";
+			let mergeAgentContext: TaskToolDetails["mergeAgentContext"];
 			let changesApplied: boolean | null = null;
 			let mergedBranchesForNestedPatches: Set<string> | null = null;
 			if (isIsolated && repoRoot) {
@@ -1275,11 +1391,34 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						if (changesApplied) {
 							mergeSummary = `\n\nMerged ${mergeResult.merged.length} branch${mergeResult.merged.length === 1 ? "" : "es"}: ${mergeResult.merged.join(", ")}`;
 						} else {
+							const failedEntries = branchEntries.filter(branchEntry =>
+								mergeResult.failed.includes(branchEntry.branchName),
+							);
+							const branchSummaryLines = failedEntries
+								.map(
+									branchEntry =>
+										`  - ${branchEntry.branchName} (task: ${branchEntry.taskId}): ${branchEntry.description || "No description"}`,
+								)
+								.join("\n");
 							const mergedPart =
 								mergeResult.merged.length > 0 ? `Merged: ${mergeResult.merged.join(", ")}.\n` : "";
 							const failedPart = `Failed: ${mergeResult.failed.join(", ")}.`;
 							const conflictPart = mergeResult.conflict ? `\nConflict: ${mergeResult.conflict}` : "";
-							mergeSummary = `\n\n<system-notification>Branch merge failed. ${mergedPart}${failedPart}${conflictPart}\nUnmerged branches remain for manual resolution.</system-notification>`;
+							const branchDetailsPart = branchSummaryLines ? `- Branch details:\n${branchSummaryLines}\n` : "";
+							mergeSummary = `\n\n<system-notification>Branch merge conflict detected.\n${mergedPart}${failedPart}${conflictPart}\n\nTo resolve, spawn a \`merge\` agent with context:\n- Conflicting branches: ${mergeResult.failed.join(", ")}\n${branchDetailsPart}The merge agent will rebase and cherry-pick to resolve conflicts.</system-notification>`;
+
+							if (mergeResult.conflict) {
+								mergeAgentContext = {
+									conflictingBranches: mergeResult.failed,
+									mergedBranches: mergeResult.merged,
+									conflict: mergeResult.conflict,
+									branchSummaries: failedEntries.map(branchEntry => ({
+										branch: branchEntry.branchName,
+										taskId: branchEntry.taskId,
+										description: branchEntry.description || "No description",
+									})),
+								};
+							}
 						}
 					}
 
@@ -1389,12 +1528,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			// Build final output - match plugin format
-			const successCount = results.filter(r => r.exitCode === 0 && !r.error).length;
 			const cancelledCount = results.filter(r => r.aborted).length;
 			const totalDuration = Date.now() - startTime;
 
 			const summaries = results.map(r => {
-				const status = r.aborted
+				const tokenCount = r.tokens ?? 0;
+				let status = r.aborted
 					? isUserStoppedAbortReason(r.abortReason)
 						? "user stopped"
 						: "cancelled"
@@ -1403,6 +1542,21 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						: r.exitCode === 0
 							? "completed"
 							: `failed (exit ${r.exitCode})`;
+				let statusDetail: string | undefined;
+				if (!r.aborted && r.exitCode === 0 && !r.error) {
+					const isSilentFailure = tokenCount === 0 && !r.hasSubmitResult;
+
+					if (isSilentFailure) {
+						status = "failed";
+						statusDetail =
+							"Session produced no output (0 tokens, no submit_result). The subagent may have failed to initialize.";
+					} else {
+						const isLowTokenWarning = tokenCount > 0 && tokenCount < 100 && !r.hasSubmitResult;
+						if (isLowTokenWarning) {
+							statusDetail = `Warning: Session used only ${tokenCount} tokens without calling submit_result.`;
+						}
+					}
+				}
 				const output = r.output.trim() || r.stderr.trim() || "(no output)";
 				const outputCharCount = r.outputMeta?.charCount ?? output.length;
 				const fullOutputThreshold = 5000;
@@ -1417,8 +1571,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				return {
 					agent: r.agent,
 					status,
+					statusDetail,
 					id: r.id,
 					abortReason: r.aborted && r.abortReason?.trim() ? r.abortReason.trim() : undefined,
+					health: `tokens=${tokenCount}, submit_result=${r.hasSubmitResult ? "yes" : "no"}, elapsed=${r.durationMs}ms`,
 					preview,
 					truncated,
 					meta: r.outputMeta
@@ -1429,6 +1585,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						: undefined,
 				};
 			});
+			const successCount = summaries.filter(summary => summary.status === "completed").length;
 
 			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
@@ -1460,6 +1617,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					totalDurationMs: totalDuration,
 					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
 					outputPaths,
+					mergeAgentContext,
 				},
 			};
 		} catch (err) {

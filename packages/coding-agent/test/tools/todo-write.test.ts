@@ -3,7 +3,11 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
-import { getLatestTodoPhasesFromEntries, withTodoPhasesPreserveData } from "../../src/tools/todo-write";
+import {
+	getLatestTodoPhasesFromEntries,
+	TODO_BOOTSTRAP_ENTRY_TYPE,
+	withTodoPhasesPreserveData,
+} from "../../src/tools/todo-write";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -114,7 +118,7 @@ function createMessageEntry(id: string, message: Record<string, unknown>, parent
 		parentId,
 		timestamp: new Date(0).toISOString(),
 		message,
-	} as SessionEntry;
+	} as unknown as SessionEntry;
 }
 
 function createCompactionEntry(
@@ -131,7 +135,7 @@ function createCompactionEntry(
 		firstKeptEntryId: parentId,
 		tokensBefore: 123,
 		preserveData,
-	} as SessionEntry;
+	} as unknown as SessionEntry;
 }
 
 describe("todo state compaction helpers", () => {
@@ -164,5 +168,49 @@ describe("todo state compaction helpers", () => {
 		];
 
 		expect(getLatestTodoPhasesFromEntries(entries)).toEqual([]);
+	});
+});
+
+describe("todo bootstrap entries", () => {
+	it("reads prepopulated phases when no todo_write result exists yet", () => {
+		const phases = getLatestTodoPhasesFromEntries([
+			{
+				type: "custom",
+				id: "bootstrap-1",
+				parentId: null,
+				timestamp: new Date(0).toISOString(),
+				customType: TODO_BOOTSTRAP_ENTRY_TYPE,
+				data: {
+					phases: [
+						{
+							id: "phase-1",
+							name: "Phase 1 — Bootstrap",
+							tasks: [
+								{
+									id: "task-1",
+									content: "Unit 1.1: Parse headings",
+									status: "in_progress",
+								},
+							],
+						},
+					],
+				},
+			},
+		]);
+
+		expect(phases).toEqual([
+			{
+				id: "phase-1",
+				name: "Phase 1 — Bootstrap",
+				tasks: [
+					{
+						id: "task-1",
+						content: "Unit 1.1: Parse headings",
+						status: "in_progress",
+						notes: undefined,
+					},
+				],
+			},
+		]);
 	});
 });

@@ -2,11 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Type } from "@sinclair/typebox";
-import type { LoadedCustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { LoadedCustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Type } from "@sinclair/typebox";
 
 const mockedLoadedTools: LoadedCustomTool[] = [];
 
@@ -73,7 +73,9 @@ describe("Phase 3 RED: parent MCP filtering", () => {
 		}
 	});
 
-	async function createSessionForRole(role: MainRole): Promise<{ getActiveToolNames: () => string[]; dispose: () => Promise<void> }> {
+	async function createSessionForRole(
+		role: MainRole,
+	): Promise<{ getActiveToolNames: () => string[]; dispose: () => Promise<void> }> {
 		const tempDir = path.join(os.tmpdir(), `pi-mcp-phase3-red-${Snowflake.next()}`);
 		await fs.mkdir(tempDir, { recursive: true });
 		tempDirs.push(tempDir);
@@ -107,7 +109,10 @@ describe("Phase 3 RED: parent MCP filtering", () => {
 		);
 
 		const session = await createSessionForRole("default");
-		const activeMcpTools = session.getActiveToolNames().filter(name => name.startsWith("mcp_")).sort();
+		const activeMcpTools = session
+			.getActiveToolNames()
+			.filter(name => name.startsWith("mcp_"))
+			.sort();
 
 		expect(activeMcpTools).toEqual(["mcp_augment_codebase_retrieval"]);
 	});

@@ -119,17 +119,17 @@ describe("InputController session title generation", () => {
 		generateSessionTitleMock.mockReturnValue(deferred.promise);
 		const fixture = createSessionTitleFixture({ sessionId: "source-session" });
 
-		await fixture.submit("resume ui component");
-		expect(generateSessionTitleMock).toHaveBeenCalledWith("resume ui component", {}, undefined, "source-session");
+		await fixture.submit("resume modal component");
+		expect(generateSessionTitleMock).toHaveBeenCalledWith("resume modal component", {}, undefined, "source-session");
 
 		fixture.setCurrentSession({ sessionId: "resumed-session", title: "Original Session" });
-		deferred.resolve("Resume UI Component");
+		deferred.resolve("Resume Modal Component");
 		await flushMicrotasks();
 
 		expect(fixture.setSessionNameSpy).not.toHaveBeenCalled();
 		expect(setTerminalTitleMock).not.toHaveBeenCalled();
 		expect(fixture.getCurrentTitle()).toBe("Original Session");
-		expect(fixture.editorAddToHistorySpy).toHaveBeenCalledWith("resume ui component");
+		expect(fixture.editorAddToHistorySpy).toHaveBeenCalledWith("resume modal component");
 	});
 
 	it("still applies the generated title when the active session has not changed", async () => {

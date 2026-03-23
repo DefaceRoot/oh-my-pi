@@ -168,7 +168,7 @@ describe("SubagentSessionViewerComponent", () => {
 			} as any,
 		});
 		const text = renderText(viewer, 100);
-		expect(text).toContain("Subagent: explore-agent");
+		expect(text).toContain("Subagent Session · explore-agent");
 		expect(text).toContain("Status ● RUNNING");
 		expect(text).toContain("Role explorer");
 		expect(text).toContain("Provider anthropic");
@@ -208,6 +208,40 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("MCP augment, grafana");
 		expect(text).toContain("Tools 3");
 		expect(text).toContain("S stop");
+	});
+
+	test("renders delegation breadcrumb when a role chain is available", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["session header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: {
+				agentName: "lint",
+				status: "running",
+				delegationChain: ["orchestrator", "implement", "lint"],
+			},
+		});
+		const text = renderText(viewer, 120);
+		expect(text).toContain("Delegation orchestrator › implement › lint");
+	});
+
+	test("renders used MCP servers separate from configured allowlist", () => {
+		const viewer = createViewer();
+		setViewerContent(viewer, {
+			headerLines: ["session header"],
+			bodyLines: ["body"],
+			nestedArrowMode: false,
+			metadata: {
+				agentName: "explore-agent",
+				status: "running",
+				mcpServers: ["augment", "better-context"],
+				mcpAllowlist: ["augment"],
+			} as any,
+		});
+		const text = renderText(viewer, 120);
+		expect(text).toContain("MCP augment, better-context");
+		expect(text).toContain("Allowed MCP augment");
 	});
 
 	test("renders cancelled status label consistently", () => {

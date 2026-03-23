@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { loadSkills, loadSkillsFromDir, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { filterSkillsByCategories, loadSkills, loadSkillsFromDir, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 
 const fixturesDir = path.resolve(import.meta.dirname, "fixtures/skills");
 const collisionFixturesDir = path.resolve(import.meta.dirname, "fixtures/skills-collision");
@@ -128,6 +128,38 @@ describe("skills", () => {
 			});
 
 			expect(skills).toHaveLength(0);
+		});
+	});
+
+	describe("filterSkillsByCategories", () => {
+		const buildSkill = (name: string): Skill => ({
+			name,
+			description: `${name} description`,
+			filePath: `/tmp/${name}/SKILL.md`,
+			baseDir: `/tmp/${name}`,
+			source: "test",
+		});
+
+		it("keeps shared skills available through both categories", () => {
+			const skills = [
+				buildSkill("commit-hygiene"),
+				buildSkill("dispatching-parallel-agents"),
+				buildSkill("verification-before-completion"),
+				buildSkill("systematic-debugging"),
+				buildSkill("unknown-skill"),
+			];
+
+			expect(filterSkillsByCategories(skills, ["orchestration"]).map(skill => skill.name)).toEqual([
+				"commit-hygiene",
+				"dispatching-parallel-agents",
+				"verification-before-completion",
+			]);
+			expect(filterSkillsByCategories(skills, ["workflow"]).map(skill => skill.name)).toEqual([
+				"commit-hygiene",
+				"dispatching-parallel-agents",
+				"verification-before-completion",
+				"systematic-debugging",
+			]);
 		});
 	});
 

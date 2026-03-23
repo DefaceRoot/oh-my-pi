@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import process from "node:process";
-import { FORK_REPO_ROOT } from "../src/cli/update-cli";
 import { OMP_FORK_BUILD_ID } from "../src/build-info";
+import { FORK_REPO_ROOT } from "../src/cli/update-cli";
 
 // Import the actual module to test its current behavior
 // We need to test resolveOmpCommand() directly
-import { resolveOmpCommand, buildOmpResumeArgs } from "../src/task/omp-command";
+import { buildOmpResumeArgs, resolveOmpCommand } from "../src/task/omp-command";
 
 describe("CLI fork launcher cutover behavior [RED PHASE]", () => {
 	describe("resolveOmpCommand() fork handoff behavior", () => {
@@ -131,9 +131,7 @@ describe("Launcher handoff contract [SPECIFICATION]", () => {
 		// Document the expected fork entry point for handoff
 		const expectedForkEntry = path.join(FORK_REPO_ROOT, "packages/coding-agent/src/cli.ts");
 
-		expect(expectedForkEntry).toBe(
-			"/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/cli.ts"
-		);
+		expect(expectedForkEntry).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/cli.ts");
 		expect(FORK_REPO_ROOT).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
 	});
 

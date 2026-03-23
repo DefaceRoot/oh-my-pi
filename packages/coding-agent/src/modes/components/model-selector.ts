@@ -2,7 +2,15 @@ import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts, type Model, modelsAreEqual } from "@oh-my-pi/pi-ai";
 import { Container, Input, matchesKey, Spacer, type Tab, TabBar, Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
-import { MODEL_ROLE_IDS, MODEL_ROLES, type ModelRegistry, type ModelRole } from "../../config/model-registry";
+import {
+	MODEL_ROLE_CATEGORIES,
+	MODEL_ROLE_IDS,
+	MODEL_ROLE_IDS_BY_CATEGORY,
+	MODEL_ROLES,
+	type ModelRegistry,
+	type ModelRole,
+	type ModelRoleCategory,
+} from "../../config/model-registry";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { RolesConfig } from "../../config/roles-config";
 import type { Settings } from "../../config/settings";
@@ -87,6 +95,9 @@ type RoleSelectCallback = (model: Model, role: ModelRole | null, thinkingLevel?:
 type CancelCallback = () => void;
 
 const ALL_TAB = "ALL";
+
+const CATEGORY_ORDER: ModelRoleCategory[] = ["core", "captain", "crew"];
+const GROUPED_ROLE_IDS: ModelRole[] = CATEGORY_ORDER.flatMap(cat => MODEL_ROLE_IDS_BY_CATEGORY[cat]);
 
 export class ModelSelectorComponent extends Container {
 	#searchInput: Input;
@@ -231,7 +242,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#selectedRole(): ModelRole {
-		return MODEL_ROLE_IDS[this.#selectedRoleIndex] ?? MODEL_ROLE_IDS[0]!;
+		return GROUPED_ROLE_IDS[this.#selectedRoleIndex] ?? GROUPED_ROLE_IDS[0]!;
 	}
 
 	#loadRoleModels(): void {
@@ -441,18 +452,34 @@ export class ModelSelectorComponent extends Container {
 		this.#tabBar = null;
 
 		this.#summaryContainer.addChild(new Text(theme.bold("Model Roles:"), 1, 0));
-		this.#summaryContainer.addChild(new Spacer(1));
 
-		for (let index = 0; index < MODEL_ROLE_IDS.length; index++) {
-			const role = MODEL_ROLE_IDS[index]!;
-			const roleInfo = MODEL_ROLES[role];
-			const isSelected = index === this.#selectedRoleIndex;
-			const prefix = isSelected ? `${theme.nav.cursor} ` : "  ";
-			const tag = roleInfo.tag ?? role.toUpperCase();
-			const line = `${prefix}${theme.bold(tag)} ${roleInfo.name} ${this.#formatCurrentAssignment(role)}`;
-			this.#summaryContainer.addChild(new Text(isSelected ? theme.fg("accent", line) : line, 0, 0));
+		let flatIndex = 0;
+		for (const category of CATEGORY_ORDER) {
+			const rolesInCategory = MODEL_ROLE_IDS_BY_CATEGORY[category];
+			if (rolesInCategory.length === 0) continue;
+
+			const categoryInfo = MODEL_ROLE_CATEGORIES[category];
+			this.#summaryContainer.addChild(new Spacer(1));
+			this.#summaryContainer.addChild(
+				new Text(
+					`  ${theme.fg(categoryInfo.color, theme.bold(categoryInfo.label))} ${theme.fg("dim", categoryInfo.description)}`,
+					0,
+					0,
+				),
+			);
+
+			for (const role of rolesInCategory) {
+				const roleInfo = MODEL_ROLES[role];
+				const isSelected = flatIndex === this.#selectedRoleIndex;
+				const prefix = isSelected ? `${theme.nav.cursor} ` : "    ";
+				const tag = roleInfo.tag ?? role.toUpperCase();
+				const line = `${prefix}${theme.bold(tag)} ${roleInfo.name} ${this.#formatCurrentAssignment(role)}`;
+				this.#summaryContainer.addChild(new Text(isSelected ? theme.fg("accent", line) : line, 0, 0));
+				flatIndex++;
+			}
 		}
 
+		this.#listContainer.addChild(new Spacer(1));
 		this.#listContainer.addChild(new Text(theme.fg("dim", "  enter choose role  esc cancel"), 0, 0));
 	}
 
@@ -840,14 +867,14 @@ export class ModelSelectorComponent extends Container {
 	#handleRoleSummaryInput(keyData: string): void {
 		if (matchesKey(keyData, "up")) {
 			this.#selectedRoleIndex =
-				this.#selectedRoleIndex === 0 ? MODEL_ROLE_IDS.length - 1 : this.#selectedRoleIndex - 1;
+				this.#selectedRoleIndex === 0 ? GROUPED_ROLE_IDS.length - 1 : this.#selectedRoleIndex - 1;
 			this.#updateView();
 			return;
 		}
 
 		if (matchesKey(keyData, "down")) {
 			this.#selectedRoleIndex =
-				this.#selectedRoleIndex === MODEL_ROLE_IDS.length - 1 ? 0 : this.#selectedRoleIndex + 1;
+				this.#selectedRoleIndex === GROUPED_ROLE_IDS.length - 1 ? 0 : this.#selectedRoleIndex + 1;
 			this.#updateView();
 			return;
 		}

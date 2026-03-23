@@ -298,7 +298,8 @@ export async function startServer(port = 3847): Promise<{ port: number; stop: ()
 	try {
 		server = serve(port);
 	} catch (error) {
-		const isPortInUseError = typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE";
+		const isPortInUseError =
+			typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE";
 		if (!isPortInUseError) throw error;
 		server = serve(0);
 	}

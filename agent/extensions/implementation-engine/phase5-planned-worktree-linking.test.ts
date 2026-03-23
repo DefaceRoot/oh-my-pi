@@ -63,7 +63,7 @@ describe("implementation-engine phase 5 planned flow plan linking (RED)", () => 
 
 		expect(inputBlock).toMatch(/plannedWorktreePlanPathPromptText\(\)/);
 		expect(source).toMatch(
-			/function\s+plannedWorktreePlanPathPromptText\(\):\s*string\s*\{[\s\S]*docs\/plans[\s\S]*\.omp\/sessions\/plans[\s\S]*\.md/i,
+			/function\s+plannedWorktreePlanPathPromptText\(\):\s*string\s*\{[\s\S]*\.omp\/sessions\/plans[\s\S]*\.md/i,
 		);
 		const resetMatches = inputBlock.match(/pendingPlannedWorktree\s*=\s*false/g) ?? [];
 		expect(resetMatches.length).toBeGreaterThanOrEqual(2);
@@ -72,8 +72,9 @@ describe("implementation-engine phase 5 planned flow plan linking (RED)", () => 
 	test("input hook leaves normal chat behavior untouched when no pending planned flow", async () => {
 		const source = await readExtensionSource();
 		const inputBlock = extractInputHookBlock(source);
+		const deprecatedResumeCommand = "/resume" + "-ui";
 
-		expect(inputBlock).toMatch(/if \(text === "\/resume" \|\| text\?\.startsWith\("\/resume "\)\) \{[\s\S]*return \{ text: "\/resume-ui" \ };/);
+		expect(inputBlock).not.toContain(deprecatedResumeCommand);
 		expect(inputBlock).toMatch(/if\s*\(\s*!pendingPlannedWorktree\s*\)\s*\{[\s\S]*return;[\s\S]*\}/);
 	});
 
@@ -85,11 +86,11 @@ describe("implementation-engine phase 5 planned flow plan linking (RED)", () => 
 		expect(validatorBlock).toMatch(/endsWith\("\.md"\)/);
 	});
 
-	test("plan path validator keeps existing docs/plans markdown acceptance", async () => {
+	test("plan path validator checks for .omp/sessions/plans marker", async () => {
 		const source = await readExtensionSource();
 		const validatorBlock = extractPlanPathValidationHelper(source);
 
-		expect(validatorBlock).toMatch(/docs\$\{path\.sep\}plans\$\{path\.sep\}/);
+		expect(validatorBlock).toMatch(/\.omp\$\{path\.sep\}sessions\$\{path\.sep\}plans\$\{path\.sep\}/);
 	});
 
 	test("pending planned-worktree flow resolves path before validation and rejects invalid paths", async () => {

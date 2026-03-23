@@ -13,10 +13,11 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ## Orchestrator Implementation Delegation Boundary
 
-- During active orchestrator implementation flow, parent delegation is limited to `explore`, `research`, and `implement`.
+- During active orchestrator implementation flow, parent delegation is limited to `explore`, `research`, `implement`, and `debug`.
+- Route bug reports, failing tests, and unexpected behavior to `debug`; route known-good scoped code changes to `implement`.
 - Parent may delegate verification workers (`verifier` plus `coderabbit`) only after implementation units complete for the current phase.
 - Parent orchestrators MUST NOT spawn `lint`, `code-reviewer`, or `commit` while implementation work is in progress.
-- The implementation worker owns the full quality and handoff loop: `lint` -> `code-reviewer` -> remediation cycles -> `commit` handoff before reporting completion.
+- The delegated implementation worker (`implement` or `debug`) owns the full quality and handoff loop: `lint` -> `code-reviewer` -> remediation cycles -> `commit` handoff before reporting completion.
 
 ## Session Artifact Placement (Canonical)
 

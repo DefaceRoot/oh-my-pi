@@ -102,7 +102,7 @@ describe("SubagentNavigatorModal", () => {
 			const modal = createModal(groups);
 			const text = renderText(modal, 120);
 
-			expect(text).toContain("Subagent Flight Deck");
+			expect(text).toContain("Subagents (");
 			expect(text).toContain("#");
 			expect(text).toContain("Title");
 			expect(text).toContain("Status");
@@ -115,13 +115,43 @@ describe("SubagentNavigatorModal", () => {
 			expect(text).not.toContain("Thinking:");
 		});
 
+		test("hides lower-priority columns on narrow widths", () => {
+			const { groups } = singleGroupSetup();
+			const modal = createModal(groups);
+
+			const fullHeader = renderLines(modal, 120).find(line => line.includes("Title")) ?? "";
+			expect(fullHeader).toContain("Result");
+			expect(fullHeader).toContain("Model");
+			expect(fullHeader).toContain("Last Active");
+			expect(fullHeader).toContain("Tokens");
+
+			const mediumHeader = renderLines(modal, 100).find(line => line.includes("Title")) ?? "";
+			expect(mediumHeader).toContain("Result");
+			expect(mediumHeader).toContain("Model");
+			expect(mediumHeader).toContain("Last Active");
+			expect(mediumHeader).not.toContain("Tokens");
+
+			const compactHeader = renderLines(modal, 80).find(line => line.includes("Title")) ?? "";
+			expect(compactHeader).toContain("Result");
+			expect(compactHeader).toContain("Model");
+			expect(compactHeader).not.toContain("Last Active");
+			expect(compactHeader).not.toContain("Tokens");
+
+			const narrowHeader = renderLines(modal, 70).find(line => line.includes("Title")) ?? "";
+			expect(narrowHeader).toContain("Role");
+			expect(narrowHeader).not.toContain("Result");
+			expect(narrowHeader).not.toContain("Model");
+			expect(narrowHeader).not.toContain("Last Active");
+			expect(narrowHeader).not.toContain("Tokens");
+		});
+
 		test("renders compact title chrome in top border", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
 			const lines = renderLines(modal, 100);
 
-			expect(lines[0]).toContain("Subagent Flight Deck 1/3 active");
-			expect(lines[0]).not.toContain(" Subagent Flight Deck (");
+			expect(lines[0]).toContain("Subagents (3 total, 1 active)");
+			expect(lines[0]).not.toContain("Subagent Flight Deck");
 		});
 
 		test("applies dark overlay surface to entire modal", () => {
@@ -133,6 +163,13 @@ describe("SubagentNavigatorModal", () => {
 			expect(rawLines.every(line => line.includes("\x1b[48;"))).toBe(true);
 		});
 
+
+		test("shows expanded keybinding legend in footer", () => {
+			const { groups } = singleGroupSetup();
+			const modal = createModal(groups);
+			const text = renderText(modal, 180);
+			expect(text).toContain("↑↓ navigate · Enter open · / filter · s stop · p parent · g/G top/bottom · Esc close");
+		});
 		test("uses stronger chrome with framed borders and separators", () => {
 			const { groups } = singleGroupSetup();
 			const modal = createModal(groups);
@@ -252,8 +289,33 @@ describe("SubagentNavigatorModal", () => {
 			const lines = renderLines(modal, 120);
 			const separators = lines.filter(line => /^│─+│$/.test(line));
 
-			expect(text).toContain("↳ ");
+			expect(text).toMatch(/[├└]─/);
 			expect(separators.length).toBeGreaterThanOrEqual(2);
+		});
+
+		test("renders multi-level tree connectors for deeper nesting", () => {
+			const refs = [
+				makeRef("root-001", { status: "running" }),
+				makeRef("child-a", { status: "running", parentId: "root-001", rootId: "root-001", depth: 1 }),
+				makeRef("grandchild-a", { status: "completed", parentId: "child-a", rootId: "root-001", depth: 2 }),
+				makeRef("child-b", { status: "pending", parentId: "root-001", rootId: "root-001", depth: 1 }),
+			];
+			const modal = createModal([makeGroup("root-001", refs)]);
+			const text = renderText(modal, 140);
+			expect(text).toContain("├─");
+			expect(text).toContain("│   └─");
+		});
+
+		test("omits ancestor trunk markers for linear chains", () => {
+			const refs = [
+				makeRef("root-001", { status: "running" }),
+				makeRef("child-001", { status: "running", parentId: "root-001", rootId: "root-001", depth: 1 }),
+				makeRef("grandchild-001", { status: "completed", parentId: "child-001", rootId: "root-001", depth: 2 }),
+			];
+			const modal = createModal([makeGroup("root-001", refs)]);
+			const text = renderText(modal, 140);
+			expect(text).toContain("       └─ Task for grandchild-001");
+			expect(text).not.toContain("  │   └─ Task for grandchild-001");
 		});
 
 		test("renders selected-subagent metadata strip with OMP session and MCP servers", () => {
@@ -389,6 +451,32 @@ describe("SubagentNavigatorModal", () => {
 
 			modal.handleInput("k");
 			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 1 });
+		});
+
+		test("g and G jump to first and last entries", () => {
+			const { groups } = singleGroupSetup();
+			const modal = createModal(groups, { groupIndex: 0, nestedIndex: -1 });
+
+			modal.handleInput("G");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 1 });
+
+			modal.handleInput("g");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: -1 });
+		});
+
+		test("p jumps to parent selection when available", () => {
+			const refs = [
+				makeRef("root-001", { status: "running" }),
+				makeRef("child-001", { status: "running", parentId: "root-001", rootId: "root-001", depth: 1 }),
+				makeRef("grandchild-001", { status: "running", parentId: "child-001", rootId: "root-001", depth: 2 }),
+			];
+			const modal = createModal([makeGroup("root-001", refs)], { groupIndex: 0, nestedIndex: 1 });
+
+			modal.handleInput("p");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: 0 });
+
+			modal.handleInput("p");
+			expect(modal.getSelection()).toEqual({ groupIndex: 0, nestedIndex: -1 });
 		});
 
 		test("Enter emits onOpenSelection for current row", () => {

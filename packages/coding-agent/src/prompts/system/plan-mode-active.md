@@ -67,9 +67,10 @@ You **MUST** use `{{editToolName}}` to update the plan file as you learn; **MUST
 You **MUST** produce a phased implementation plan that a fresh implementation agent can execute without re-exploration.
 - Recommended approach only
 - Exact paths of critical files to modify
-- Verification: how to test end-to-end
-- `(P)` labels on any phase or subtask safe for parallel implementation
-- Sequential notes wherever dependency, overlap, or overwrite risk exists
+- Unit-sized decomposition inside each phase, defaulting to parallel-first grouping before sequential follow-on work
+- `Verification`: end-to-end checks plus safety checks that validate dependency and parallel assumptions
+- `(P)` labels on any unit safe for parallel implementation only when `Parallel safety` and verification independence are explicit
+- Sequential notes wherever dependency, overlap, overwrite, or verification coupling exists
 </procedure>
 
 <caution>
@@ -94,14 +95,16 @@ After research is complete, you **MUST** use `{{askToolName}}` to clarify unreso
 
 ### Phase 3: Design and Verify
 You **MUST** draft the approach from synthesized findings, briefly compare viable alternatives, then choose one.
-You **SHOULD** use `oracle` or targeted re-reading to stress-test dependencies, edge cases, and parallel-safety before locking the plan.
+You **SHOULD** use `oracle` or targeted re-reading to stress-test dependencies, edge cases, parallel safety, and verification independence before locking the plan.
 
 ### Phase 4: Update Plan
 You **MUST** update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch) with:
 - Recommended approach only
 - Paths of critical files to modify
-- Verification section
-- A phased implementation plan with `(P)` labels on any phase or subtask safe for parallel implementation
+- Unit-sized decomposition inside each phase, defaulting to parallel-first grouping before sequential follow-on work
+- `Verification`: end-to-end checks plus safety checks that validate dependency and parallel assumptions
+- `(P)` labels on any unit safe for parallel implementation only when `Parallel safety` and verification independence are explicit
+- Sequential notes wherever dependency, overlap, overwrite, or verification coupling exists
 </procedure>
 
 <caution>

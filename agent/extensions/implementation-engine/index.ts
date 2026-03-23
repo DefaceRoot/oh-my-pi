@@ -691,7 +691,12 @@ const notifyWorktreeProgress = (
 							"",
 							"Orchestrator execution contract:",
 							"- Read ONLY the phase headings from the plan file. Do not read source code files.",
-							"- Process phases in strict order, but within each phase spawn one or more Task subagents and parallelize only proven-independent implementation tasks.",
+							"- Process phases in strict order.",
+							"- Within each phase, treat sibling units explicitly marked `(P)` in the plan as the canonical candidates for parallel implementation.",
+							"- `(P)` is strong evidence, not blind trust: re-check current file ownership, shared contract changes, ordering dependencies, and verification coupling before launching siblings together.",
+							"- If any `(P)` proof is missing or stale, keep that work sequential.",
+							"- Start planned parallel execution with 2-3 Task subagents. Grow toward 3-5 only after clean integrations on stable ownership.",
+							"- Do not invent new planned parallel groups beyond the explicit `(P)` set unless you re-establish safety first.",
 							"- Do not parallelize phases. Wait for each phase's implementation Task subagents to complete before starting the next phase.",
 							"- Session Workspace (MANDATORY):",
 							`- All session artifacts (test plans, verification reports, notes) MUST be written under: \`${sessionWorkspaceTemplate}\``,
@@ -1760,6 +1765,10 @@ const notifyWorktreeProgress = (
 			"- Exception: research/explore-only tasks do not require prerequisite test tasks.",
 			"- Exception: documentation-only tasks do not require prerequisite test tasks.",
 			"",
+			"Implementation Worker Quality Loop (MANDATORY):",
+			"- Every `implement`, `debug`, or file-mutating `designer` worker owns `lint` -> `code-reviewer` -> `commit`.",
+			"- `lint` is the first gate when required. Do not have workers launch `lint` and `code-reviewer` in parallel or in the same Task call; review begins only after lint succeeds or is skipped for documentation/configuration-only changes.",
+			"",
 			"Verifier Workflow (MANDATORY):",
 			"- After implementation tasks complete, you MUST spawn parallel verifiers (one per completed implementation task) to validate the work. The `qa-test-planner` skill is auto-injected for verifier agents.",
 			"- Verifier checks MUST cover: lint passed on modified files, tests exist and pass, and stated success criteria are met.",
@@ -1781,8 +1790,12 @@ const notifyWorktreeProgress = (
 			"",
 			"WITH a plan file:",
 			"- Read the minimum context needed to sequence phases (typically the plan plus a few key files, never above the cap).",
-			"- Create one todo per phase plus verification/closeout tasks, process phases in strict order, and use one or more Task subagents per phase (parallel only for proven-independent implementation tasks).",
-			"- Keep each Task assignment tightly scoped: 1-2 file edits/actions maximum. Split broader work into additional Task subagents (parallel when independent).",
+			"- Create one todo per phase plus verification/closeout tasks, process phases in strict order, and use one or more Task subagents per phase.",
+			"- For planned work, treat sibling units explicitly marked `(P)` as the canonical parallel candidates. Re-check their `Parallel safety` against current repo state before launch.",
+			"- `(P)` is strong evidence, not blind trust. If any proof is missing or stale, keep that work sequential.",
+			"- Start planned parallel batches with 2-3 subagents. Grow toward 3-5 only after clean integrations on stable ownership.",
+			"- Do not invent new planned parallel groups beyond the explicit `(P)` set unless you re-establish safety.",
+			"- Keep each Task assignment tightly scoped: 1-2 file edits/actions maximum. Split broader work into additional Task subagents (parallel only for surviving `(P)` siblings).",
 			"- If deeper context is required, spawn an `explore` subagent first, then an `implement` implementation subagent.",
 			"- Apply the TDD protocol phase-by-phase using each phase's success criteria before phase implementation begins.",
 			"",
@@ -1796,9 +1809,9 @@ const notifyWorktreeProgress = (
 			"- Parent orchestrator must not call direct discovery tools (for example `find`, `grep`, or any `mcp_*` tool). Route all discovery through Task subagents (`explore` for reconnaissance).",
 			"",
 			"After each Task subagent completes:",
-			"- Run `git status --porcelain` in the active worktree before advancing. If dirty, spawn a remediation Task subagent dedicated to commit/push cleanup, then re-check until clean.",
+			"- Run `git status --porcelain` in the active worktree before advancing. If dirty, spawn a remediation Task subagent (`implement` or `debug`) to complete quality-loop commit/push cleanup, then re-check until clean.",
 			"- Update `todo_write` first, then continue.",
-			"- Confirm each implementation Task that changed files ran its own nested `lint` subagent scoped to those changed paths; missing lint evidence or any lint failure means the phase is BLOCKED until remediated.",
+			"- Confirm each implementation Task that changed files ran its own nested lint-first quality loop: `lint` scoped to changed paths, `code-reviewer` only after lint passed (or was skipped for documentation/configuration-only changes), then `commit`. Missing lint-first review evidence or any gate failure means the phase is BLOCKED until remediated.",
 			"- Quality PASSED with clean git status → spawn next phase. One-line response: 'Phase N complete. Starting Phase N+1.'",
 			"- BLOCKED → add/update blocker todos, then spawn exactly one remediation Task subagent for that phase. Never patch inline.",
 			"- All phases done → complete final todos and write a plain-English summary for the user (5-10 lines max). Explain what changed and what the user will now see or experience differently. No function names, no file paths, no technical jargon. See the AGENTS.md 'Summary & Handoff Format' rules.",
@@ -2769,7 +2782,7 @@ const notifyWorktreeProgress = (
 			ctx.ui.setEditorText(
 				[
 					`@${resolvedPlannedPlanPath}`,
-					"Use one or more Task subagents per phase (parallel only for proven-independent implementation tasks); use designer for any UI work.",
+					"Use one or more Task subagents per phase. Fan out only sibling plan units explicitly marked `(P)` after re-checking `Parallel safety`; otherwise keep implementation sequential. Use designer for any UI work.",
 					"Start with the TODO list first, then delegate.",
 					"TDD is required for each implementation phase (RED before GREEN).",
 					"After each phase, run verifier tasks for lint/tests/success criteria.",
@@ -3108,11 +3121,6 @@ const notifyWorktreeProgress = (
 
 	pi.on("input", async (event, ctx) => {
 		const text = (event as { text?: string }).text?.trim();
-		if (text === "/resume" || text?.startsWith("/resume ")) {
-			// biome-ignore format: phase5 regex expects exact spacing in resume return
-			return { text: "/resume-ui"  };
-		}
-
 		if (!pendingPlannedWorktree) {
 			return;
 		}
@@ -3567,995 +3575,6 @@ const notifyWorktreeProgress = (
 		},
 	});
 
-	// ═══════════════════════════════════════════════════════════════════════════
-	// Enhanced /resume with worktree-aware TabBar navigation
-	// ═══════════════════════════════════════════════════════════════════════════
-
-	const ARCHIVE_THRESHOLD_DAYS = 7;
-
-	type ResumeAgentMode = "orchestrator" | "default" | "unknown";
-
-	interface ResumeSessionInfo {
-		path: string;
-		id: string;
-		cwd: string;
-		title?: string;
-		modified: Date;
-		messageCount: number;
-		firstMessage: string;
-		allMessagesText: string;
-	}
-
-	interface EnrichedSession extends ResumeSessionInfo {
-		worktreeGroup: string;
-		agentMode: ResumeAgentMode;
-		isArchived: boolean;
-	}
-
-	const toDate = (value: unknown): Date => {
-		if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-		if (typeof value === "number" || typeof value === "string") {
-			const date = new Date(value);
-			if (!Number.isNaN(date.getTime())) return date;
-		}
-		return new Date(0);
-	};
-
-	const flattenMessageContent = (content: unknown): string => {
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return "";
-		const textParts: string[] = [];
-		for (const block of content as Array<{ type?: unknown; text?: unknown }>) {
-			if (block?.type === "text" && typeof block.text === "string") {
-				textParts.push(block.text);
-			}
-		}
-		return textParts.join(" ");
-	};
-
-	const readSessionsFromDisk = (sessionsDir: string): ResumeSessionInfo[] => {
-		const files: string[] = [];
-		const walk = (dir: string) => {
-			let entries: fs.Dirent[] = [];
-			try {
-				entries = fs.readdirSync(dir, { withFileTypes: true });
-			} catch {
-				return;
-			}
-			for (const entry of entries) {
-				const fullPath = path.join(dir, entry.name);
-				if (entry.isDirectory()) {
-					walk(fullPath);
-					continue;
-				}
-				if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-					files.push(fullPath);
-				}
-			}
-		};
-
-		walk(sessionsDir);
-
-		const sessions: ResumeSessionInfo[] = [];
-		for (const filePath of files) {
-			try {
-				const content = fs.readFileSync(filePath, "utf8");
-				const lines = content
-					.split(/\r?\n/)
-					.filter((line) => line.trim().length > 0);
-				if (lines.length === 0) continue;
-
-				const header = JSON.parse(lines[0] ?? "{}") as {
-					type?: string;
-					id?: string;
-					cwd?: string;
-					title?: string;
-				};
-				if (header.type !== "session" || typeof header.id !== "string")
-					continue;
-
-				let messageCount = 0;
-				let firstMessage = "";
-				const allMessages: string[] = [];
-				for (let i = 1; i < lines.length; i++) {
-					const line = lines[i];
-					if (!line) continue;
-					try {
-						const entry = JSON.parse(line) as {
-							type?: string;
-							message?: { role?: string; content?: unknown };
-						};
-						if (entry.type !== "message") continue;
-						messageCount += 1;
-						const text = flattenMessageContent(entry.message?.content)
-							.replace(/\s+/g, " ")
-							.trim();
-						if (text) {
-							allMessages.push(text);
-							if (!firstMessage && entry.message?.role === "user") {
-								firstMessage = text;
-							}
-						}
-					} catch {
-						// ignore malformed session entries
-					}
-				}
-
-				const stats = fs.statSync(filePath);
-				sessions.push({
-					path: filePath,
-					id: header.id,
-					cwd: typeof header.cwd === "string" ? header.cwd : "",
-					title: typeof header.title === "string" ? header.title : undefined,
-					modified: stats.mtime,
-					messageCount,
-					firstMessage: firstMessage || "(no messages)",
-					allMessagesText: allMessages.join(" "),
-				});
-			} catch {
-				// ignore unreadable session files
-			}
-		}
-
-		return sessions;
-	};
-
-	const normalizeSessionInfo = (session: unknown): ResumeSessionInfo | null => {
-		if (!session || typeof session !== "object") return null;
-		const record = session as Record<string, unknown>;
-		if (typeof record.path !== "string" || typeof record.id !== "string")
-			return null;
-		return {
-			path: record.path,
-			id: record.id,
-			cwd: typeof record.cwd === "string" ? record.cwd : "",
-			title: typeof record.title === "string" ? record.title : undefined,
-			modified: toDate(record.modified),
-			messageCount:
-				typeof record.messageCount === "number" ? record.messageCount : 0,
-			firstMessage:
-				typeof record.firstMessage === "string" ? record.firstMessage : "",
-			allMessagesText:
-				typeof record.allMessagesText === "string"
-					? record.allMessagesText
-					: "",
-		};
-	};
-
-	const PRIMARY_RESUME_SESSION_FILENAME_RE =
-		/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[a-z0-9]+\.jsonl$/i;
-
-	const isPrimaryResumeSessionPath = (
-		sessionsDir: string,
-		sessionPath: string,
-	): boolean => {
-		const relativePath = path.relative(
-			normalizePath(sessionsDir),
-			normalizePath(sessionPath),
-		);
-		if (
-			!relativePath ||
-			relativePath.startsWith("..") ||
-			path.isAbsolute(relativePath)
-		)
-			return false;
-
-		const parts = relativePath.split(path.sep).filter(Boolean);
-		if (parts.length !== 2) return false;
-
-		const fileName = parts[1];
-		if (!fileName) return false;
-
-		return PRIMARY_RESUME_SESSION_FILENAME_RE.test(fileName);
-	};
-
-	const filterPrimaryResumeSessions = (
-		sessions: ResumeSessionInfo[],
-		sessionsDir: string,
-	): ResumeSessionInfo[] =>
-		sessions.filter((session) =>
-			isPrimaryResumeSessionPath(sessionsDir, session.path),
-		);
-
-	const collectSessionInfos = async (
-		ctx: ExtensionCommandContext,
-	): Promise<ResumeSessionInfo[]> => {
-		const sessionsDir = path.join(os.homedir(), ".omp", "agent", "sessions");
-		const sessionManagerWithCollector = ctx.sessionManager as unknown as {
-			collectSessionsFromFiles?: (dir: string) => unknown;
-		};
-
-		try {
-			const maybeCollected = await Promise.resolve(
-				sessionManagerWithCollector.collectSessionsFromFiles?.(sessionsDir),
-			);
-			if (Array.isArray(maybeCollected)) {
-				const normalized = maybeCollected
-					.map(normalizeSessionInfo)
-					.filter((session): session is ResumeSessionInfo => Boolean(session));
-				const primarySessions = filterPrimaryResumeSessions(
-					normalized,
-					sessionsDir,
-				);
-				if (primarySessions.length > 0) {
-					return primarySessions.sort(
-						(a, b) => b.modified.getTime() - a.modified.getTime(),
-					);
-				}
-			}
-		} catch {
-			// fall through to direct file parsing
-		}
-
-		return filterPrimaryResumeSessions(
-			readSessionsFromDisk(sessionsDir),
-			sessionsDir,
-		).sort((a, b) => b.modified.getTime() - a.modified.getTime());
-	};
-
-	interface ResumeSessionDiskMetadata {
-		cwd?: string;
-		persistedWorktreePath?: string;
-	}
-
-	const readResumeSessionDiskMetadata = (
-		sessionPath: string,
-	): ResumeSessionDiskMetadata => {
-		let cwd: string | undefined;
-		let persistedWorktreePath: string | undefined;
-
-		try {
-			const content = fs.readFileSync(sessionPath, "utf8");
-			const lines = content
-				.split(/\r?\n/)
-				.filter((line) => line.trim().length > 0);
-
-			for (const line of lines) {
-				let entry: {
-					type?: unknown;
-					cwd?: unknown;
-					customType?: unknown;
-					data?: unknown;
-				};
-				try {
-					entry = JSON.parse(line) as {
-						type?: unknown;
-						cwd?: unknown;
-						customType?: unknown;
-						data?: unknown;
-					};
-				} catch {
-					continue;
-				}
-
-				if (
-					!cwd &&
-					entry.type === "session" &&
-					typeof entry.cwd === "string" &&
-					entry.cwd.trim().length > 0
-				) {
-					cwd = entry.cwd;
-				}
-
-				if (
-					entry.type === "custom" &&
-					entry.customType === PERSISTED_WORKTREE_STATE_TYPE &&
-					isPersistedWorktreeState(entry.data)
-				) {
-					persistedWorktreePath = entry.data.worktreePath;
-				}
-			}
-		} catch {
-			// keep metadata undefined when the session file is unreadable
-		}
-
-		return { cwd, persistedWorktreePath };
-	};
-
-	const findLatestPersistedWorktreePath = (
-		entries: unknown[],
-	): string | undefined => {
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const entry = entries[i] as {
-				type?: unknown;
-				customType?: unknown;
-				data?: unknown;
-			};
-			if (
-				entry.type !== "custom" ||
-				entry.customType !== PERSISTED_WORKTREE_STATE_TYPE
-			)
-				continue;
-			if (!isPersistedWorktreeState(entry.data)) continue;
-			return entry.data.worktreePath;
-		}
-		return undefined;
-	};
-
-	const chooseResumeTargetCwd = (
-		candidates: Array<string | undefined>,
-	): string | undefined => {
-		for (const candidate of candidates) {
-			if (!candidate) continue;
-			try {
-				const normalized = normalizePath(candidate);
-				if (fs.statSync(normalized).isDirectory()) {
-					return normalized;
-				}
-			} catch {
-				// candidate path is invalid
-			}
-		}
-		return undefined;
-	};
-
-	const applyResumeCwd = (
-		targetPath: string | undefined,
-	): string | undefined => {
-		if (!targetPath) return undefined;
-		try {
-			process.chdir(targetPath);
-			return normalizePath(process.cwd());
-		} catch {
-			return undefined;
-		}
-	};
-
-	const repinToResumedSessionCwd = (
-		ctx: ExtensionCommandContext,
-		fallbacks: Array<string | undefined>,
-	): string | undefined => {
-		const persistedWorktreePath = findLatestPersistedWorktreePath(
-			ctx.sessionManager.getEntries() as unknown[],
-		);
-		const sessionManagerWithCwd = ctx.sessionManager as unknown as {
-			getCwd?: () => string;
-		};
-		const managerCwd =
-			typeof sessionManagerWithCwd.getCwd === "function"
-				? sessionManagerWithCwd.getCwd()
-				: undefined;
-		const postSwitchTarget = chooseResumeTargetCwd([
-			persistedWorktreePath,
-			managerCwd,
-			...fallbacks,
-		]);
-		return applyResumeCwd(postSwitchTarget);
-	};
-
-	const detectWorktreeGroup = async (cwd: string): Promise<string> => {
-		if (!cwd) return "main";
-		const normalized = path.normalize(cwd);
-		const marker = `${path.sep}.worktrees${path.sep}`;
-		const markerIndex = normalized.indexOf(marker);
-		if (markerIndex !== -1) {
-			const repoRoot = normalized.slice(0, markerIndex);
-			const repoName = path.basename(repoRoot);
-			const after = normalized.slice(markerIndex + marker.length);
-			const worktreeName = after.split(path.sep)[0] ?? "";
-			if (worktreeName) return `${repoName}/.worktrees/${worktreeName}`;
-		}
-
-		try {
-			const gitInfo = await findGitRoot(normalized);
-			if (gitInfo?.isWorktree) {
-				const gitPath = path.join(normalized, ".git");
-				const gitContent = fs.readFileSync(gitPath, "utf8");
-				const match = gitContent.match(/gitdir:\s*(.+)/);
-				if (match?.[1]) {
-					const gitDir = match[1].trim();
-					const parsed = gitDir.match(/[\\/]worktrees[\\/]([^\\/]+)/);
-					const worktreeName =
-						parsed?.[1] ?? path.basename(path.dirname(gitDir));
-					if (worktreeName) {
-						const repoName = path.basename(gitInfo.root);
-						return `${repoName}/.worktrees/${worktreeName}`;
-					}
-				}
-			}
-		} catch {
-			// keep default group
-		}
-
-		return "main";
-	};
-
-	const detectAgentMode = (allMessagesText: string): ResumeAgentMode => {
-		if (!allMessagesText) return "unknown";
-		if (
-			allMessagesText.includes("Orchestrator mode") ||
-			allMessagesText.includes(PERSISTED_WORKTREE_STATE_TYPE) ||
-			allMessagesText.includes("implementation-engine/")
-		) {
-			return "orchestrator";
-		}
-		if (
-			allMessagesText.includes("Default Mode") ||
-			allMessagesText.includes("Default mode")
-		) {
-			return "default";
-		}
-		return "unknown";
-	};
-
-	const enrichSessions = async (
-		sessions: ResumeSessionInfo[],
-		archiveThresholdDays: number,
-	): Promise<EnrichedSession[]> => {
-		const now = Date.now();
-		const archiveThreshold = archiveThresholdDays * 86_400_000;
-		const enriched: EnrichedSession[] = [];
-		for (const session of sessions) {
-			const worktreeGroup = await detectWorktreeGroup(session.cwd);
-			enriched.push({
-				...session,
-				worktreeGroup,
-				agentMode: detectAgentMode(session.allMessagesText),
-				isArchived: now - session.modified.getTime() > archiveThreshold,
-			});
-		}
-		return enriched;
-	};
-
-	const fuzzyMatch = (query: string, candidate: string): boolean => {
-		const needle = query.trim().toLowerCase();
-		if (!needle) return true;
-		const haystack = candidate.toLowerCase();
-		if (haystack.includes(needle)) return true;
-		let queryIndex = 0;
-		for (const char of haystack) {
-			if (char === needle[queryIndex]) queryIndex += 1;
-			if (queryIndex >= needle.length) return true;
-		}
-		return false;
-	};
-
-	function formatRelativeTime(date: Date): {
-		text: string;
-		color: "success" | "warning" | "muted" | "dim";
-	} {
-		const now = Date.now();
-		const diffMs = now - date.getTime();
-		const diffMins = Math.floor(diffMs / 60_000);
-		const diffHours = Math.floor(diffMs / 3_600_000);
-		const diffDays = Math.floor(diffMs / 86_400_000);
-
-		if (diffMins < 1) return { text: "just now", color: "success" };
-		if (diffMins < 60) return { text: `${diffMins}m ago`, color: "success" };
-		if (diffHours < 24) return { text: `${diffHours}h ago`, color: "warning" };
-		if (diffDays === 1) return { text: "1d ago", color: "muted" };
-		if (diffDays < 7) return { text: `${diffDays}d ago`, color: "muted" };
-		return { text: date.toLocaleDateString(), color: "dim" };
-	}
-
-	function shortenPathForResume(targetPath: string): string {
-		if (!targetPath) return "(unknown cwd)";
-		const parts = targetPath.split(path.sep).filter(Boolean);
-		if (parts.length <= 3) return targetPath;
-		return `...${path.sep}${parts.slice(-3).join(path.sep)}`;
-	}
-
-	interface ResumeUiDependencies {
-		Ellipsis: { Omit: number; Ascii: number; Unicode: number };
-		Input: new () => {
-			focused: boolean;
-			render: (width: number) => string[];
-			handleInput: (keyData: string) => void;
-			getValue: () => string;
-			invalidate: () => void;
-		};
-		matchesKey: (keyData: string, key: string) => boolean;
-		truncateToWidth: (text: string, width: number, ellipsis: number) => string;
-		visibleWidth: (text: string) => number;
-	}
-
-	const loadResumeUiDependencies = async (): Promise<ResumeUiDependencies> => {
-		const { Ellipsis, Input, matchesKey, truncateToWidth, visibleWidth } =
-			await import("@oh-my-pi/pi-tui");
-		return { Ellipsis, Input, matchesKey, truncateToWidth, visibleWidth };
-	};
-
-	async function handleResumeCommand(
-		ctx: ExtensionCommandContext,
-	): Promise<void> {
-		if (!ctx.hasUI) {
-			ctx.ui.notify("Resume requires interactive mode", "warning");
-			return;
-		}
-
-		const sessions = await collectSessionInfos(ctx);
-		if (sessions.length === 0) {
-			ctx.ui.notify("No sessions found", "info");
-			return;
-		}
-
-		const enriched = await enrichSessions(sessions, ARCHIVE_THRESHOLD_DAYS);
-		const activeSessions = enriched.filter((session) => !session.isArchived);
-		const archivedSessions = enriched.filter((session) => session.isArchived);
-
-		const groups = new Set(enriched.map((session) => session.worktreeGroup));
-		const tabIds = [
-			"All",
-			...Array.from(groups)
-				.filter((group) => group !== "main")
-				.sort(),
-		];
-		if (groups.has("main")) tabIds.push("main");
-
-		let selectedPath: string | null = null;
-		let resumeUiFallbackReason: string | undefined;
-		let resumeUiDependencies: ResumeUiDependencies | undefined;
-		try {
-			resumeUiDependencies = await loadResumeUiDependencies();
-		} catch (error) {
-			resumeUiFallbackReason =
-				error instanceof Error ? error.message : String(error);
-		}
-
-		if (resumeUiDependencies) {
-			try {
-				const { Ellipsis, Input, matchesKey, truncateToWidth, visibleWidth } =
-					resumeUiDependencies;
-				selectedPath = await ctx.ui.custom<string | null>(
-					async (
-						tui: unknown,
-						uiTheme: unknown,
-						_keybindings: unknown,
-						done: (v: string | null) => void,
-					) => {
-						const searchInput = new Input();
-						searchInput.focused = true;
-
-						const state = {
-							activeTabIndex: 0,
-							selectedIndex: 0,
-							searchQuery: "",
-							showArchived: false,
-							filteredSessions: activeSessions,
-							maxVisible: 6,
-						};
-
-						const resolveEllipsis = (): number => {
-							const configured = uiTheme.format?.ellipsis;
-							if (configured === "") return Ellipsis.Omit;
-							if (configured === "...") return Ellipsis.Ascii;
-							return Ellipsis.Unicode;
-						};
-						const currentTab = (): string =>
-							tabIds[state.activeTabIndex] ?? "All";
-						const sessionsForCurrentTab = (): EnrichedSession[] => {
-							const source = state.showArchived
-								? archivedSessions
-								: activeSessions;
-							const tab = currentTab();
-							if (tab === "All") return source;
-							return source.filter((session) => session.worktreeGroup === tab);
-						};
-
-						const applyFilter = (): void => {
-							const source = sessionsForCurrentTab();
-							const query = state.searchQuery.trim();
-							if (!query) {
-								state.filteredSessions = source;
-							} else {
-								state.filteredSessions = source.filter((session) => {
-									const searchable = [
-										session.id,
-										session.title ?? "",
-										session.firstMessage,
-										session.cwd,
-										session.allMessagesText,
-									].join(" ");
-									return fuzzyMatch(query, searchable);
-								});
-							}
-							if (state.filteredSessions.length === 0) {
-								state.selectedIndex = 0;
-							} else {
-								state.selectedIndex = Math.min(
-									state.selectedIndex,
-									state.filteredSessions.length - 1,
-								);
-							}
-						};
-
-						const renderTabLine = (width: number): string => {
-							const parts: string[] = [];
-							parts.push(
-								uiTheme.fg(
-									"dim",
-									`${state.showArchived ? "Archived" : "Sessions"}: `,
-								),
-							);
-							for (let i = 0; i < tabIds.length; i++) {
-								const tab = tabIds[i] ?? "All";
-								const tabLabel = ` ${tab} `;
-								const styled =
-									i === state.activeTabIndex
-										? uiTheme.bold(
-												uiTheme.bg("selectedBg", uiTheme.fg("text", tabLabel)),
-											)
-										: uiTheme.fg("muted", tabLabel);
-								parts.push(styled);
-								if (i < tabIds.length - 1) parts.push(" ");
-							}
-							parts.push("  ");
-							parts.push(uiTheme.fg("dim", "(Tab/Shift+Tab)"));
-							const line = parts.join("");
-							const ellipsis = resolveEllipsis();
-							return truncateToWidth(line, width, ellipsis);
-						};
-
-						const renderList = (width: number): string[] => {
-							const lines: string[] = [];
-							const ellipsis = resolveEllipsis();
-							if (state.filteredSessions.length === 0) {
-								const emptyText = state.searchQuery.trim()
-									? "No sessions match your search"
-									: state.showArchived
-										? "No archived sessions"
-										: "No sessions in this group";
-								lines.push(
-									truncateToWidth(
-										uiTheme.fg("muted", `  ${emptyText}`),
-										width,
-										ellipsis,
-									),
-								);
-								return lines;
-							}
-
-							const startIndex = Math.max(
-								0,
-								Math.min(
-									state.selectedIndex - Math.floor(state.maxVisible / 2),
-									state.filteredSessions.length - state.maxVisible,
-								),
-							);
-							const endIndex = Math.min(
-								startIndex + state.maxVisible,
-								state.filteredSessions.length,
-							);
-
-							for (let i = startIndex; i < endIndex; i++) {
-								const session = state.filteredSessions[i];
-								if (!session) continue;
-								const isSelected = i === state.selectedIndex;
-								const cursorGlyph = `${uiTheme.nav.cursor} `;
-								const cursorWidth = visibleWidth(cursorGlyph);
-								const cursor = isSelected
-									? uiTheme.fg("accent", cursorGlyph)
-									: " ".repeat(cursorWidth);
-
-								const worktreeBadge =
-									session.worktreeGroup !== "main"
-										? `${uiTheme.bg("selectedBg", uiTheme.fg("accent", ` ${session.worktreeGroup} `))} `
-										: "";
-
-								const primaryText =
-									(session.title ?? session.firstMessage ?? session.id)
-										.replace(/\s+/g, " ")
-										.trim() || session.id;
-								const titleWidth = Math.max(
-									12,
-									width - visibleWidth(cursor) - visibleWidth(worktreeBadge),
-								);
-								const title = truncateToWidth(
-									primaryText,
-									titleWidth,
-									ellipsis,
-								);
-								const firstLine = truncateToWidth(
-									`${cursor}${worktreeBadge}${isSelected ? uiTheme.bold(title) : title}`,
-									width,
-									ellipsis,
-								);
-								lines.push(firstLine);
-
-								const timeInfo = formatRelativeTime(session.modified);
-								const timeText = uiTheme.fg(timeInfo.color, timeInfo.text);
-								const modeText =
-									session.agentMode === "orchestrator"
-										? uiTheme.bold(uiTheme.fg("warning", "Orchestrator"))
-										: session.agentMode === "default"
-											? uiTheme.fg("success", "Default")
-											: uiTheme.fg("dim", "unknown");
-								const pathText = uiTheme.fg(
-									"dim",
-									shortenPathForResume(session.cwd),
-								);
-								const messageText = uiTheme.fg(
-									"dim",
-									`${session.messageCount} msg${session.messageCount === 1 ? "" : "s"}`,
-								);
-								const sep = uiTheme.fg("dim", " · ");
-								const meta = `  ${timeText}${sep}${modeText}${sep}${pathText}${sep}${messageText}`;
-								lines.push(truncateToWidth(meta, width, ellipsis));
-								lines.push("");
-							}
-
-							if (state.filteredSessions.length > state.maxVisible) {
-								const scroll = uiTheme.fg(
-									"muted",
-									`  (${state.selectedIndex + 1}/${state.filteredSessions.length})`,
-								);
-								lines.push(truncateToWidth(scroll, width, ellipsis));
-							}
-
-							return lines;
-						};
-
-						const component = {
-							render: (width: number): string[] => {
-								const lines: string[] = [];
-								const normalizedWidth = Math.max(20, width);
-								const ellipsis = resolveEllipsis();
-								lines.push("");
-								lines.push(
-									truncateToWidth(
-										uiTheme.bold(
-											state.showArchived
-												? "Resume Session (Archived)"
-												: "Resume Session",
-										),
-										normalizedWidth,
-										ellipsis,
-									),
-								);
-								lines.push("");
-								lines.push(renderTabLine(normalizedWidth));
-								lines.push("");
-								lines.push(...searchInput.render(normalizedWidth));
-								lines.push("");
-
-								const hintParts = [
-									uiTheme.fg("dim", "Enter"),
-									": resume  ",
-									uiTheme.fg("dim", "Esc"),
-									": cancel  ",
-									uiTheme.fg("dim", "A"),
-									state.showArchived ? ": back to active" : ": archived",
-									"  ",
-									uiTheme.fg("dim", "↑/↓ PgUp/PgDn"),
-									": navigate",
-								];
-								const hintLine = truncateToWidth(
-									` ${hintParts.join("")}`,
-									normalizedWidth,
-									ellipsis,
-								);
-								lines.push(hintLine);
-								lines.push("");
-								lines.push(...renderList(normalizedWidth));
-								return lines;
-							},
-							handleInput: (keyData: string): void => {
-								if (
-									(matchesKey(keyData, "tab") ||
-										matchesKey(keyData, "right")) &&
-									tabIds.length > 0
-								) {
-									state.activeTabIndex =
-										(state.activeTabIndex + 1) % tabIds.length;
-									state.selectedIndex = 0;
-									applyFilter();
-									tui.requestRender();
-									return;
-								}
-								if (
-									(matchesKey(keyData, "shift+tab") ||
-										matchesKey(keyData, "left")) &&
-									tabIds.length > 0
-								) {
-									state.activeTabIndex =
-										(state.activeTabIndex - 1 + tabIds.length) % tabIds.length;
-									state.selectedIndex = 0;
-									applyFilter();
-									tui.requestRender();
-									return;
-								}
-
-								if (matchesKey(keyData, "up")) {
-									state.selectedIndex = Math.max(0, state.selectedIndex - 1);
-									tui.requestRender();
-									return;
-								}
-								if (matchesKey(keyData, "down")) {
-									if (state.filteredSessions.length > 0) {
-										state.selectedIndex = Math.min(
-											state.filteredSessions.length - 1,
-											state.selectedIndex + 1,
-										);
-									}
-									tui.requestRender();
-									return;
-								}
-								if (matchesKey(keyData, "pageUp")) {
-									state.selectedIndex = Math.max(
-										0,
-										state.selectedIndex - state.maxVisible,
-									);
-									tui.requestRender();
-									return;
-								}
-								if (matchesKey(keyData, "pageDown")) {
-									if (state.filteredSessions.length > 0) {
-										state.selectedIndex = Math.min(
-											state.filteredSessions.length - 1,
-											state.selectedIndex + state.maxVisible,
-										);
-									}
-									tui.requestRender();
-									return;
-								}
-
-								if (
-									matchesKey(keyData, "enter") ||
-									matchesKey(keyData, "return") ||
-									keyData === "\n"
-								) {
-									const selected = state.filteredSessions[state.selectedIndex];
-									if (selected) done(selected.path);
-									return;
-								}
-
-								if (
-									matchesKey(keyData, "escape") ||
-									matchesKey(keyData, "esc") ||
-									matchesKey(keyData, "ctrl+c")
-								) {
-									done(null);
-									return;
-								}
-
-								if (
-									(keyData === "a" || keyData === "A") &&
-									!state.searchQuery.trim()
-								) {
-									state.showArchived = !state.showArchived;
-									state.selectedIndex = 0;
-									applyFilter();
-									tui.requestRender();
-									return;
-								}
-
-								searchInput.handleInput(keyData);
-								state.searchQuery = searchInput.getValue();
-								applyFilter();
-								tui.requestRender();
-							},
-							invalidate: () => {
-								searchInput.invalidate();
-							},
-						};
-
-						applyFilter();
-						return component;
-					},
-				);
-			} catch (error) {
-				resumeUiFallbackReason =
-					error instanceof Error ? error.message : String(error);
-			}
-		}
-
-		if (resumeUiFallbackReason) {
-			ctx.ui.notify(
-				`Custom /resume UI unavailable (${resumeUiFallbackReason}). Falling back to basic selector.`,
-				"warning",
-			);
-			const fallbackSessions =
-				activeSessions.length > 0 ? activeSessions : enriched;
-			const fallbackOptions = fallbackSessions.map((session, index) => {
-				const summary =
-					(session.title ?? session.firstMessage ?? session.id)
-						.replace(/\s+/g, " ")
-						.trim() || session.id;
-				const modeLabel =
-					session.agentMode === "orchestrator"
-						? "Orchestrator"
-						: session.agentMode === "default"
-							? "Default"
-							: "Unknown";
-				const label = `${String(index + 1).padStart(2, "0")} · ${modeLabel} · ${summary.slice(0, 80)} · ${shortenPathForResume(session.cwd)}`;
-				return { label, path: session.path };
-			});
-			const choice = await ctx.ui.select(
-				"Resume Session (fallback selector)",
-				fallbackOptions.map((option) => option.label),
-			);
-			selectedPath =
-				fallbackOptions.find((option) => option.label === choice)?.path ?? null;
-		}
-
-		if (!selectedPath) return;
-
-		const selectedSession = enriched.find(
-			(session) => session.path === selectedPath,
-		);
-		const sessionDiskMetadata = readResumeSessionDiskMetadata(selectedPath);
-		const preSwitchTarget = chooseResumeTargetCwd([
-			sessionDiskMetadata.persistedWorktreePath,
-			sessionDiskMetadata.cwd,
-			selectedSession?.cwd,
-		]);
-		const preSwitchPinned = applyResumeCwd(preSwitchTarget);
-
-		let didSwitch = false;
-		if (typeof ctx.switchSession === "function") {
-			await ctx.switchSession(selectedPath);
-			didSwitch = true;
-		} else {
-			const runtimeSessionManager = ctx.sessionManager as unknown as {
-				loadSession?: (sessionPath: string) => Promise<void>;
-				switchSession?: (sessionPath: string) => Promise<void>;
-				_initSessionFile?: (sessionPath: string) => Promise<void>;
-			};
-
-			if (typeof runtimeSessionManager.switchSession === "function") {
-				await runtimeSessionManager.switchSession(selectedPath);
-				didSwitch = true;
-			} else if (typeof runtimeSessionManager.loadSession === "function") {
-				await runtimeSessionManager.loadSession(selectedPath);
-				didSwitch = true;
-			}
-		}
-
-		if (didSwitch) {
-			repinToResumedSessionCwd(ctx, [preSwitchPinned, preSwitchTarget]);
-			return;
-		}
-
-		if (typeof ctx.newSession === "function") {
-			let resumedViaSetup = false;
-			await ctx.newSession({
-				parentSession: selectedPath,
-				setup: async (sessionManager: unknown) => {
-					const writableRuntimeManager = sessionManager as unknown as {
-						loadSession?: (sessionPath: string) => Promise<void>;
-						switchSession?: (sessionPath: string) => Promise<void>;
-						_initSessionFile?: (sessionPath: string) => Promise<void>;
-					};
-					if (typeof writableRuntimeManager.switchSession === "function") {
-						await writableRuntimeManager.switchSession(selectedPath);
-						resumedViaSetup = true;
-						return;
-					}
-					if (typeof writableRuntimeManager.loadSession === "function") {
-						await writableRuntimeManager.loadSession(selectedPath);
-						resumedViaSetup = true;
-						return;
-					}
-					if (typeof writableRuntimeManager._initSessionFile === "function") {
-						await writableRuntimeManager._initSessionFile(selectedPath);
-						resumedViaSetup = true;
-					}
-				},
-			});
-
-			if (resumedViaSetup) {
-				repinToResumedSessionCwd(ctx, [preSwitchPinned, preSwitchTarget]);
-			} else {
-				ctx.ui.notify(
-					"Opened a new session linked to selection (direct session switch API unavailable).",
-					"warning",
-				);
-			}
-			return;
-		}
-
-		ctx.ui.notify(
-			"Could not switch session — no supported API found.",
-			"error",
-		);
-	}
-
-	pi.registerCommand("resume-ui", {
-		description: "Resume a previous session with worktree-aware navigator",
-		handler: async (_args, ctx) => {
-			await handleResumeCommand(ctx);
-		},
-	});
 
 	registerCleanupCommand(pi, { onComplete: handleCleanupComplete });
 	registerSubmitPrCommand(pi, {
@@ -4613,6 +3632,31 @@ const notifyWorktreeProgress = (
 			const taskInput = input as Record<string, unknown>;
 			const taskAgent =
 				typeof taskInput.agent === "string" ? taskInput.agent : undefined;
+			const isOrchestratorParentTaskCall =
+				enforceOrchestratorGuards && activeAgentIsParentTurn;
+			if (
+				isOrchestratorParentTaskCall &&
+				(taskAgent === "lint" || taskAgent === "code-reviewer")
+			) {
+				return {
+					block: true,
+					reason:
+						"Orchestrator mode: parent cannot delegate lint or code-reviewer directly. Delegate an implement or debug worker and let that worker run its quality loop.",
+				};
+			}
+			if (isOrchestratorParentTaskCall && taskAgent === "commit") {
+				const snapshotCwd = normalizePath(
+					last.worktreePath ?? last.repoRoot ?? process.cwd(),
+				);
+				const implementationOwnedFiles = await captureGitStatusSnapshot(snapshotCwd);
+				if (implementationOwnedFiles.size > 0) {
+					return {
+						block: true,
+						reason:
+							"Orchestrator mode: commit delegation is reserved for direct git-only handoff when no implementation-owned file set is pending. Delegate the owning implement or debug worker to complete its quality loop.",
+					};
+				}
+			}
 			const isImplementationQualityLoopAgent =
 				taskAgent === "lint" ||
 				taskAgent === "code-reviewer" ||
@@ -6009,29 +5053,33 @@ function buildImplementationKickoffPrompt(input: {
 		"1. Implement phases strictly in order.",
 		"2. For EACH phase, first spawn a prerequisite Task-tool subagent dedicated to writing failing tests for that phase's success criteria (RED). Include the resolved session workspace path in that task assignment context.",
 		"3. The prerequisite RED task SHOULD apply the `test-driven-development` and `qa-test-planner` skills, MUST confirm failures are for missing behavior (not test/harness errors), and should write its test plan to: <session_workspace>/test-plans/<phase-or-task-name>.md.",
-		"4. Only AFTER the RED task completes may you spawn one or more Task-tool subagents dedicated to implementing that phase (GREEN); parallelize only proven-independent implementation work.",
-		"5. The phase implementation task MUST make those RED tests pass before phase completion.",
-		"6. You may skip the prerequisite RED task only for pure refactoring where existing tests already cover the phase success criteria; if skipped, the assignment must cite those existing tests as evidence.",
-		"7. Research/discovery-only and documentation-only tasks do not require prerequisite RED tasks.",
-		"8. Do not parallelize phases.",
-		"9. Parent agent must not edit files directly; only Task subagents implement code changes.",
-		"10. If a phase task fails, spawn exactly one remediation Task subagent for that phase. Do not patch manually in parent.",
-		"11. For EACH phase, apply the commit-hygiene skill (or equivalent atomic-commit discipline if unavailable).",
-		"12. Finish each completed phase with atomic commit(s) scoped only to that phase (no cross-phase commits).",
-		`13. Immediately push each phase commit to remote: git push --set-upstream origin ${remotePushBranch}. Never leave local-only commits.`,
-		"14. Before marking a phase complete, run `git status --porcelain`; if dirty, spawn one remediation Task subagent dedicated to commit/push cleanup for that phase, then re-check until clean.",
-		"15. Require each phase Task subagent that modifies files to run a nested `lint` subagent scoped to its changed paths before reporting completion. Lint failures must be fixed and re-linted inside that phase task.",
-		'16. Verifier Workflow (MANDATORY): after each phase\'s implementation task batch completes, spawn parallel verifiers (one per completed implementation task). Each verifier assignment MUST check: (1) lint passed on modified files, (2) tests exist and pass, (3) success criteria met. Each verifier writes its report to: <session_workspace>/verification/<phase-or-task-name>.md. The `qa-test-planner` skill is auto-injected.',
-		"17. Verifier output contract:",
+		"4. Only AFTER the RED task completes may you spawn one or more Task-tool subagents dedicated to implementing that phase (GREEN).",
+		"5. For planned work, parallel fan-out is driven by sibling units explicitly marked `(P)` with `Parallel safety`.",
+		"6. Treat `(P)` as strong evidence, not blind trust: re-check current file ownership, shared contract changes, ordering dependencies, and verification coupling before launching siblings together.",
+		"7. If any `(P)` proof is missing or stale, keep that work sequential.",
+		"8. Start planned parallel execution with 2-3 Task-tool subagents. Grow toward 3-5 only after clean integrations on stable ownership, and do not invent new planned parallel groups beyond the explicit `(P)` set unless you re-establish safety first.",
+		"9. The phase implementation task MUST make those RED tests pass before phase completion.",
+		"10. You may skip the prerequisite RED task only for pure refactoring where existing tests already cover the phase success criteria; if skipped, the assignment must cite those existing tests as evidence.",
+		"11. Research/discovery-only and documentation-only tasks do not require prerequisite RED tasks.",
+		"12. Do not parallelize phases.",
+		"13. Parent agent must not edit files directly; only Task subagents implement code changes.",
+		"14. If a phase task fails, spawn exactly one remediation Task subagent for that phase. Do not patch manually in parent.",
+		"15. For EACH phase, apply the commit-hygiene skill (or equivalent atomic-commit discipline if unavailable).",
+		"16. Finish each completed phase with atomic commit(s) scoped only to that phase (no cross-phase commits).",
+		`17. Immediately push each phase commit to remote: git push --set-upstream origin ${remotePushBranch}. Never leave local-only commits.`,
+		"18. Before marking a phase complete, run `git status --porcelain`; if dirty, spawn one remediation Task subagent dedicated to commit/push cleanup for that phase, then re-check until clean.",
+		"19. Every file-mutating `implement`, `debug`, or `designer` worker must finish a nested `lint` -> `code-reviewer` -> `commit` loop before reporting completion.",
+		'20. Verifier Workflow (MANDATORY): after each phase\'s implementation task batch completes, spawn parallel verifiers (one per completed implementation task). Each verifier assignment MUST check: (1) lint passed on modified files or was explicitly skipped, (2) `code-reviewer` ran after lint, (3) tests exist and pass, and (4) success criteria met. Each verifier writes its report to: <session_workspace>/verification/<phase-or-task-name>.md. The `qa-test-planner` skill is auto-injected.',
+		"21. Verifier output contract:",
 		'   - go: { verdict: "go", summary: "1-2 sentence confirmation" }',
 		'   - no_go: { verdict: "no_go", issues: ["itemized failures"], summary: "what failed and why" }',
-		'18. If verifier verdict is "no_go", spawn a targeted fix task, then re-verify. Max 2 remediation loops per phase. If still no_go -> STOP and report to user.',
-		"19. Do not override model selection; Task subagents must use the session's currently active model (fallback: implement role only when no active model is available).",
-		"20. Keep parent messages brief (status + next action only). Avoid pasting large tool transcripts.",
-		"21. Read the plan file lazily by phase section; do not inline full plan text in parent conversation.",
-		"22. Keep plan-scoped artifacts (notes, JSON metadata, checklists, scratch files) under the plan workspace directory above.",
-		"23. After each phase, report what changed and whether success criteria passed.",
-		"24. If any phase remains blocked after remediation, STOP and provide a failure summary with next actions.",
+		'22. If verifier verdict is "no_go", spawn a targeted fix task, then re-verify. Max 2 remediation loops per phase. If still no_go -> STOP and report to user.',
+		"23. Do not override model selection; Task subagents must use the session's currently active model (fallback: implement role only when no active model is available).",
+		"24. Keep parent messages brief (status + next action only). Avoid pasting large tool transcripts.",
+		"25. Read the plan file lazily by phase section; do not inline full plan text in parent conversation.",
+		"26. Keep plan-scoped artifacts (notes, JSON metadata, checklists, scratch files) under the plan workspace directory above.",
+		"27. After each phase, report what changed and whether success criteria passed.",
+		"28. If any phase remains blocked after remediation, STOP and provide a failure summary with next actions.",
 		"",
 		...getEmojiCommitPolicyLines(),
 	].join("\n");

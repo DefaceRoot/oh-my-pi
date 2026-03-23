@@ -365,7 +365,6 @@ describe("AgentSession plan reference injection", () => {
 		expect(session.getPlanModeState()?.planFilePath).toBe(reboundPlanFilePath);
 	});
 
-
 	it("uses the latest rebound plan file for plan-mode state and context", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");

@@ -5,6 +5,10 @@ alwaysApply: false
 
 # Implementation Worktree Lifecycle
 
+## Delegation Envelope Propagation
+
+Implementation sessions delegate via `omp-delegation/v1` structured envelopes (`skill://toon-delegation`). The envelope carries plan path, worktree path, git state, and parent delegation chain automatically. Multi-hop chains (orchestrator → implement → lint) inherit context through `envelope.parent_envelope_id`. Envelope syntax is internal and must not appear in user-facing output.
+
 ## Worktree Setup
 
 `/implement` prompts for base branch + new branch name and then creates/switches to an isolated worktree.
@@ -32,6 +36,9 @@ A clickable footer action area is shown with workflow controls:
 - Parent implementation sessions run in **Orchestrator mode**:
   - Parent agent is orchestration-only and delegates code edits to Task subagents.
   - Direct parent file mutations (`edit`, `write`, `notebook`) are blocked in active implementation worktrees.
+  - Routing decision tree: bug reports, failing tests, and unexpected behavior go to `debug`; known-good scoped changes go to `implement`.
+  - Direct git-only handoff goes to `commit` only when no implementation-owned file set is pending.
+  - Parent turns do not delegate `lint` or `code-reviewer` directly; those remain worker-owned quality-loop gates.
 - Keep orchestrator reinforcement lightweight: inject orchestrator/worktree prompt once per session (or session switch), not every turn, to avoid context-window churn.
 - Enforce orchestrator behavior primarily through extension hooks/tool guards (`tool_call`, cwd/worktree isolation, mutating-tool blocks, read-budget caps), not repeated prompt restatement.
 
@@ -77,7 +84,7 @@ A clickable footer action area is shown with workflow controls:
 ## Isolation Guardrails
 
 - During an implementation worktree session, file mutations (`edit`, `write`, `notebook`) are restricted to paths inside the active worktree.
-- During orchestrator parent turns in implementation mode, MCP tools (`mcp_*`) are disabled.
+- During orchestrator parent turns in implementation mode, MCP tools (`mcp_*`) are blocked except `mcp_augment_codebase_retrieval`.
 - Bash tool calls are blocked if `cwd` points outside the active worktree.
 - If session `cwd` drifts, the extension re-pins it back to the active worktree before each turn.
 

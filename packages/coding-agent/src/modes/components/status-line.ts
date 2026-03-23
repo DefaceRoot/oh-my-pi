@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { $ } from "bun";
@@ -93,6 +94,24 @@ function findGitHeadPath(cwd: string = process.cwd()): string | null {
 		}
 		dir = parent;
 	}
+}
+
+export function findLastAssistantWithUsageAfterRewindReport(
+	messages: readonly AgentMessage[],
+): AssistantMessage | undefined {
+	const rewindReportIndex = messages.findLastIndex(
+		message => message.role === "custom" && message.customType === "rewind-report",
+	);
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (rewindReportIndex >= 0 && i <= rewindReportIndex) break;
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const assistantMessage = message as AssistantMessage;
+		if (assistantMessage.stopReason === "aborted" || assistantMessage.stopReason === "error") continue;
+		if (!assistantMessage.usage) continue;
+		return assistantMessage;
+	}
+	return undefined;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -460,10 +479,7 @@ export class StatusLineComponent implements Component {
 		};
 
 		// Get context percentage
-		const lastAssistantMessage = state.messages
-			.slice()
-			.reverse()
-			.find(m => m.role === "assistant" && m.stopReason !== "aborted") as AssistantMessage | undefined;
+		const lastAssistantMessage = findLastAssistantWithUsageAfterRewindReport(state.messages);
 
 		const contextTokens = lastAssistantMessage
 			? lastAssistantMessage.usage.input +
@@ -479,7 +495,10 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.resolveSettings().segmentOptions ?? {},
 			planMode: this.planModeStatus,
-			usageStats: { ...usageStats, tokensPerSecond: (usageStats as { tokensPerSecond?: number | null }).tokensPerSecond ?? null },
+			usageStats: {
+				...usageStats,
+				tokensPerSecond: (usageStats as { tokensPerSecond?: number | null }).tokensPerSecond ?? null,
+			},
 			contextPercent,
 			contextWindow,
 			autoCompactEnabled: this.autoCompactEnabled,

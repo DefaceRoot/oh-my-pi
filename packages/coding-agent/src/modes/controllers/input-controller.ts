@@ -299,13 +299,16 @@ export class InputController {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
 		this.ctx.editor.onCtrlL = () => this.ctx.showModelSelector();
-		this.ctx.editor.onCtrlR = () => this.ctx.showHistorySearch();
+		this.ctx.editor.onCtrlR = undefined;
 		this.ctx.editor.onCtrlT = () => this.ctx.toggleTodoExpansion();
 		for (const key of this.ctx.keybindings.getKeys("lazygit")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.openLazygit());
 		}
 		for (const key of this.ctx.keybindings.getKeys("externalEditor")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.openExternalEditor());
+		}
+		for (const key of this.ctx.keybindings.getKeys("historySearch")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showHistorySearch(); return undefined; });
 		}
 		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
@@ -317,14 +320,14 @@ export class InputController {
 		this.ctx.editor.onCtrlO = expandToolsKeys.includes("ctrl+o") ? () => this.toggleToolOutputExpansion() : undefined;
 		for (const key of expandToolsKeys) {
 			if (key === "ctrl+o") continue;
-			this.ctx.editor.setCustomKeyHandler(key, () => this.toggleToolOutputExpansion());
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.toggleToolOutputExpansion());
 		}
 
 		const dequeueKeys = this.ctx.keybindings.getKeys("dequeue");
 		this.ctx.editor.onAltUp = dequeueKeys.includes("alt+up") ? () => this.handleDequeue() : undefined;
 		for (const key of dequeueKeys) {
 			if (key === "alt+up") continue;
-			this.ctx.editor.setCustomKeyHandler(key, () => this.handleDequeue());
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleDequeue());
 		}
 
 		const planModeKeys = this.ctx.keybindings.getKeys("togglePlanMode");
@@ -340,42 +343,24 @@ export class InputController {
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("newSession")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				void this.ctx.handleClearCommand();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => { void this.ctx.handleClearCommand(); return undefined; });
 		}
 		for (const key of this.ctx.keybindings.getKeys("tree")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				this.ctx.showTreeSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showTreeSelector(); return undefined; });
 		}
 		for (const key of this.ctx.keybindings.getKeys("fork")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				this.ctx.showUserMessageSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showUserMessageSelector(); return undefined; });
 		}
 		for (const menu of WORKFLOW_MENUS) {
 			for (const key of this.ctx.keybindings.getKeys(
 				menu.hotkeyAction as import("../../config/keybindings").AppAction,
 			)) {
-				this.ctx.editor.setCustomKeyHandler(key, () => {
-					this.ctx.statusLine.toggleMenu(menu.id);
-					this.ctx.ui.requestRender();
-				});
+				this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.statusLine.toggleMenu(menu.id); this.ctx.ui.requestRender(); return undefined; });
 			}
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("resume")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				const hasResumeUiCommand = Boolean(this.ctx.session.extensionRunner?.getCommand("resume-ui"));
-				if (hasResumeUiCommand) {
-					void this.ctx.session.prompt("/resume-ui").catch(() => {
-						this.ctx.showSessionSelector();
-					});
-					return;
-				}
-				this.ctx.showSessionSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => { void this.ctx.openResumeModal(); return undefined; });
 		}
 		for (const key of this.ctx.keybindings.getKeys("followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
@@ -691,7 +676,7 @@ export class InputController {
 				return;
 			}
 			if (text === "/resume") {
-				this.ctx.showSessionSelector();
+				void this.ctx.openResumeModal();
 				this.ctx.editor.setText("");
 				return;
 			}
@@ -1709,6 +1694,7 @@ export class InputController {
 						stack: err instanceof Error ? err.stack : undefined,
 					});
 				}
+				return undefined;
 			});
 		}
 	}

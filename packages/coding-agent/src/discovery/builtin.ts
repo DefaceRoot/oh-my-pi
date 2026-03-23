@@ -41,6 +41,19 @@ const PRIORITY = 100;
 
 const PATHS = SOURCE_PATHS.native;
 
+/**
+ * Bundled MCP server definitions — always discoverable regardless of config files.
+ * Config file entries for the same server name take precedence over bundled defaults.
+ */
+const BUNDLED_MCP_SERVERS: Omit<MCPServer, "_source">[] = [
+	{
+		name: "ref",
+		url: `https://api.ref.tools/mcp?apiKey=\${REF_API_KEY}`,
+		transport: "http",
+		timeout: 120000,
+	},
+];
+
 async function ifNonEmptyDir(...seg: string[]): Promise<string | null> {
 	let dir = path.join(...seg);
 	const entries = await readDirEntries(dir);
@@ -191,6 +204,24 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			const { path, content, level } = result.value;
 			items.push(...parseMcpServers(content, path, level));
 		}
+	}
+
+	// Inject bundled default servers (config file entries take precedence)
+	const discoveredNames = new Set(items.map(server => server.name));
+	for (const bundled of BUNDLED_MCP_SERVERS) {
+		if (discoveredNames.has(bundled.name)) {
+			continue;
+		}
+
+		const expanded = expandEnvVarsDeep({ [bundled.name]: bundled }) as Record<string, Omit<MCPServer, "_source">>;
+		const expandedServer = expanded[bundled.name];
+		items.push({
+			...bundled,
+			url: expandedServer?.url ?? bundled.url,
+			env: expandedServer?.env ?? bundled.env,
+			_source: createSourceMeta(PROVIDER_ID, "bundled", "user"),
+		});
+		discoveredNames.add(bundled.name);
 	}
 
 	return { items, warnings };

@@ -1,13 +1,5 @@
 import { describe, expect, test, vi } from "bun:test";
-import {
-	CTRL_N,
-	CTRL_O,
-	CTRL_P,
-	CTRL_R,
-	CTRL_V,
-	CTRL_X,
-	TestTui,
-} from "./subagent-input-harness";
+import { CTRL_N, CTRL_O, CTRL_P, CTRL_R, CTRL_V, CTRL_X, TestTui } from "./subagent-input-harness";
 
 describe("subagent input harness", () => {
 	test("ctrl-byte constants are correct and round-trip through the input listener", () => {

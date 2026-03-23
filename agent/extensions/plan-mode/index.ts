@@ -98,7 +98,7 @@ Ask one question at a time. Prefer multiple-choice questions. Cover scope, archi
 ### Phase 3 — Write the Plan
 Write the session plan to \`${planRoot}/<plan-slug>/plan.md\` after creating the plan directory if needed.
 The plan must be self-contained for a fresh implementation session.
-
+Default to parallel-first decomposition inside each phase: identify independent units first, then sequence only blocked follow-on work.
 Required plan sections:
 - Summary
 - Codebase Context
@@ -107,10 +107,12 @@ Required plan sections:
 - Edge Cases
 - Verification
 - Critical Files
+Within the phased plan, require unit-sized slices with \`(P)\` only when each parallel unit includes explicit \`Parallel safety\` evidence and verification that can run independently.
 
 ### Phase 4 — Plan Verification
 After writing the plan, spawn one \`plan-verifier\` subagent per phase.
 Each verifier writes artifacts under \`.omp/sessions/plans/<plan-slug>/artifacts/plan-verifier/<phase-key>/<run-timestamp>/\`.
+Treat missing \`Parallel safety\` proof or missing safety-verification details as verifier blockers.
 Planning is complete only when every latest verifier result passes.
 </plan-agent-mode>
 `;

@@ -2,15 +2,15 @@ lastChangelogVersion: 13.9.2
 modelRoles: 
   default: openai-codex/gpt-5.4:high
   ask: kimi-code/kimi-k2-turbo-preview:high
-  orchestrator: google-antigravity/claude-opus-4-6-thinking:high
+  orchestrator: github-copilot/claude-opus-4.6:high
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
   implement: github-copilot/gpt-5.3-codex:high
-  explore: openai-codex/gpt-5.4-mini:low
+  explore: google-antigravity/gemini-3-flash-agent:medium
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
-  research: kimi-code/kimi-k2.5:medium
+  research: google-antigravity/gemini-3.1-pro-high:high
   verifier: openai-codex/gpt-5.4:high
   worktree-setup: kimi-code/kimi-k2.5:medium
   code-reviewer: openai-codex/gpt-5.3-codex:high
@@ -18,7 +18,8 @@ modelRoles:
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: github-copilot/gemini-3.1-pro-preview:high
-  grafana: github-copilot/claude-sonnet-4.6:high
+  grafana: anthropic/claude-opus-4-6:high
+  debug: openai-codex/gpt-5.4:xhigh
 defaultThinkingLevel: high
 providers: 
   webSearch: auto
@@ -27,7 +28,7 @@ statusLine:
   preset: default
   separator: pipe
 disabledExtensions: 
-  []
+  - extension-module:worktree-policy
 steeringMode: one-at-a-time
 task: 
   maxRecursionDepth: 3

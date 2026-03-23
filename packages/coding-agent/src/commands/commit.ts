@@ -11,6 +11,7 @@ export default class Commit extends Command {
 
 	static flags = {
 		push: Flags.boolean({ description: "Push after committing" }),
+		"no-push": Flags.boolean({ description: "Do not push after committing" }),
 		"dry-run": Flags.boolean({ description: "Preview without committing" }),
 		"no-changelog": Flags.boolean({ description: "Skip changelog updates" }),
 		legacy: Flags.boolean({ description: "Use legacy deterministic pipeline" }),
@@ -20,9 +21,11 @@ export default class Commit extends Command {
 
 	async run(): Promise<void> {
 		const { flags } = await this.parse(Commit);
+		const lastPushFlag = [...this.argv].reverse().find(arg => arg === "--push" || arg === "--no-push");
+		const push = lastPushFlag === "--no-push" ? false : true;
 
 		const cmd: CommitCommandArgs = {
-			push: flags.push ?? false,
+			push,
 			dryRun: flags["dry-run"] ?? false,
 			noChangelog: flags["no-changelog"] ?? false,
 			legacy: flags.legacy,

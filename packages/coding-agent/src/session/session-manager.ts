@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,6 +48,8 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	branch?: string;
+	modelRole?: string;
 }
 
 export interface NewSessionOptions {
@@ -244,6 +247,8 @@ export interface SessionInfo {
 	messageCount: number;
 	firstMessage: string;
 	allMessagesText: string;
+	branch?: string;
+	modelRole?: string;
 }
 
 export type ReadonlySessionManager = Pick<
@@ -358,8 +363,7 @@ function migrateHomeSessionDirs(): void {
 	const homeEncoded = home.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
 	const oldPrefix = `--${homeEncoded}-`;
 	const oldExact = `--${homeEncoded}--`;
-	const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
-
+	const sessionsRoot = getSessionsRoot();
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(sessionsRoot);
@@ -609,6 +613,60 @@ function encodeSessionDirName(cwd: string): string {
 	}
 	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
+
+/**
+ * Decode an encoded session directory name back to the original CWD path.
+ * Prefers session header cwd for exact decoding when session files exist.
+ * Falls back to prefix-based decoding for empty/new directories.
+ */
+export function decodeSessionDirName(encoded: string): string {
+	const sessionDir = path.join(getSessionsRoot(), encoded);
+	try {
+		const sessionFiles = Array.from(new Bun.Glob("*.jsonl").scanSync(sessionDir));
+		for (const sessionFile of sessionFiles) {
+			const fullPath = path.join(sessionDir, sessionFile);
+			const entries = parseJsonlLenient<Record<string, unknown>>(fs.readFileSync(fullPath, "utf8"));
+			const header = entries[0] as Record<string, unknown> | undefined;
+			if (header?.type === "session" && typeof header.cwd === "string") {
+				return header.cwd;
+			}
+		}
+	} catch {
+		// Fall through to encoded-name decoding
+	}
+
+	const home = os.homedir();
+	if (encoded.startsWith("--") && encoded.endsWith("--")) {
+		const inner = encoded.slice(2, -2);
+		return `/${inner.replace(/-/g, "/")}`;
+	}
+	if (encoded.startsWith("-")) {
+		const relative = encoded.slice(1).replace(/-/g, "/");
+		return relative ? path.join(home, relative) : home;
+	}
+	return encoded;
+}
+
+export function getSessionsRoot(): string {
+	return path.join(getDefaultAgentDir(), "sessions");
+}
+
+function detectSessionGitBranch(cwd: string): string | undefined {
+	try {
+		const branch = childProcess
+			.execSync("git rev-parse --abbrev-ref HEAD", {
+				cwd,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 1000,
+			})
+			.trim();
+		if (!branch || branch === "HEAD") return undefined;
+		return branch;
+	} catch {
+		return undefined;
+	}
+}
 /**
  * Compute the default session directory for a cwd.
  * Encodes cwd into a safe directory name under ~/.omp/agent/sessions/.
@@ -616,7 +674,7 @@ function encodeSessionDirName(cwd: string): string {
 function getDefaultSessionDir(cwd: string, storage: SessionStorage): string {
 	migrateHomeSessionDirs();
 	const dirName = encodeSessionDirName(cwd);
-	const sessionDir = path.join(getDefaultAgentDir(), "sessions", dirName);
+	const sessionDir = path.join(getSessionsRoot(), dirName);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }
@@ -753,6 +811,9 @@ class RecentSessionInfo {
 	#name: string | undefined;
 	#timeAgo: string | undefined;
 
+	readonly branch: string | undefined;
+	readonly modelRole: string | undefined;
+
 	constructor(
 		readonly path: string,
 		readonly mtime: number,
@@ -761,6 +822,8 @@ class RecentSessionInfo {
 	) {
 		// Extract title from session header, falling back to first user prompt, then id
 		const trystr = (v: unknown) => (typeof v === "string" ? v : undefined);
+		this.branch = trystr(header.branch);
+		this.modelRole = trystr(header.modelRole);
 		this.#fullName =
 			sanitizeSessionName(trystr(header.title)) ??
 			sanitizeSessionName(firstPrompt) ??
@@ -1137,7 +1200,16 @@ async function collectSessionsFromFiles(files: string[], storage: SessionStorage
 				if (entries.length === 0) return;
 
 				// Check first entry for valid session header
-				type SessionHeaderShape = { type: string; id: string; cwd?: string; title?: string; timestamp: string };
+				type SessionHeaderShape = {
+					type: string;
+					id: string;
+					cwd?: string;
+					title?: string;
+					timestamp: string;
+					parentSession?: string;
+					branch?: string;
+					modelRole?: string;
+				};
 				const header = entries[0] as SessionHeaderShape;
 				if (header.type !== "session" || !header.id) return;
 
@@ -1177,12 +1249,14 @@ async function collectSessionsFromFiles(files: string[], storage: SessionStorage
 						id: header.id,
 						cwd: typeof header.cwd === "string" ? header.cwd : "",
 						title: header.title ?? shortSummary,
-						parentSessionPath: (header as SessionHeader).parentSession,
+						parentSessionPath: header.parentSession,
 						created: new Date(header.timestamp),
 						modified: stats.mtime,
 						messageCount,
 						firstMessage: firstMessage || "(no messages)",
 						allMessagesText: allMessages.join(" "),
+						branch: typeof header.branch === "string" ? header.branch : undefined,
+						modelRole: typeof header.modelRole === "string" ? header.modelRole : undefined,
 					});
 				}
 			} catch {}
@@ -1368,6 +1442,8 @@ export class SessionManager {
 			title: oldHeader?.title ?? this.#sessionName,
 			timestamp,
 			cwd: this.cwd,
+			branch: this.persist ? detectSessionGitBranch(this.cwd) : undefined,
+			modelRole: oldHeader?.modelRole,
 			parentSession: oldSessionId,
 		};
 		this.#sessionName = newHeader.title;
@@ -1483,6 +1559,7 @@ export class SessionManager {
 			id: this.#sessionId,
 			timestamp,
 			cwd: this.cwd,
+			branch: this.persist ? detectSessionGitBranch(this.cwd) : undefined,
 			parentSession: options?.parentSession,
 		};
 		this.#fileEntries = [header];
@@ -2270,6 +2347,7 @@ export class SessionManager {
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 		const newSessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+		const currentHeader = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
 
 		const header: SessionHeader = {
 			type: "session",
@@ -2277,6 +2355,8 @@ export class SessionManager {
 			id: newSessionId,
 			timestamp,
 			cwd: this.cwd,
+			branch: this.persist ? detectSessionGitBranch(this.cwd) : undefined,
+			modelRole: currentHeader?.modelRole,
 			parentSession: this.persist ? previousSessionFile : undefined,
 		};
 
@@ -2456,10 +2536,57 @@ export class SessionManager {
 	}
 
 	/**
+	 * List all sessions grouped by project directory.
+	 */
+	static async listAllGroupedByProject(
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<Map<string, SessionInfo[]>> {
+		const sessionsRoot = getSessionsRoot();
+		const grouped = new Map<string, SessionInfo[]>();
+		try {
+			const projectDirs = fs
+				.readdirSync(sessionsRoot, { withFileTypes: true })
+				.filter(entry => entry.isDirectory())
+				.map(entry => entry.name);
+			await Promise.all(
+				projectDirs.map(async dirName => {
+					const dirPath = path.join(sessionsRoot, dirName);
+					const files = storage.listFilesSync(dirPath, "*.jsonl");
+					if (files.length === 0) return;
+					const sessions = await collectSessionsFromFiles(files, storage);
+					if (sessions.length > 0) {
+						const fallbackProjectPath = decodeSessionDirName(dirName);
+						const byProjectPath = new Map<string, SessionInfo[]>();
+						for (const session of sessions) {
+							const projectPath = session.cwd || fallbackProjectPath;
+							const bucket = byProjectPath.get(projectPath);
+							if (bucket) {
+								bucket.push(session);
+							} else {
+								byProjectPath.set(projectPath, [session]);
+							}
+						}
+						for (const [projectPath, projectSessions] of byProjectPath) {
+							const existing = grouped.get(projectPath);
+							if (existing) {
+								existing.push(...projectSessions);
+								existing.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+							} else {
+								grouped.set(projectPath, projectSessions);
+							}
+						}
+					}
+				}),
+			);
+		} catch {}
+		return grouped;
+	}
+
+	/**
 	 * List all sessions across all project directories.
 	 */
 	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-		const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
+		const sessionsRoot = getSessionsRoot();
 		try {
 			const files = Array.from(new Bun.Glob("**/*.jsonl").scanSync(sessionsRoot)).map(name =>
 				path.join(sessionsRoot, name),

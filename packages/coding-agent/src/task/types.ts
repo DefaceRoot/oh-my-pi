@@ -84,7 +84,8 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 			...properties,
 			isolated: Type.Optional(
 				Type.Boolean({
-					description: "Run in isolated environment; returns patches. Use when tasks edit overlapping files.",
+					description:
+						"Run in isolated environment; returns patches. Use for parallel implementation slices touching different subsystems as defense-in-depth against file conflicts.",
 				}),
 			),
 		});
@@ -191,6 +192,8 @@ export interface SingleResult {
 	truncated: boolean;
 	durationMs: number;
 	tokens: number;
+	/** Whether the subagent called submit_result before session ended */
+	hasSubmitResult?: boolean;
 	startedAt?: number;
 	lastUpdatedMs?: number;
 	provider?: string;
@@ -226,6 +229,19 @@ export interface SingleResult {
 export type { TaskSubagentStopRequest };
 
 /** Tool details for TUI rendering */
+export interface MergeAgentBranchSummary {
+	branch: string;
+	taskId: string;
+	description: string;
+}
+
+export interface MergeAgentContext {
+	conflictingBranches: string[];
+	mergedBranches: string[];
+	conflict: string;
+	branchSummaries: MergeAgentBranchSummary[];
+}
+
 export interface TaskToolDetails {
 	projectAgentsDir: string | null;
 	results: SingleResult[];
@@ -234,6 +250,7 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	mergeAgentContext?: MergeAgentContext;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;

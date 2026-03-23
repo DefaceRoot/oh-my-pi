@@ -74,10 +74,7 @@ export function getPlanModePlansRoot(resolvedActivePlanPath: string): string | u
 	return path.dirname(path.dirname(path.normalize(resolvedActivePlanPath)));
 }
 
-export function isPlanModeWritableMarkdownFile(
-	resolvedTargetPath: string,
-	resolvedActivePlanPath: string,
-): boolean {
+export function isPlanModeWritableMarkdownFile(resolvedTargetPath: string, resolvedActivePlanPath: string): boolean {
 	const normalizedTarget = path.normalize(resolvedTargetPath);
 	if (path.extname(normalizedTarget).toLowerCase() !== MARKDOWN_EXTENSION) return false;
 	if (normalizedTarget.includes(VERIFIER_ARTIFACT_FRAGMENT)) return false;
@@ -101,10 +98,7 @@ function toStoredPlanFilePath(candidate: string, resolvedPath: string, cwd: stri
 	return resolvedPath;
 }
 
-function normalizeStoredPlanFilePath(
-	planFilePath: string,
-	options?: ResolvePlanModePathOptions,
-): string {
+function normalizeStoredPlanFilePath(planFilePath: string, options?: ResolvePlanModePathOptions): string {
 	const trimmed = planFilePath.trim();
 	if (!options) return trimmed;
 	try {
@@ -130,10 +124,7 @@ function readCanonicalPlanPathField(
 	return toStoredPlanFilePath(trimmed, resolvedPath, options.cwd);
 }
 
-function readCanonicalPlanPathFromContent(
-	content: unknown,
-	options: ResolvePlanModePathOptions,
-): string | undefined {
+function readCanonicalPlanPathFromContent(content: unknown, options: ResolvePlanModePathOptions): string | undefined {
 	if (typeof content === "string") {
 		return resolveExplicitPlanModePlanFilePath(content, options);
 	}
@@ -143,11 +134,7 @@ function readCanonicalPlanPathFromContent(
 		if (!block || typeof block !== "object") continue;
 		const blockType = (block as { type?: unknown }).type;
 		if (blockType === "toolCall") {
-			const pathFromArgs = readCanonicalPlanPathField(
-				(block as { arguments?: unknown }).arguments,
-				"path",
-				options,
-			);
+			const pathFromArgs = readCanonicalPlanPathField((block as { arguments?: unknown }).arguments, "path", options);
 			if (pathFromArgs) return pathFromArgs;
 		}
 		if (blockType === "text") {
@@ -169,10 +156,7 @@ function readCanonicalPlanPathFromEntry(
 	if (entry.type === "message") {
 		const message = entry.message;
 		if (!message || typeof message !== "object") return undefined;
-		return readCanonicalPlanPathFromContent(
-			(message as { content?: unknown }).content,
-			options,
-		);
+		return readCanonicalPlanPathFromContent((message as { content?: unknown }).content, options);
 	}
 	if (entry.type === "custom_message") {
 		return readCanonicalPlanPathFromContent(entry.content, options);

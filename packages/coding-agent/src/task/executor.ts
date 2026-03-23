@@ -218,6 +218,18 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	return { data: candidate };
 }
 
+function resolveAbortSignalReasonValue(signal: AbortSignal | undefined, fallback: string): string {
+	const reason = signal?.reason;
+	if (reason instanceof Error) {
+		const message = reason.message.trim();
+		if (message.length > 0) return message;
+	} else if (typeof reason === "string") {
+		const message = reason.trim();
+		if (message.length > 0) return message;
+	}
+	return fallback;
+}
+
 export interface SubmitResultItem {
 	data?: unknown;
 	status?: "success" | "aborted";
@@ -402,6 +414,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	// Check if already aborted
 	if (signal?.aborted) {
+		const preStartAbortReason = resolveAbortSignalReasonValue(signal, "Cancelled before start");
 		return {
 			index,
 			id,
@@ -411,16 +424,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			description: options.description,
 			exitCode: 1,
 			output: "",
-			stderr: "Cancelled before start",
+			stderr: preStartAbortReason,
 			truncated: false,
 			durationMs: 0,
 			tokens: 0,
 			startedAt: startTime,
 			lastUpdatedMs: startTime,
 			modelOverride,
-			error: "Cancelled before start",
+			error: preStartAbortReason,
 			aborted: true,
-			abortReason: "Cancelled before start",
+			abortReason: preStartAbortReason,
 		};
 	}
 
@@ -546,15 +559,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (explicitAbortReasonText) {
 			return explicitAbortReasonText;
 		}
-		const reason = signal?.reason;
-		if (reason instanceof Error) {
-			const message = reason.message.trim();
-			if (message.length > 0) return message;
-		} else if (typeof reason === "string") {
-			const message = reason.trim();
-			if (message.length > 0) return message;
-		}
-		return "Cancelled by caller";
+		return resolveAbortSignalReasonValue(signal, "Cancelled by caller");
 	};
 	const PROGRESS_COALESCE_MS = 150;
 	let lastProgressEmitMs = 0;
@@ -1379,6 +1384,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		truncated,
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
+		hasSubmitResult,
 		startedAt: progress.startedAt,
 		lastUpdatedMs: progress.lastUpdatedMs,
 		provider: progress.provider,

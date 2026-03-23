@@ -42,12 +42,8 @@ export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
 		"using-git-worktrees",
 		"using-tmux-for-interactive-commands",
 	],
-	planning: [
-		"brainstorming",
-		"generate-creative-ideas",
-		"writing-plans",
-		"validate-implementation-plan",
-	],
+	orchestration: ["commit-hygiene", "verification-before-completion", "dispatching-parallel-agents"],
+	planning: ["brainstorming", "generate-creative-ideas", "writing-plans", "validate-implementation-plan"],
 	implementation: [
 		"test-driven-development",
 		"error-handling-patterns",
@@ -114,7 +110,7 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			tools: ["read", "bash", "task", "await", "todo_write", "ask"],
 			mcp: ["augment"],
 			skills: {
-				categories: ["workflow", "infra"],
+				categories: ["orchestration"],
 			},
 		},
 		plan: {
@@ -180,17 +176,23 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 		},
 	},
 	subagents: {
+		debug: {
+			mcp: ["augment", "ref"],
+		},
 		designer: {
 			mcp: ["augment", "chrome-devtools"],
+		},
+		explore: {
+			mcp: ["augment", "better-context"],
 		},
 		grafana: {
 			mcp: ["augment", "chrome-devtools", "grafana"],
 		},
-		research: {
-			mcp: ["augment", "better-context"],
+		implement: {
+			mcp: ["augment", "ref"],
 		},
-		explore: {
-			mcp: ["augment", "better-context"],
+		research: {
+			mcp: ["augment", "better-context", "ref"],
 		},
 		"ask-explore": {
 			mcp: [],
@@ -296,7 +298,17 @@ export class RolesConfig {
 	}
 
 	getMcpForRole(role: string): string[] {
-		return normalizeMcpServers(this.#getRole(role).mcp);
+		const config = this.#getConfig();
+		const namedRole = config.roles[role];
+		if (namedRole) {
+			return normalizeMcpServers(namedRole.mcp);
+		}
+		const namedSubagent = config.subagents[role];
+		if (namedSubagent) {
+			return namedSubagent.mcp.length === 0 ? [] : normalizeMcpServers(namedSubagent.mcp);
+		}
+		const defaultRole = config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		return normalizeMcpServers(defaultRole.mcp);
 	}
 
 	setMcpForRole(role: string, servers: string[]): void {

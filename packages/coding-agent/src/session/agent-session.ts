@@ -88,6 +88,7 @@ import { executePython as executePythonCommand, type PythonResult } from "../ipy
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
 import { getLatestPlanModeActivePlanFilePath } from "../plan-mode/active-plan-file";
+import { buildPlanTodoBootstrapData } from "../plan-mode/plan-todos";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffOverflowFocusPrompt from "../prompts/system/auto-handoff-overflow-focus.md" with { type: "text" };
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
@@ -98,15 +99,22 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import { collectDelegationContext } from "../task/delegation-context";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase, withTodoPhasesPreserveData } from "../tools/todo-write";
+import {
+	getLatestTodoPhasesFromEntriesOrUndefined,
+	type TodoItem,
+	type TodoPhase,
+	withTodoPhasesPreserveData,
+} from "../tools/todo-write";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
+import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -131,6 +139,7 @@ import {
 } from "./messages";
 import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionManager } from "./session-manager";
 import { getLatestCompactionEntry } from "./session-manager";
+import { truncateHeadBytes } from "./streaming-output";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -412,6 +421,7 @@ export class AgentSession {
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
+	#lastCheckpointTokens: number | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
@@ -510,7 +520,6 @@ export class AgentSession {
 		this.#asyncJobManager.cancelAll();
 		return runningJobs.length;
 	}
-
 
 	// =========================================================================
 	// Event Subscription
@@ -767,9 +776,11 @@ export class AgentSession {
 				}
 				if (toolName === "checkpoint" && !isError) {
 					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
+					const checkpointTokens = this.getContextUsage()?.tokens;
 					this.#checkpointState = {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
+						contextTokensAtCheckpoint: typeof checkpointTokens === "number" ? checkpointTokens : undefined,
 						startedAt: details?.startedAt ?? new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
@@ -1826,7 +1837,7 @@ export class AgentSession {
 		const state = this.#planModeState;
 		if (!state?.enabled) return state;
 		const reboundPlanFilePath = getLatestPlanModeActivePlanFilePath(
-			this.sessionManager.getEntries() as Array<Record<string, unknown>>,
+			this.sessionManager.getEntries() as unknown as Array<Record<string, unknown>>,
 			{
 				cwd: this.sessionManager.getCwd(),
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
@@ -2569,8 +2580,37 @@ export class AgentSession {
 		this.#todoPhases = this.#cloneTodoPhases(phases);
 	}
 
+	#loadPlanTodoPhases(): TodoPhase[] | undefined {
+		const metadata = collectDelegationContext({
+			cwd: this.sessionManager.getCwd(),
+			hasUI: false,
+			getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
+			getSessionSpawns: () => "*",
+			settings: {} as never,
+			getCompactContext: () => "",
+			getSessionEntries: () => this.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>,
+			getPlanModeState: () => this.getPlanModeState(),
+		} as never);
+		const planFilePath = metadata.planFilePath?.trim();
+		if (!planFilePath) return undefined;
+		try {
+			const resolvedPlanPath = this.#resolvePlanPath(planFilePath);
+			if (!fs.existsSync(resolvedPlanPath)) return undefined;
+			const bootstrap = buildPlanTodoBootstrapData(fs.readFileSync(resolvedPlanPath, "utf8"), planFilePath);
+			return bootstrap?.phases;
+		} catch {
+			return undefined;
+		}
+	}
+
 	#syncTodoPhasesFromBranch(): void {
-		this.setTodoPhases(getLatestTodoPhasesFromEntries(this.sessionManager.getBranch()));
+		const phasesFromEntries = getLatestTodoPhasesFromEntriesOrUndefined(this.sessionManager.getBranch());
+		if (phasesFromEntries) {
+			this.setTodoPhases(phasesFromEntries);
+			return;
+		}
+		const planTodoPhases = this.#loadPlanTodoPhases();
+		this.setTodoPhases(planTodoPhases ?? []);
 	}
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
@@ -3423,6 +3463,22 @@ Be thorough - include exact file paths, function names, error messages, and tech
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#syncTodoPhasesFromBranch();
 
+			if (!this.sessionManager.getSessionName() && !Bun.env.PI_NO_TITLE) {
+				const curatorModel = this.settings.getModelRole("curator");
+				const titleSessionId = this.sessionId;
+				generateSessionTitle(handoffText, this.modelRegistry, curatorModel, titleSessionId)
+					.then(async title => {
+						if (!title) return;
+						if (this.sessionId !== titleSessionId) return;
+						if (this.sessionManager.getSessionName()) return;
+						await this.sessionManager.setSessionName(title);
+						if (this.sessionId !== titleSessionId) return;
+						if (this.sessionManager.getSessionName() !== title) return;
+						setTerminalTitle(`π: ${title}`);
+					})
+					.catch(() => {});
+			}
+
 			return { document: handoffText, savedPath };
 		} finally {
 			unsubscribe?.();
@@ -3554,8 +3610,10 @@ Be thorough - include exact file paths, function names, error messages, and tech
 		if (!checkpointState) {
 			return;
 		}
+		this.#lastCheckpointTokens = checkpointState.contextTokensAtCheckpoint;
 		const safeCount = Math.max(0, Math.min(checkpointState.checkpointMessageCount, this.agent.state.messages.length));
 		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
+		this.#closeCodexProviderSessionsForHistoryRewrite();
 		try {
 			this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
 				startedAt: checkpointState.startedAt,
@@ -5192,10 +5250,15 @@ Be thorough - include exact file paths, function names, error messages, and tech
 			estimatedFromMessages += estimateTokens(message);
 		}
 
+		const rewindReportIndex = messages.findLastIndex(
+			message => message.role === "custom" && message.customType === "rewind-report",
+		);
+
 		// Find last assistant message with usage
 		let lastUsageIndex: number | undefined;
 		let lastUsage: Usage | undefined;
 		for (let i = messages.length - 1; i >= 0; i--) {
+			if (rewindReportIndex >= 0 && i <= rewindReportIndex) break;
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
 			const assistantMsg = msg as AssistantMessage;
@@ -5208,10 +5271,12 @@ Be thorough - include exact file paths, function names, error messages, and tech
 
 		if (!lastUsage || lastUsageIndex === undefined) {
 			return {
-				tokens: estimatedFromMessages,
+				tokens:
+					rewindReportIndex >= 0 ? (this.#lastCheckpointTokens ?? estimatedFromMessages) : estimatedFromMessages,
 			};
 		}
 
+		this.#lastCheckpointTokens = undefined;
 		const usageTokens = calculateContextTokens(lastUsage);
 		let trailingTokens = 0;
 		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
@@ -5444,66 +5509,91 @@ Be thorough - include exact file paths, function names, error messages, and tech
 	}
 
 	/**
-	 * Format the conversation as compact context for subagents.
-	 * Includes only user messages and assistant text responses.
-	 * Excludes: system prompt, tool definitions, tool calls/results, thinking blocks.
+	 * Format targeted conversation context for subagents.
+	 * Includes only a short session progress line and recent user instructions.
+	 * Excludes assistant/tool/thinking transcript details.
 	 */
 	formatCompactContext(): string {
+		const MAX_RECENT_USER_MESSAGES = 5;
+		const MAX_CONTEXT_BYTES = 16 * 1024;
+		const MAX_MESSAGE_CHARS = 3000;
+
 		const lines: string[] = [];
 		lines.push("# Conversation Context");
 		lines.push("");
-		lines.push(
-			"This is a summary of the parent conversation. Read this if you need additional context about what was discussed or decided.",
-		);
+		lines.push("Targeted parent context for delegated work.");
 		lines.push("");
 
-		for (const msg of this.messages) {
-			if (msg.role === "user") {
-				lines.push("## User");
-				lines.push("");
-				if (typeof msg.content === "string") {
-					lines.push(msg.content);
-				} else {
-					for (const c of msg.content) {
-						if (c.type === "text") {
-							lines.push(c.text);
-						} else if (c.type === "image") {
-							lines.push("[Image attached]");
-						}
-					}
-				}
-				lines.push("");
-			} else if (msg.role === "assistant") {
+		const stats = this.getSessionStats();
+		const latestAssistantUpdate = (() => {
+			for (let i = this.messages.length - 1; i >= 0; i--) {
+				const msg = this.messages[i];
+				if (msg.role !== "assistant") continue;
 				const assistantMsg = msg as AssistantMessage;
-				// Only include text content, skip tool calls and thinking
-				const textParts: string[] = [];
-				for (const c of assistantMsg.content) {
-					if (c.type === "text" && c.text.trim()) {
-						textParts.push(c.text);
-					}
+				const text = assistantMsg.content
+					.filter((c): c is TextContent => c.type === "text" && typeof c.text === "string")
+					.map(c => c.text.trim())
+					.filter(Boolean)
+					.join(" ");
+				if (!text) continue;
+				const normalized = text.replace(/\s+/g, " ").trim();
+				return normalized.length > 220 ? `${normalized.slice(0, 220)}…` : normalized;
+			}
+			return undefined;
+		})();
+
+		const progressLine = [
+			`Session progress: ${stats.userMessages} user message${stats.userMessages === 1 ? "" : "s"}, ${stats.assistantMessages} assistant response${stats.assistantMessages === 1 ? "" : "s"}, ${stats.toolCalls} tool call${stats.toolCalls === 1 ? "" : "s"} completed.`,
+			latestAssistantUpdate ? `Latest assistant update: ${latestAssistantUpdate}` : undefined,
+		]
+			.filter(Boolean)
+			.join(" ");
+		lines.push(progressLine);
+		lines.push("");
+
+		const recentUsers = this.messages
+			.filter(msg => msg.role === "user")
+			.slice(-MAX_RECENT_USER_MESSAGES)
+			.reverse();
+
+		if (recentUsers.length === 0) {
+			lines.push("No user messages available.");
+		} else {
+			lines.push(`Recent user instructions (most recent first, up to ${MAX_RECENT_USER_MESSAGES} messages):`);
+			lines.push("");
+
+			for (const [index, msg] of recentUsers.entries()) {
+				const text = this.#extractUserMessageText(msg.content).trim();
+				const hasImage = Array.isArray(msg.content) && msg.content.some(c => c.type === "image");
+				let body = text;
+				if (hasImage) {
+					body = body ? `${body}\n[Image attached]` : "[Image attached]";
 				}
-				if (textParts.length > 0) {
-					lines.push("## Assistant");
-					lines.push("");
-					lines.push(textParts.join("\n\n"));
-					lines.push("");
+				if (!body) {
+					body = "[No text content]";
 				}
-			} else if (msg.role === "fileMention") {
-				const fileMsg = msg as FileMentionMessage;
-				const paths = fileMsg.files.map(f => f.path).join(", ");
-				lines.push(`[Files referenced: ${paths}]`);
+				if (body.length > MAX_MESSAGE_CHARS) {
+					body = `${body.slice(0, MAX_MESSAGE_CHARS)}\n[Message truncated for sidecar size]`;
+				}
+
+				lines.push(`## User Message ${index + 1}`);
 				lines.push("");
-			} else if (msg.role === "compactionSummary") {
-				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push("## Earlier Context (Summarized)");
-				lines.push("");
-				lines.push(compactMsg.summary);
+				lines.push(body);
 				lines.push("");
 			}
-			// Skip: toolResult, bashExecution, pythonExecution, branchSummary, custom, hookMessage
 		}
 
-		return lines.join("\n").trim();
+		const rendered = lines.join("\n").trim();
+		const renderedBytes = Buffer.byteLength(rendered, "utf-8");
+		if (renderedBytes <= MAX_CONTEXT_BYTES) {
+			return rendered;
+		}
+
+		const truncationNotice = "\n\n[Context truncated to 16KB sidecar limit]";
+		const noticeBytes = Buffer.byteLength(truncationNotice, "utf-8");
+		const availableBytes = Math.max(0, MAX_CONTEXT_BYTES - noticeBytes);
+		const head = truncateHeadBytes(rendered, availableBytes).text;
+		return `${head}${truncationNotice}`.trim();
 	}
 
 	// =========================================================================

@@ -17,4 +17,10 @@ describe("bundled-agent-names", () => {
 		const names = agents.map(a => a.name);
 		expect(names).toContain("implement");
 	});
+
+	it('includes bundled name "debug"', () => {
+		const agents = loadBundledAgents();
+		const names = agents.map(a => a.name);
+		expect(names).toContain("debug");
+	});
 });

@@ -60,6 +60,31 @@ export function normalizeSubagentOutcome(value: unknown): SubagentOutcome | unde
 export function deriveSubagentOutcomeFromReviewData(value: unknown): SubagentOutcome | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const record = value as Record<string, unknown>;
+
+	if (typeof record.passed === "boolean") {
+		return {
+			status: record.passed ? "pass" : "fail",
+			label: "lint",
+			summary: normalizeOptionalText(record.summary),
+		};
+	}
+
+	const verdict = normalizeOptionalText(record.verdict)?.toLowerCase().replace(/-/g, "_");
+	if (verdict === "go") {
+		return {
+			status: "go",
+			label: "review",
+			summary: normalizeOptionalText(record.summary),
+		};
+	}
+	if (verdict === "no_go") {
+		return {
+			status: "no_go",
+			label: "review",
+			summary: normalizeOptionalText(record.summary),
+		};
+	}
+
 	const correctness = normalizeOptionalText(record.overall_correctness)?.toLowerCase();
 	if (correctness === "correct") {
 		return {

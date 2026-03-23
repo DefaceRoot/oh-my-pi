@@ -10,8 +10,8 @@ import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { renderPromptTemplate } from "./config/prompt-templates";
-import type { SkillsSettings } from "./config/settings";
 import { DEFAULT_ROLES_CONFIG } from "./config/roles-config";
+import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { filterSkillsByCategories, loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
@@ -291,7 +291,8 @@ async function mergeModeSpecificAgentsGuidance(
 			const modeContent = await loadModeSpecificAgentsFile(file.path, mode);
 			if (!modeContent) return file;
 			const sharedContent = file.content.trimEnd();
-			const mergedContent = sharedContent.length > 0 ? `${sharedContent}\n\n${modeContent.trimStart()}` : modeContent;
+			const mergedContent =
+				sharedContent.length > 0 ? `${sharedContent}\n\n${modeContent.trimStart()}` : modeContent;
 			return { ...file, content: mergedContent };
 		}),
 	);

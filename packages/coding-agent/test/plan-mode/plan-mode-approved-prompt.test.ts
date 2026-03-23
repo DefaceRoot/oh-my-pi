@@ -5,12 +5,15 @@ import planModeApprovedPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/pla
 };
 
 describe("plan-mode-approved prompt", () => {
-	it("includes final plan artifact path in injected execution prompt", () => {
+	it("includes final plan artifact path and enforces parallel-safety rechecks during execution", () => {
 		const rendered = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent: "1. Do work",
 			finalPlanFilePath: ".omp/sessions/plans/manual/plan.md",
 		});
 
 		expect(rendered).toContain(".omp/sessions/plans/manual/plan.md");
+		expect(rendered).toContain("explicit unit dependencies");
+		expect(rendered).toContain("`Parallel safety` assumptions against current repo state");
+		expect(rendered).toContain("fall back to sequential execution");
 	});
 });

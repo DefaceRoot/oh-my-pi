@@ -77,10 +77,21 @@ function formatFatalError(label: string, err: Error): string {
 }
 
 if (isMainThread) {
+	const handleSignal = (reason: Reason, code: number) => {
+		// Keep signal handlers synchronous: Bun does not await Promise-returning signal listeners.
+		void runCleanup(reason).finally(() => {
+			process.exit(code);
+		});
+
+		const forceExitTimer = setTimeout(() => {
+			process.exit(code);
+		}, 5000);
+		forceExitTimer.unref();
+	};
+
 	process
-		.on("SIGINT", async () => {
-			await runCleanup(Reason.SIGINT);
-			process.exit(130); // 128 + SIGINT (2)
+		.on("SIGINT", () => {
+			handleSignal(Reason.SIGINT, 130); // 128 + SIGINT (2)
 		})
 		.on("SIGUSR1", () => {
 			if (inspectorOpened) return;
@@ -102,16 +113,14 @@ if (isMainThread) {
 			await runCleanup(Reason.UNHANDLED_REJECTION);
 			process.exit(1);
 		})
-		.on("exit", async () => {
+		.on("exit", () => {
 			void runCleanup(Reason.EXIT); // fire and forget (exit imminent)
 		})
-		.on("SIGTERM", async () => {
-			await runCleanup(Reason.SIGTERM);
-			process.exit(143); // 128 + SIGTERM (15)
+		.on("SIGTERM", () => {
+			handleSignal(Reason.SIGTERM, 143); // 128 + SIGTERM (15)
 		})
-		.on("SIGHUP", async () => {
-			await runCleanup(Reason.SIGHUP);
-			process.exit(129); // 128 + SIGHUP (1)
+		.on("SIGHUP", () => {
+			handleSignal(Reason.SIGHUP, 129); // 128 + SIGHUP (1)
 		});
 } else {
 	// Worker thread: only register exit handler for cleanup.

@@ -11,7 +11,11 @@ interface MCPConfigFile {
 }
 
 function hasBrowserIsolationArgs(args: string[]): boolean {
-	return args.includes("--isolated") || args.includes("--user-data-dir") || args.some(arg => arg.startsWith("--user-data-dir="));
+	return (
+		args.includes("--isolated") ||
+		args.includes("--user-data-dir") ||
+		args.some(arg => arg.startsWith("--user-data-dir="))
+	);
 }
 
 describe("RED: Chrome DevTools MCP launch isolation", () => {

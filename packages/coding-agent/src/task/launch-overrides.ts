@@ -1,7 +1,7 @@
-import type { Settings } from "../config/settings";
 import { extractExplicitThinkingSelector, isDefaultModelAlias } from "../config/model-resolver";
-import type { AgentDefinition } from "./types";
+import type { Settings } from "../config/settings";
 import { resolveSubagentRole } from "./model-role";
+import type { AgentDefinition } from "./types";
 
 interface SubagentLaunchSession {
 	settings: Settings;
@@ -24,7 +24,9 @@ function normalizeModelOverride(value: string | string[] | undefined): string | 
 function resolveRoleModelOverride(session: SubagentLaunchSession, agentName: string): string | string[] | undefined {
 	const subagentRole = resolveSubagentRole(agentName);
 	const roleModelLookupOrder =
-		subagentRole === "implement" ? (["implement", "default"] as const) : ([subagentRole, "implement", "default"] as const);
+		subagentRole === "implement"
+			? (["implement", "default"] as const)
+			: ([subagentRole, "implement", "default"] as const);
 	return roleModelLookupOrder
 		.map(role => normalizeModelOverride(session.settings.getModelRole(role)))
 		.find((value): value is string | string[] => value !== undefined);

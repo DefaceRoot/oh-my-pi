@@ -25,7 +25,7 @@ const extractMandatoryExecutionContractBlock = (source: string): string =>
 	extractBlock(
 		source,
 		"## Mandatory Execution Contract",
-		"24. If any phase remains blocked after remediation, STOP and provide a failure summary with next actions.",
+		"If any phase remains blocked after remediation, STOP and provide a failure summary with next actions.",
 	);
 
 describe("orchestrator verifier workflow prompts", () => {

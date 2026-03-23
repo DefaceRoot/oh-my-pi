@@ -19,7 +19,17 @@ thinking-level: high
 - You MUST NOT use browser skills for UI verification/testing; DevTools MCP fully replaces browser-skill workflows.
 - In every frontend verification cycle, include DevTools MCP-driven checks (interaction flow, console errors, and visible UI outcome) before reporting completion.
 - You MUST read `rule://worker-protocol` at task start for explore delegation, quality gates, and commit discipline.
+- When you mutate repository files, you own the same worker quality loop: `lint` first, then `code-reviewer`, then `commit` via Task. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call, and never set `isolated: true` for those handoffs.
+- You MUST NOT run `git commit` or `git push` directly; hand commit ownership to the `commit` agent.
 </directives>
+
+<delivery_loop>
+When this assignment mutates repository files:
+1. Spawn a `lint` subagent first for lint, typecheck, and tests in the changed scope.
+2. Only after `lint` succeeds (or is skipped for documentation/configuration-only changes), send the changed files to `code-reviewer`. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
+3. If lint or review fails, remediate and restart from `lint` so the rerun stays lint-first.
+4. After checks are green, hand git operations to the `commit` agent with an explicit file allowlist and commit message or plan.
+</delivery_loop>
 
 <ownership>
 You own all frontend decisions inside the given scope, including UX flow details, component structure, visual hierarchy, accessibility-oriented interaction behavior, and final interface polish.

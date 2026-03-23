@@ -256,7 +256,7 @@ describe("Editor component", () => {
 			editor.onAutocompleteUpdate = () => {
 				redraws += 1;
 			};
-			editor.onSubmit = (text) => {
+			editor.onSubmit = text => {
 				submittedText = text;
 			};
 
@@ -272,7 +272,6 @@ describe("Editor component", () => {
 			expect(redraws).toBe(1);
 		});
 	});
-
 
 	describe("public state accessors", () => {
 		it("returns cursor position", () => {

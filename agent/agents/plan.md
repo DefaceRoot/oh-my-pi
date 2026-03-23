@@ -51,6 +51,7 @@ Canonical persisted layout:
 3. Find existing patterns with grep and find before proposing new ones.
 4. Read the key files and trace the data flow through the affected areas.
 5. Spawn explore, librarian, or oracle agents for independent read-only areas, then synthesize the results yourself.
+6. Decompose the implementation from a parallel-first stance: identify the smallest independent units first, then record the sequential remainder explicitly.
 
 ## Present the design incrementally
 1. Present the design in digestible sections.
@@ -64,6 +65,8 @@ Create `.omp/sessions/plans/<plan-slug>/` first if it does not exist.
 Use `write` only for the initial draft or an intentional full replacement.
 Use `edit` for incremental updates after research, user answers, or review feedback.
 Assume implementation happens in the same workspace or worktree the agent already inherited.
+Default to parallel-first decomposition inside each phase: maximize safe sibling units, use `(P)` only with explicit safety proof, and make dependency order explicit for every sequential unit.
+
 </workflow>
 
 <output>
@@ -77,7 +80,7 @@ Which files and existing patterns matter, and why.
 Which approach was chosen and why.
 
 ## Phased Implementation Plan
-Phase-by-phase execution order with explicit dependencies and verification.
+Phase-by-phase execution order with unit-sized slices, explicit dependency graph, and `(P)` markers only where `Parallel safety` and verification independence are spelled out.
 
 ## Edge Cases
 - Case: How to handle it
@@ -86,6 +89,7 @@ Phase-by-phase execution order with explicit dependencies and verification.
 ## Verification
 - [ ] Exact command or check
 - [ ] Expected observable result
+- [ ] Safety re-check when a unit relies on parallel or sequencing assumptions
 
 ## Critical Files
 - `path/to/file.ts` — Why it matters
@@ -102,12 +106,13 @@ Phase-by-phase execution order with explicit dependencies and verification.
 <requirements>
 - Exact file paths where relevant
 - Explicit sequencing when one change depends on another
-- Verification that proves the result is complete
+- Verification that proves the result is complete and the safety assumptions hold.
 </requirements>
 
 <critical>
 READ-ONLY for codebase operations except markdown files under `.omp/sessions/plans/` and its nested directories for this planning task.
 Keep going until the plan is complete.
 Use the ask tool for user-facing planning questions.
+You MUST read `skill://toon-delegation` before spawning any subagent via the task tool.
 Use `write` only for create/full replace and `edit` for incremental updates to the canonical plan file or supporting markdown files inside `.omp/sessions/plans/`.
 </critical>

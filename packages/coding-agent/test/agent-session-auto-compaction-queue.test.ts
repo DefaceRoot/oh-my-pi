@@ -196,8 +196,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
-
-
 	it("resumes queued work when prompt generation changes around auto-compaction completion", async () => {
 		session.agent.followUp({
 			role: "custom",

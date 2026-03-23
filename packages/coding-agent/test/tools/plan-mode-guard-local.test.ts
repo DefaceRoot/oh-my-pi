@@ -49,8 +49,12 @@ describe("enforcePlanModeWrite", () => {
 	it("allows markdown files anywhere under the plans root", () => {
 		const session = makePlanModeSession();
 
-		expect(() => enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/plan.md", { op: "create" })).not.toThrow();
-		expect(() => enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/research.md", { op: "update" })).not.toThrow();
+		expect(() =>
+			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/plan.md", { op: "create" }),
+		).not.toThrow();
+		expect(() =>
+			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/research.md", { op: "update" }),
+		).not.toThrow();
 	});
 
 	it("blocks plan-verifier artifacts, non-markdown files, and paths outside the plans root", () => {
@@ -63,9 +67,9 @@ describe("enforcePlanModeWrite", () => {
 				{ op: "create" },
 			),
 		).toThrow(/plan mode/i);
-		expect(() => enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/state.json", { op: "create" })).toThrow(
-			/plan mode/i,
-		);
+		expect(() =>
+			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/state.json", { op: "create" }),
+		).toThrow(/plan mode/i);
 		expect(() => enforcePlanModeWrite(session, "/repo/outside.md", { op: "create" })).toThrow(/plan mode/i);
 	});
 });

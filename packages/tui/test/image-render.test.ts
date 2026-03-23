@@ -128,7 +128,6 @@ describe("terminal image line detection", () => {
 	});
 });
 
-
 describe("Windows Terminal Preview SIXEL detection", () => {
 	it("requires Windows platform, WT session, and known version 1.22+", () => {
 		expect(

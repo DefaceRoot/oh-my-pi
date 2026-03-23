@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	mergePlanModeMainAgentTools,
-	PLAN_MODE_MAIN_AGENT_REQUIRED_TOOLS,
-} from "../../src/plan-mode/main-agent-tools";
+import { mergePlanModeMainAgentTools, PLAN_MODE_MAIN_AGENT_REQUIRED_TOOLS } from "../../src/plan-mode/main-agent-tools";
 
 describe("PLAN_MODE_MAIN_AGENT_REQUIRED_TOOLS", () => {
 	it("requires write edit and exit for plan authoring", () => {

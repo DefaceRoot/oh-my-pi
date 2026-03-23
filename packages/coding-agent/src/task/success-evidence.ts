@@ -37,5 +37,5 @@ export function validateSuccessToolRequirements(
 	}
 
 	const observedSummary = observed.size > 0 ? [...observed].sort().join(", ") : "none";
-	return `Subagent \"${agent.name}\" reported success without required verification evidence; it must run at least one of: ${requiredTools.join(", ")}. Observed tools: ${observedSummary}.`;
+	return `Subagent "${agent.name}" reported success without required verification evidence; it must run at least one of: ${requiredTools.join(", ")}. Observed tools: ${observedSummary}.`;
 }

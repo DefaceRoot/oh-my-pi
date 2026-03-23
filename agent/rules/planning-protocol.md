@@ -36,6 +36,10 @@ Do NOT create a new worktree as part of planning by default.
 - Apply repo-local constraints from `agent/skills/writing-plans/SKILL.md`; this repository supplement is authoritative for orchestrator-ready plan formatting.
 - Keep heavy planning context with the plan agent while authoring the plan document. The later implementation session gets only the finished plan file.
 
+## Delegation Envelope and Plan Propagation
+
+When implementation begins after planning, the canonical plan path and a relevant section excerpt are propagated to subagents through the `omp-delegation/v1` delegation envelope (`skill://toon-delegation`). The `context.plan_path` field carries the absolute path; `context.plan_excerpt` carries inline plan sections for detailed-profile delegations. Plan-verifier subagents receive the plan path at standard profile. Envelope syntax is internal tooling and must not appear in user-facing responses.
+
 ## Final Plan Output
 
 Plans must be phase-based and directly executable by a fresh implementation session with zero extra conversation context:
@@ -50,16 +54,20 @@ Plans must be phase-based and directly executable by a fresh implementation sess
 
 Required plan constraints:
 - Every phase must decompose into very small implementation units (typically 1-2 file edits or one focused command).
+- Decompose each phase from a parallel-first stance: identify independent units first, then sequence only the units blocked by file, contract, ordering, or verification coupling.
 - Use `(P)` only for units proven safe to run in parallel.
 - Every unit MUST include `**Depends on**` with explicit unit IDs, or `None` if independent.
 - Every unit MUST encode TDD explicitly with test-first sequencing (`Tests First` before `Implementation`).
-- If a unit is marked `(P)`, include `**Parallel safety**` evidence (no shared files, no shared contract ownership, no ordering dependency).
+- Every unit MUST include `**Verification**` with concrete behavior checks and any safety checks needed to prove dependency and parallel assumptions.
+- If a unit is marked `(P)`, include `**Parallel safety**` evidence (no shared files, no shared contract ownership, no ordering dependency, and no requirement to wait on another concurrent unit to verify the result).
+- If a unit remains sequential, make the blocking dependency or safety reason explicit so an implementation orchestrator does not have to infer it.
 - Keep phase ordering and commit boundaries explicit so an implementation orchestrator can execute without re-planning.
 - The plan should instruct use of the `commit-hygiene` skill during implementation.
 
 ## Post-Plan Verification Gate (MANDATORY before planning completes)
 
 After writing `.omp/sessions/plans/<plan-slug>/plan.md`, run a plan-quality verification round before leaving planning mode.
+This gate must reject underspecified parallel claims or missing safety-verification details before coding begins.
 
 Required flow:
 1. Parse all phase headings and derive deterministic `phase_key` values (recommended: zero-padded order + slug, for example `01-bootstrap-workflow`).

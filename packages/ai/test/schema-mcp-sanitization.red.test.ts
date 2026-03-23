@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import Ajv2020 from "ajv/dist/2020.js";
 import { sanitizeSchemaForMCP } from "@oh-my-pi/pi-ai/utils/schema";
+import Ajv2020 from "ajv/dist/2020.js";
 
 describe("RED: sanitizeSchemaForMCP boolean schema preservation", () => {
 	it("keeps additionalProperties: false valid for AJV", () => {

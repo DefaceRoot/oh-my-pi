@@ -656,7 +656,7 @@ async function resolveRemoteCleanupBranch(repoRoot: string, branch: string): Pro
 	const configuredBranchRemote = await getGitConfigValue(repoRoot, `branch.${branch}.remote`);
 	const configuredDefaultRemote = await getGitConfigValue(repoRoot, "remote.pushDefault");
 	const configuredRemote = [configuredPushRemote, configuredBranchRemote, configuredDefaultRemote].find(
-		(remote): remote is string => Boolean(remote) && remotes.includes(remote),
+		(remote): remote is string => typeof remote === "string" && remotes.includes(remote),
 	);
 	if (configuredRemote) {
 		return `${configuredRemote}/${branch}`;
@@ -910,6 +910,7 @@ export interface MergeBranchResult {
 	merged: string[];
 	failed: string[];
 	conflict?: string;
+	conflictingBranch?: string;
 }
 
 /**
@@ -935,6 +936,7 @@ export async function mergeTaskBranches(
 				merged,
 				failed: [...failed, ...branches.slice(merged.length + failed.length).map(b => b.branchName)],
 				conflict: `${branchName}: ${stderr}`,
+				conflictingBranch: branchName,
 			};
 		}
 
@@ -948,5 +950,7 @@ export async function mergeTaskBranches(
 export async function cleanupTaskBranches(repoRoot: string, branches: string[]): Promise<void> {
 	for (const branch of branches) {
 		await $`git branch -D ${branch}`.cwd(repoRoot).quiet().nothrow();
+		await $`git push origin --delete ${branch}`.cwd(repoRoot).quiet().nothrow();
+		await $`git branch -dr origin/${branch}`.cwd(repoRoot).quiet().nothrow();
 	}
 }

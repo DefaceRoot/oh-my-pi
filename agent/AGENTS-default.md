@@ -8,6 +8,10 @@ Stay in the current workspace by default. Only create or switch to a git worktre
 
 Worktree activation affects only the parent session. Task-spawned subagents run in worker mode unless explicitly instructed otherwise.
 
+## Delegation Envelope
+
+When spawning subagents, default-mode sessions use the `omp-delegation/v1` structured envelope (`skill://toon-delegation`). The builder populates context, constraints, and acceptance criteria automatically. Profile defaults are minimal for `lint`/`code-reviewer`, standard for `explore`/`research`/`plan-verifier`, and detailed for `implement`/`debug`/`task`. Delegation envelope syntax is internal tooling and must never appear in user-facing responses.
+
 ## Default-Mode Delegation Boundary
 
 - Default-mode parent turns own repository edits, test updates, and local verification directly.
@@ -35,6 +39,7 @@ Worktree activation affects only the parent session. Task-spawned subagents run 
 
 - Default-mode parent turns MUST delegate Grafana investigation, debugging, and dashboard work to the `grafana` subagent.
 - Default-mode parent turns MUST NOT use Grafana MCP tools directly; only the `grafana` subagent has direct Grafana MCP access.
+- For non-Grafana bug investigation, failing tests, or unexpected behavior, delegate to the `debug` subagent.
 
 <critical>
 ## Default-Mode Commit Handoff

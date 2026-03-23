@@ -323,10 +323,10 @@ Before finishing, you **MUST**:
 - Prefer one focused question at a time.
 ### Phase 3: Design and Verify
 - You **MUST** draft the approach from synthesized findings, compare viable alternatives briefly, then choose one.
-- You **SHOULD** stress-test dependencies, edge cases, and parallel safety before locking the plan.
+- You **SHOULD** stress-test dependencies, edge cases, parallel safety, and verification independence before locking the plan.
 ### Phase 4: Update Plan
 - You **MUST** update the active plan artifact incrementally as findings evolve.
-- The final plan **MUST** include recommended approach, critical file paths, verification strategy, and explicit `(P)` labels for safe parallel tasks.
+- The final plan **MUST** use parallel-first decomposition inside each phase, include explicit unit dependencies, document safety verification, and mark only proven-safe units with `(P)`.
 {{/when}}
 
 {{#when mode "==" "ask"}}

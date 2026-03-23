@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, mock, vi } from "bun:test";
-import { EventEmitter } from "node:events";
-import * as childProcess from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import * as readlinePromises from "node:readline/promises";
-import type { Interface as ReadlineInterface } from "node:readline/promises";
+import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import type { FileHandle } from "node:fs/promises";
+import type { Interface as ReadlineInterface } from "node:readline/promises";
+import * as readlinePromises from "node:readline/promises";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import type { InteractiveModeContext } from "../../modes/types";
 
@@ -80,13 +80,13 @@ function createFixture(): LazygitFixture {
 	const showWarningSpy = vi.fn();
 	let resolveTtyClose: (() => void) | null = null;
 	const ttyCloseSpy = vi.fn(async () => {
-		await new Promise<void>((resolve) => {
+		await new Promise<void>(resolve => {
 			resolveTtyClose = resolve;
 		});
 	});
 	const ttyHandle = { fd: 77, close: ttyCloseSpy } as unknown as FileHandle;
 	let resolveTerminalHandle: ((handle: FileHandle | null) => void) | null = null;
-	const terminalHandlePromise = new Promise<FileHandle | null>((resolve) => {
+	const terminalHandlePromise = new Promise<FileHandle | null>(resolve => {
 		resolveTerminalHandle = resolve;
 	});
 
@@ -121,15 +121,11 @@ async function waitFor(condition: () => boolean, timeoutMs = 100): Promise<void>
 		if (Date.now() > deadline) {
 			throw new Error("Timed out waiting for async test condition");
 		}
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise(resolve => setTimeout(resolve, 0));
 	}
 }
 
-function createKeyHandlerFixture(
-	lazygitKeys: string[],
-	externalEditorKeys: string[],
-	sttKeys: string[] = [],
-) {
+function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: string[], sttKeys: string[] = []) {
 	const customHandlers = new Map<string, () => unknown>();
 	const setCustomKeyHandlerSpy = vi.fn((key: string, handler: () => unknown) => {
 		customHandlers.set(key, handler);
@@ -195,6 +191,7 @@ function createSubmitInterceptFixture() {
 	const editorAddToHistorySpy = vi.fn();
 	const sessionPromptSpy = vi.fn(async () => undefined);
 	const showStatusSpy = vi.fn();
+	const openResumeModalSpy = vi.fn(async () => undefined);
 	const editor = {
 		setText: editorSetTextSpy,
 		addToHistory: editorAddToHistorySpy,
@@ -215,6 +212,7 @@ function createSubmitInterceptFixture() {
 		ui: { requestRender: vi.fn() },
 		showStatus: showStatusSpy,
 		showWarning: vi.fn(),
+		openResumeModal: openResumeModalSpy,
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	const openLazygitSpy = vi.spyOn(controller, "openLazygit").mockResolvedValue();
@@ -223,6 +221,7 @@ function createSubmitInterceptFixture() {
 	return {
 		openLazygitSpy,
 		toggleSTTSpy,
+		openResumeModalSpy,
 		showStatusSpy,
 		editorSetTextSpy,
 		editorAddToHistorySpy,
@@ -306,9 +305,7 @@ describe("InputController openLazygit", () => {
 		fixture.releaseTerminalHandle();
 		await waitFor(() => spawnMock.mock.calls.length === 1);
 		expect(fixture.uiStopSpy).toHaveBeenCalledTimes(1);
-		expect(fixture.uiStopSpy.mock.invocationCallOrder[0]).toBeLessThan(
-			spawnMock.mock.invocationCallOrder[0],
-		);
+		expect(fixture.uiStopSpy.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
 
 		const [command, args, options] = spawnMock.mock.calls[0] as [
 			string,
@@ -361,9 +358,7 @@ describe("InputController openLazygit", () => {
 		expect(fixture.uiStartSpy).toHaveBeenCalledTimes(1);
 		expect(fixture.uiRequestRenderSpy).toHaveBeenCalledTimes(1);
 		expect(didResolve).toBe(true);
-		expect(spawnMock.mock.invocationCallOrder[0]).toBeLessThan(
-			fixture.uiStartSpy.mock.invocationCallOrder[0],
-		);
+		expect(spawnMock.mock.invocationCallOrder[0]).toBeLessThan(fixture.uiStartSpy.mock.invocationCallOrder[0]);
 		expect(fixture.uiStartSpy.mock.invocationCallOrder[0]).toBeLessThan(
 			fixture.uiRequestRenderSpy.mock.invocationCallOrder[0],
 		);
@@ -493,6 +488,30 @@ describe("InputController shortcut and submit wiring", () => {
 		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
 	});
 
+	it("intercepts typed /resume before streaming prompt dispatch", async () => {
+		const fixture = createSubmitInterceptFixture();
+		await fixture.submit("/resume");
+
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.openResumeModalSpy).toHaveBeenCalledTimes(1);
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+
+	it("treats typed deprecated resume alias as normal streaming input", async () => {
+		const fixture = createSubmitInterceptFixture();
+		const deprecatedResumeCommand = "/resume" + "-ui";
+		await fixture.submit(deprecatedResumeCommand);
+
+		expect(fixture.openResumeModalSpy).not.toHaveBeenCalled();
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.editorAddToHistorySpy).toHaveBeenCalledWith(deprecatedResumeCommand);
+		expect(fixture.sessionPromptSpy).toHaveBeenCalledWith(deprecatedResumeCommand, {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
+	});
+
 	it("intercepts typed /stt before streaming prompt dispatch", async () => {
 		const fixture = createSubmitInterceptFixture();
 		await fixture.submit("/stt");
@@ -535,8 +554,6 @@ describe("InputController shortcut and submit wiring", () => {
 
 		expect(fixture.sessionPromptSpy).toHaveBeenCalledWith("/unknown-workflow-action");
 	});
-
-
 });
 
 describe("InputController lazygit installation flow", () => {
@@ -550,7 +567,7 @@ describe("InputController lazygit installation flow", () => {
 		expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
 		expect(fixture.uiStopSpy).not.toHaveBeenCalled();
 		expect(fixture.showWarningSpy).toHaveBeenCalledWith(
-			"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation"
+			"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation",
 		);
 	});
 
@@ -559,7 +576,7 @@ describe("InputController lazygit installation flow", () => {
 		vi.spyOn(Bun, "which").mockReturnValue(null);
 		setProcessPlatform("linux");
 		vi.spyOn(process, "getuid").mockReturnValue(0);
-		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => cmd === "apt" ? "/usr/bin/apt" : null);
+		vi.spyOn(Bun, "which").mockImplementation((cmd: string) => (cmd === "apt" ? "/usr/bin/apt" : null));
 
 		const originalStdinIsTTY = process.stdin.isTTY;
 		const originalStdoutIsTTY = process.stdout.isTTY;
@@ -572,7 +589,7 @@ describe("InputController lazygit installation flow", () => {
 			expect(fixture.controller.openEditorTerminalHandle).not.toHaveBeenCalled();
 			expect(fixture.uiStopSpy).not.toHaveBeenCalled();
 			expect(fixture.showWarningSpy).toHaveBeenCalledWith(
-				"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation"
+				"lazygit not found. Install it: https://github.com/jesseduffield/lazygit#installation",
 			);
 		} finally {
 			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
@@ -676,7 +693,7 @@ describe("InputController lazygit installation flow", () => {
 			expect(fixture.uiRequestRenderSpy).toHaveBeenCalledTimes(1);
 			expect(closeSpy).toHaveBeenCalledTimes(1);
 			expect(fixture.showWarningSpy).toHaveBeenCalledWith(
-				"Failed to install lazygit: Install command exited with code 1"
+				"Failed to install lazygit: Install command exited with code 1",
 			);
 		} finally {
 			Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });

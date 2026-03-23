@@ -392,8 +392,6 @@ describe("resolveModelRoleValue", () => {
 		expect(result.thinkingLevel).toBe(Effort.XHigh);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
-
-
 });
 describe("resolveModelFromString", () => {
 	test("falls back to pattern parsing for provider/model:thinking when strict provider+id miss", () => {

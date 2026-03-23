@@ -13,6 +13,7 @@ export interface SubagentSessionViewerMetadata {
 	subagentId?: string;
 	sessionId?: string;
 	role?: string;
+	delegationChain?: string[];
 	provider?: string;
 	model?: string;
 	tokens?: number;
@@ -127,6 +128,7 @@ export class SubagentSessionViewerComponent implements Component {
 						...content.metadata,
 						agentName: content.metadata.agentName != null ? sanitizeText(content.metadata.agentName) : undefined,
 						role: content.metadata.role != null ? sanitizeText(content.metadata.role) : undefined,
+						delegationChain: sanitizeList(content.metadata.delegationChain),
 						subagentId:
 							content.metadata.subagentId != null ? sanitizeText(content.metadata.subagentId) : undefined,
 						sessionId: content.metadata.sessionId != null ? sanitizeText(content.metadata.sessionId) : undefined,
@@ -293,6 +295,7 @@ export class SubagentSessionViewerComponent implements Component {
 			meta.subagentId ||
 			meta.sessionId ||
 			meta.role ||
+			(meta.delegationChain?.length ?? 0) > 0 ||
 			meta.provider ||
 			meta.model ||
 			meta.tokens != null ||
@@ -311,6 +314,11 @@ export class SubagentSessionViewerComponent implements Component {
 		const titleLabel = ordinal ? `Subagent #${ordinal}` : "Subagent Session";
 		const titleSuffix = meta.agentName ? ` ${theme.fg("text", `· ${meta.agentName}`)}` : "";
 		lines.push(` ${theme.bold(theme.fg("accent", `${titleLabel}${titleSuffix}`))}`);
+		const delegationChain = meta.delegationChain;
+		if (delegationChain && delegationChain.length > 0) {
+			const breadcrumb = delegationChain.join(` ${theme.fg("statusLineSep", "›")} `);
+			lines.push(` ${theme.fg("dim", "Delegation")} ${theme.fg("text", breadcrumb)}`);
+		}
 		if (meta.subagentId) {
 			lines.push(` ${theme.fg("dim", "Subagent ID")} ${theme.fg("text", meta.subagentId)}`);
 		}
@@ -342,16 +350,18 @@ export class SubagentSessionViewerComponent implements Component {
 			lines.push(` ${stats.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}
 		const toolCount = meta.toolNames?.length ?? 0;
-		if (toolCount > 0 || (meta.mcpServers?.length ?? 0) > 0 || (meta.mcpAllowlist?.length ?? 0) > 0) {
+		const usedMcpServers = meta.mcpServers ?? [];
+		const configuredMcpAllowlist = meta.mcpAllowlist ?? [];
+		if (toolCount > 0 || usedMcpServers.length > 0 || configuredMcpAllowlist.length > 0) {
 			const detailParts: string[] = [];
 			if (toolCount > 0) {
 				detailParts.push(`${theme.fg("dim", "Tools")} ${theme.fg("text", String(toolCount))}`);
 			}
-			if (meta.mcpServers?.length) {
-				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(meta.mcpServers))}`);
+			if (usedMcpServers.length > 0) {
+				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(usedMcpServers))}`);
 			}
-			if (meta.mcpAllowlist?.length) {
-				detailParts.push(`${theme.fg("dim", "Allowlist")} ${theme.fg("text", formatList(meta.mcpAllowlist))}`);
+			if (configuredMcpAllowlist.length > 0) {
+				detailParts.push(`${theme.fg("dim", "Allowed MCP")} ${theme.fg("text", formatList(configuredMcpAllowlist))}`);
 			}
 			lines.push(` ${detailParts.join(` ${theme.fg("statusLineSep", theme.sep.dot)} `)}`);
 		}

@@ -12,14 +12,15 @@ function createContext(options?: { runningJobs?: number; loadingAnimation?: unkn
 		model: defaultModel,
 		resolveRoleModel: vi.fn((role: string) => {
 			if (role === "ask") return { provider: "anthropic", id: "ask-model", name: "Ask Model" };
-			if (role === "orchestrator") return { provider: "anthropic", id: "orchestrator-model", name: "Orchestrator Model" };
+			if (role === "orchestrator")
+				return { provider: "anthropic", id: "orchestrator-model", name: "Orchestrator Model" };
 			if (role === "plan") return { provider: "anthropic", id: "plan-model", name: "Plan Model" };
 			return defaultModel;
 		}),
 		cancelRunningAsyncJobs: vi.fn(() => runningJobs),
 		getAsyncJobSnapshot: vi.fn(() => ({
 			running: Array.from({ length: runningJobs }, (_, index) => ({
-				id: `job-${index + 1}` ,
+				id: `job-${index + 1}`,
 				type: "task",
 				status: "running",
 				label: `job-${index + 1}`,

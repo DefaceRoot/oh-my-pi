@@ -10,6 +10,7 @@ const SUBAGENT_MODEL_ROLES = new Set<ModelRole>([
 	"research",
 	"verifier",
 	"designer",
+	"debug",
 	"grafana",
 	"worktree-setup",
 	"code-reviewer",

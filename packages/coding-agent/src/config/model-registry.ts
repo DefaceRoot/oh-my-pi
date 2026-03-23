@@ -51,48 +51,55 @@ export type ModelRole =
 	| "research"
 	| "verifier"
 	| "designer"
+	| "debug"
 	| "grafana"
 	| "worktree-setup"
 	| "code-reviewer"
 	| "plan-verifier"
 	| "coderabbit";
 
+export type ModelRoleCategory = "core" | "captain" | "crew";
+
 export interface ModelRoleInfo {
 	tag?: string;
 	name: string;
 	description?: string;
 	color?: ThemeColor;
+	category: ModelRoleCategory;
 }
 
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
-	default: { tag: "DEFAULT", name: "Default", color: "success" },
+	default: { tag: "DEFAULT", name: "Default", color: "success", category: "core" },
 	ask: {
 		tag: "ASK",
 		name: "Ask Agent",
 		description: "Model for Ask Agent (read-only research mode)",
 		color: "accent",
+		category: "core",
 	},
-	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent" },
-	plan: { tag: "PLAN", name: "Architect", color: "muted" },
-	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
-	implement: { tag: "IMPL", name: "Implementation Agent", color: "error" },
-	explore: { tag: "EXPLORE", name: "Explore", color: "warning" },
-	lint: { tag: "LINT", name: "Lint", color: "muted" },
-	merge: { tag: "MERGE", name: "Merge", color: "warning" },
-	curator: { tag: "CURATE", name: "Curator", color: "muted" },
-	research: { tag: "RESEARCH", name: "Research", color: "accent" },
-	verifier: { tag: "VERIFY", name: "Verifier", color: "muted" },
-	designer: { tag: "DESIGN", name: "Frontend", color: "accent" },
+	orchestrator: { tag: "ORCHESTRATOR", name: "Orchestrator", color: "accent", category: "core" },
+	plan: { tag: "PLAN", name: "Architect", color: "muted", category: "core" },
+	commit: { tag: "COMMIT", name: "Commit", color: "dim", category: "crew" },
+	implement: { tag: "IMPL", name: "Implementation Agent", color: "error", category: "captain" },
+	explore: { tag: "EXPLORE", name: "Explore", color: "warning", category: "crew" },
+	lint: { tag: "LINT", name: "Lint", color: "muted", category: "crew" },
+	merge: { tag: "MERGE", name: "Merge", color: "warning", category: "crew" },
+	curator: { tag: "CURATE", name: "Curator", color: "muted", category: "crew" },
+	research: { tag: "RESEARCH", name: "Research", color: "accent", category: "crew" },
+	verifier: { tag: "VERIFY", name: "Verifier", color: "muted", category: "crew" },
+	designer: { tag: "DESIGN", name: "Frontend", color: "accent", category: "captain" },
+	debug: { tag: "DEBUG", name: "Debug", color: "error", category: "captain" },
 	grafana: {
 		tag: "GRAFANA",
 		name: "Grafana",
 		description: "Model for Grafana monitoring subagent",
 		color: "warning",
+		category: "crew",
 	},
-	"worktree-setup": { tag: "WORKTREE", name: "Worktree Setup", color: "warning" },
-	"code-reviewer": { tag: "REVIEW", name: "Code Reviewer", color: "muted" },
-	"plan-verifier": { tag: "PLANCHK", name: "Plan Verifier", color: "muted" },
-	coderabbit: { tag: "RABBIT", name: "CodeRabbit", color: "accent" },
+	"worktree-setup": { tag: "WORKTREE", name: "Worktree Setup", color: "warning", category: "crew" },
+	"code-reviewer": { tag: "REVIEW", name: "Code Reviewer", color: "muted", category: "crew" },
+	"plan-verifier": { tag: "PLANCHK", name: "Plan Verifier", color: "muted", category: "crew" },
+	coderabbit: { tag: "RABBIT", name: "CodeRabbit", color: "accent", category: "crew" },
 };
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
@@ -109,12 +116,30 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"research",
 	"verifier",
 	"designer",
+	"debug",
 	"grafana",
 	"worktree-setup",
 	"code-reviewer",
 	"plan-verifier",
 	"coderabbit",
 ];
+
+export const MODEL_ROLE_CATEGORIES: Record<
+	ModelRoleCategory,
+	{ label: string; description: string; color: ThemeColor }
+> = {
+	core: { label: "Core", description: "User-facing mode agents", color: "success" },
+	captain: { label: "Captains", description: "Domain specialists that delegate", color: "accent" },
+	crew: { label: "Crew", description: "Focused single-purpose agents", color: "muted" },
+};
+
+export const MODEL_ROLE_IDS_BY_CATEGORY: Record<ModelRoleCategory, ModelRole[]> = (() => {
+	const grouped: Record<ModelRoleCategory, ModelRole[]> = { core: [], captain: [], crew: [] };
+	for (const role of MODEL_ROLE_IDS) {
+		grouped[MODEL_ROLES[role].category].push(role);
+	}
+	return grouped;
+})();
 
 const OpenRouterRoutingSchema = Type.Object({
 	only: Type.Optional(Type.Array(Type.String())),

@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 type HandlerMap = Map<string, Array<(event: any, ctx: any) => any>>;
 
-const hadOriginalEnvAgentDir = Object.prototype.hasOwnProperty.call(process.env, "PI_CODING_AGENT_DIR");
+const hadOriginalEnvAgentDir = Object.hasOwn(process.env, "PI_CODING_AGENT_DIR");
 const originalEnvAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalResolvedAgentDir = getAgentDir();
 
@@ -111,5 +111,25 @@ describe("Phase 7 RED: mcp-filter roles config source of truth", () => {
 			block: true,
 			reason: "MCP tools are not available for this agent role.",
 		});
+	});
+
+	it("uses subagent _default MCP allowlist for unmatched subagent prompts", async () => {
+		const handlers = await createRegisteredHandlers();
+		await runBeforeAgentStart(
+			handlers,
+			"BASE SYSTEM PROMPT\nYou are operating on a delegated sub-task.\nUNKNOWN SUBAGENT PAYLOAD",
+		);
+
+		const toolCall = handlers.get("tool_call")?.[0];
+		if (!toolCall) throw new Error("tool_call handler not registered");
+
+		const chromeResult = await toolCall({ toolName: "mcp_chrome_devtools_click" }, {});
+		expect(chromeResult).toEqual({
+			block: true,
+			reason: "This MCP tool is not available for this agent role.",
+		});
+
+		const augmentResult = await toolCall({ toolName: "mcp_augment_codebase_retrieval" }, {});
+		expect(augmentResult).toBeUndefined();
 	});
 });

@@ -27,8 +27,27 @@ type FilesystemRef = {
 
 const TRANSCRIPT_BOOTSTRAP_BYTES = 16 * 1024;
 
+type ParsedDelegationSidecar = {
+	taskId: string;
+	taskTitle?: string;
+	taskIntent?: string;
+	planPath?: string;
+	branch?: string;
+	repoRoot?: string;
+	worktreePath?: string;
+	delegatorRole?: string;
+	delegateRole?: string;
+	inputProfile?: string;
+	envelopeId?: string;
+	parentEnvelopeId?: string;
+	retryAttempt?: number;
+	qualityWarnings?: string[];
+	qualityErrors?: string[];
+};
+
 type ScanArtifactsResult = {
 	entries: Map<string, FilesystemRef>;
+	sidecars?: Map<string, ParsedDelegationSidecar[]>;
 	artifactsRoot?: string;
 };
 
@@ -45,6 +64,7 @@ export class SubagentIndex {
 	#filesystemRefs = new Map<string, FilesystemRef>();
 	#seenOrder = 0;
 	#reconcileToken = 0;
+	#delegationSidecars = new Map<string, ParsedDelegationSidecar[]>();
 
 	constructor(options: SubagentIndexOptions) {
 		this.#artifactsDir = options.artifactsDir;
@@ -68,12 +88,13 @@ export class SubagentIndex {
 
 	async reconcile(): Promise<SubagentIndexSnapshot> {
 		const token = ++this.#reconcileToken;
-		const { entries, artifactsRoot } = await this.scanArtifacts();
+		const { entries, sidecars, artifactsRoot } = await this.scanArtifacts();
 		if (token !== this.#reconcileToken) {
 			return this.#snapshot;
 		}
 
 		this.#filesystemRefs = entries;
+		this.#delegationSidecars = sidecars ?? new Map();
 		this.#artifactsRootRealpath = artifactsRoot;
 		return this.#rebuildSnapshot();
 	}
@@ -97,16 +118,21 @@ export class SubagentIndex {
 
 	protected async scanArtifacts(): Promise<ScanArtifactsResult> {
 		const entries = new Map<string, FilesystemRef>();
+		const sidecars = new Map<string, ParsedDelegationSidecar[]>();
 		const artifactsRoot = await this.#resolveArtifactsRootRealpath();
 		if (!artifactsRoot) {
-			return { entries };
+			return { entries, sidecars };
 		}
 
-		await this.#walkArtifactsTree(artifactsRoot, entries);
-		return { entries, artifactsRoot };
+		await this.#walkArtifactsTree(artifactsRoot, entries, sidecars);
+		return { entries, sidecars, artifactsRoot };
 	}
 
-	async #walkArtifactsTree(currentDir: string, entries: Map<string, FilesystemRef>): Promise<void> {
+	async #walkArtifactsTree(
+		currentDir: string,
+		entries: Map<string, FilesystemRef>,
+		sidecars: Map<string, ParsedDelegationSidecar[]>,
+	): Promise<void> {
 		let dirEntries: Dirent[] = [];
 		try {
 			dirEntries = await fs.readdir(currentDir, { withFileTypes: true });
@@ -121,13 +147,23 @@ export class SubagentIndex {
 		}
 
 		dirEntries.sort((left, right) => left.name.localeCompare(right.name));
+		const sidecarPaths: string[] = [];
 		for (const dirent of dirEntries) {
 			const absolutePath = path.join(currentDir, dirent.name);
 			if (dirent.isDirectory()) {
-				await this.#walkArtifactsTree(absolutePath, entries);
+				await this.#walkArtifactsTree(absolutePath, entries, sidecars);
 				continue;
 			}
-			if (!dirent.isFile() || !dirent.name.endsWith(".jsonl")) {
+			if (!dirent.isFile()) {
+				continue;
+			}
+
+			if (dirent.name.endsWith("-delegation-meta.json")) {
+				sidecarPaths.push(absolutePath);
+				continue;
+			}
+
+			if (!dirent.name.endsWith(".jsonl")) {
 				continue;
 			}
 
@@ -163,6 +199,16 @@ export class SubagentIndex {
 				model: metadata.model,
 			};
 			this.#upsertFilesystemRef(entries, candidate);
+		}
+
+		// Read delegation sidecars discovered in this directory
+		if (sidecarPaths.length > 0) {
+			const results = await Promise.all(sidecarPaths.map(p => this.#readDelegationSidecar(p)));
+			const valid = results.filter((s): s is ParsedDelegationSidecar => s !== undefined);
+			if (valid.length > 0) {
+				const existing = sidecars.get(currentDir) ?? [];
+				sidecars.set(currentDir, [...existing, ...valid]);
+			}
 		}
 	}
 
@@ -293,6 +339,37 @@ export class SubagentIndex {
 		if (explicitTokens !== undefined || usageTokens !== undefined) {
 			existing.tokens = explicitTokens ?? usageTokens;
 		}
+		// Token breakdown and cost from usage record
+		if (record.usage && typeof record.usage === "object") {
+			const usageRecord = record.usage as Record<string, unknown>;
+			const inputTokens =
+				this.#readNumber(usageRecord.input) ??
+				this.#readNumber(usageRecord.input_tokens) ??
+				this.#readNumber(usageRecord.inputTokens);
+			if (inputTokens !== undefined) existing.inputTokens = inputTokens;
+			const outputTokens =
+				this.#readNumber(usageRecord.output) ??
+				this.#readNumber(usageRecord.output_tokens) ??
+				this.#readNumber(usageRecord.outputTokens);
+			if (outputTokens !== undefined) existing.outputTokens = outputTokens;
+			const cacheReadTokens =
+				this.#readNumber(usageRecord.cacheRead) ??
+				this.#readNumber(usageRecord.cache_read) ??
+				this.#readNumber(usageRecord.cacheReadTokens) ??
+				this.#readNumber(usageRecord.cache_read_tokens);
+			if (cacheReadTokens !== undefined) existing.cacheReadTokens = cacheReadTokens;
+			const cacheWriteTokens =
+				this.#readNumber(usageRecord.cacheWrite) ??
+				this.#readNumber(usageRecord.cache_write) ??
+				this.#readNumber(usageRecord.cacheWriteTokens) ??
+				this.#readNumber(usageRecord.cache_write_tokens);
+			if (cacheWriteTokens !== undefined) existing.cacheWriteTokens = cacheWriteTokens;
+			const costObj = usageRecord.cost;
+			if (costObj && typeof costObj === "object") {
+				const costTotal = this.#readNumber((costObj as Record<string, unknown>).total);
+				if (costTotal !== undefined && costTotal > 0) existing.costUsd = costTotal;
+			}
+		}
 
 		const task = this.#readString(record.task) ?? "";
 		const contextPreview = extractTaskContextPreview(task);
@@ -378,6 +455,11 @@ export class SubagentIndex {
 				status: taskRef.status ?? base.status,
 				// Numeric fields need explicit undefined checks (0 is valid)
 				tokens: taskRef.tokens !== undefined ? taskRef.tokens : base.tokens,
+				inputTokens: taskRef.inputTokens !== undefined ? taskRef.inputTokens : base.inputTokens,
+				outputTokens: taskRef.outputTokens !== undefined ? taskRef.outputTokens : base.outputTokens,
+				cacheReadTokens: taskRef.cacheReadTokens !== undefined ? taskRef.cacheReadTokens : base.cacheReadTokens,
+				cacheWriteTokens: taskRef.cacheWriteTokens !== undefined ? taskRef.cacheWriteTokens : base.cacheWriteTokens,
+				costUsd: taskRef.costUsd !== undefined ? taskRef.costUsd : base.costUsd,
 				contextPreview: taskRef.contextPreview ?? base.contextPreview,
 				assignmentPreview: taskRef.assignmentPreview ?? base.assignmentPreview,
 				thinkingLevel: taskRef.thinkingLevel ?? base.thinkingLevel,
@@ -456,6 +538,7 @@ export class SubagentIndex {
 		next.parentId ??= hierarchy.parentId;
 		next.depth ??= hierarchy.depth;
 		next.status ??= next.sessionPath || next.outputPath ? "completed" : "pending";
+		this.#applyDelegationSidecar(next);
 		return next;
 	}
 
@@ -747,5 +830,79 @@ export class SubagentIndex {
 					: undefined,
 			)
 		);
+	}
+
+	// ─── Delegation sidecar discovery ────────────────────────────────────
+
+	async #readDelegationSidecar(filePath: string): Promise<ParsedDelegationSidecar | undefined> {
+		try {
+			const content = await fs.readFile(filePath, "utf8");
+			const data = JSON.parse(content);
+			if (!data || typeof data !== "object") return undefined;
+			const taskId = this.#readString(data.task?.id);
+			if (!taskId) return undefined;
+			return {
+				taskId,
+				taskTitle: this.#readString(data.task?.title),
+				taskIntent: this.#readString(data.task?.intent),
+				planPath: this.#readString(data.context?.plan_path),
+				branch: this.#readString(data.context?.git?.branch),
+				repoRoot: this.#readString(data.context?.repo_root),
+				worktreePath: this.#readString(data.context?.worktree?.path),
+				delegatorRole: this.#readString(data.roles?.delegator),
+				delegateRole: this.#readString(data.roles?.delegate),
+				inputProfile: this.#readString(data.input_policy?.mode),
+				envelopeId: this.#readString(data.envelope?.id),
+				parentEnvelopeId: this.#readString(data.envelope?.parent_envelope_id),
+				retryAttempt: this.#readNumber(data.retry_context?.attempt),
+				qualityWarnings: this.#readStringArray(data.quality_report?.warnings),
+				qualityErrors: this.#readStringArray(data.quality_report?.errors),
+			};
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Extract the original task item ID from a subagent unique ID.
+	 * Unique IDs follow the format `<seqNo>-<taskItemId>` (top-level)
+	 * or `<parent>.<seqNo>-<taskItemId>` (nested).
+	 */
+	#extractTaskItemId(refId: string): string | undefined {
+		const segments = refId.split(".");
+		const leaf = segments[segments.length - 1];
+		if (!leaf) return undefined;
+		const match = leaf.match(/^\d+-(.+)$/);
+		return match?.[1];
+	}
+
+	#lookupDelegationSidecar(ref: SubagentViewRef): ParsedDelegationSidecar | undefined {
+		const sessionDir = ref.sessionPath ? path.dirname(ref.sessionPath) : undefined;
+		if (!sessionDir) return undefined;
+		const taskItemId = this.#extractTaskItemId(ref.id);
+		if (!taskItemId) return undefined;
+		const sidecarsInDir = this.#delegationSidecars.get(sessionDir);
+		if (!sidecarsInDir) return undefined;
+		return sidecarsInDir.find(sc => sc.taskId === taskItemId);
+	}
+
+	#applyDelegationSidecar(ref: SubagentViewRef): void {
+		const sidecar = this.#lookupDelegationSidecar(ref);
+		if (!sidecar) return;
+		ref.taskId ??= sidecar.taskId;
+		ref.taskTitle ??= sidecar.taskTitle;
+		ref.taskIntent ??= sidecar.taskIntent;
+		ref.planPath ??= sidecar.planPath;
+		ref.branch ??= sidecar.branch;
+		ref.repoRoot ??= sidecar.repoRoot;
+		ref.worktreePath ??= sidecar.worktreePath;
+		ref.delegatorRole ??= sidecar.delegatorRole;
+		ref.delegateRole ??= sidecar.delegateRole;
+		ref.inputProfile ??= sidecar.inputProfile;
+		ref.envelopeId ??= sidecar.envelopeId;
+		ref.parentEnvelopeId ??= sidecar.parentEnvelopeId;
+		ref.retryAttempt ??= sidecar.retryAttempt;
+		ref.qualityWarnings ??= sidecar.qualityWarnings;
+		ref.qualityErrors ??= sidecar.qualityErrors;
 	}
 }

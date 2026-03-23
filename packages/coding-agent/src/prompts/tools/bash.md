@@ -1,7 +1,7 @@
 Execute shell commands for terminal tasks (git, package managers, builds, runtime commands).
 
 <instruction>
-- Always set working directory with `cwd` (do not `cd ... && ...`).
+- Always set working directory with `cwd` (do not `cd … && …`).
 - Use `pty: true` only for commands requiring an interactive terminal.
 - Chain with `;` only when later commands should run even if earlier ones fail.
 - `skill://` and internal URIs auto-resolve to filesystem paths.

@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils";
-import { OMP_FORK_BUILD_ID } from "./build-info";
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
 import { type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
+import { OMP_FORK_BUILD_ID } from "./build-info";
 
 function parseSemver(version: string): [number, number, number] {
 	function toint(value: string): number {

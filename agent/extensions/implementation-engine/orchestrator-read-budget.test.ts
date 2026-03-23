@@ -30,12 +30,13 @@ describe("OrchestratorReadBudget", () => {
 			}
 		});
 
-		test("protocol URLs are always free (skill://, memory://, rule://, plan://)", () => {
+		test("protocol URLs are always free (skill://, memory://, rule://, plan://, agent://)", () => {
 			for (let i = 0; i < 5; i++) budget.tryRead(`/path/file${i}.ts`);
 			expect(budget.tryRead("skill://brainstorming")).toEqual({ allowed: true });
 			expect(budget.tryRead("memory://root/memory_summary.md")).toEqual({ allowed: true });
 			expect(budget.tryRead("rule://implementation-engine")).toEqual({ allowed: true });
 			expect(budget.tryRead("plan://something")).toEqual({ allowed: true });
+			expect(budget.tryRead("agent://del_123/result")).toEqual({ allowed: true });
 		});
 
 		test("budget applies identically with or without worktree path", () => {
@@ -76,6 +77,7 @@ describe("OrchestratorReadBudget", () => {
 			budget.tryRead("/extra1.ts");
 			budget.tryRead("/extra2.ts");
 			expect(budget.tryRead("skill://something")).toEqual({ allowed: true });
+			expect(budget.tryRead("agent://del_123/output")).toEqual({ allowed: true });
 		});
 	});
 
