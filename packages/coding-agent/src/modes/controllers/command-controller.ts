@@ -35,6 +35,14 @@ import { replaceTabs } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { openPath } from "../../utils/open";
 
+class BreakingChangeInspectionCancelledError extends Error {
+	constructor() {
+		super("Breaking change inspection cancelled");
+		this.name = "BreakingChangeInspectionCancelledError";
+	}
+}
+
+
 export class CommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
@@ -794,11 +802,122 @@ export class CommandController {
 		}
 	}
 
+	private async detectUpstreamBreakingChanges(worktreePath: string, upstreamRef: string): Promise<{
+		breakingCommits: Array<{ hash: string; subject: string; body: string }>;
+		significantFileChanges: Array<{ file: string; changeType: string }>;
+	}> {
+		const result: {
+			breakingCommits: Array<{ hash: string; subject: string; body: string }>;
+			significantFileChanges: Array<{ file: string; changeType: string }>;
+		} = {
+			breakingCommits: [],
+			significantFileChanges: [],
+		};
+
+		const breakingChangeWarning = "Could not inspect upstream commit messages for breaking changes. Continuing merge setup.";
+
+		const upstreamLog = await this.runBashCommand(
+			`cd ${worktreePath} && git log --pretty=format:"%H|||%s|||%b" HEAD..${upstreamRef}`,
+			false,
+		);
+
+		const parsedCommits: Array<{ hash: string; subject: string; body: string }> = [];
+		if (!upstreamLog) {
+			this.ctx.showWarning(breakingChangeWarning);
+		} else if (upstreamLog.cancelled) {
+			throw new BreakingChangeInspectionCancelledError();
+		} else if (upstreamLog.exitCode !== 0) {
+			this.ctx.showWarning(breakingChangeWarning);
+		} else {
+			let currentCommit: { hash: string; subject: string; body: string } | undefined;
+			for (const rawLine of upstreamLog.output.split("\n")) {
+				const line = rawLine.replace(/\r$/, "");
+				const commitHeader = line.match(/^([0-9a-f]{40})\|\|\|(.*)$/i);
+				if (commitHeader) {
+					if (currentCommit) {
+						parsedCommits.push({
+							...currentCommit,
+							subject: currentCommit.subject.trim(),
+							body: currentCommit.body.trim(),
+						});
+					}
+					const [, hash, subjectAndBody] = commitHeader;
+					const separatorIndex = subjectAndBody.indexOf("|||");
+					if (separatorIndex >= 0) {
+						currentCommit = {
+							hash,
+							subject: subjectAndBody.slice(0, separatorIndex),
+							body: subjectAndBody.slice(separatorIndex + 3),
+						};
+					} else {
+						currentCommit = { hash, subject: subjectAndBody, body: "" };
+					}
+					continue;
+				}
+				if (!currentCommit) {
+					continue;
+				}
+				currentCommit.body = currentCommit.body.length > 0 ? `${currentCommit.body}\n${line}` : line;
+			}
+			if (currentCommit) {
+				parsedCommits.push({
+					...currentCommit,
+					subject: currentCommit.subject.trim(),
+					body: currentCommit.body.trim(),
+				});
+			}
+		}
+
+		result.breakingCommits = parsedCommits.filter(
+			commit => commit.subject.includes("!:") || /BREAKING(?:-|\s)CHANGE:/.test(commit.body),
+		);
+
+		const deletedFilesResult = await this.runBashCommand(
+			`cd ${worktreePath} && git diff --name-only --diff-filter=D HEAD..${upstreamRef}`,
+			false,
+		);
+		if (deletedFilesResult?.cancelled) {
+			throw new BreakingChangeInspectionCancelledError();
+		}
+		if (deletedFilesResult && deletedFilesResult.exitCode === 0) {
+			result.significantFileChanges.push(
+				...deletedFilesResult.output
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map(file => ({ file, changeType: "DELETED" })),
+			);
+		}
+
+		const renamedFilesResult = await this.runBashCommand(
+			`cd ${worktreePath} && git diff --name-only --diff-filter=R HEAD..${upstreamRef}`,
+			false,
+		);
+		if (renamedFilesResult?.cancelled) {
+			throw new BreakingChangeInspectionCancelledError();
+		}
+		if (renamedFilesResult && renamedFilesResult.exitCode === 0) {
+			result.significantFileChanges.push(
+				...renamedFilesResult.output
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map(file => ({ file, changeType: "RENAMED" })),
+			);
+		}
+
+		return result;
+	}
+
 	private buildMergeWorktreePrompt(params: {
 		mergeBranchName: string;
 		worktreePath: string;
 		newCommitCount: number;
 		conflictingFiles: string[];
+		breakingChanges: {
+			breakingCommits: Array<{ hash: string; subject: string; body: string }>;
+			significantFileChanges: Array<{ file: string; changeType: string }>;
+		};
 	}): string {
 		const conflictLines =
 			params.conflictingFiles.length > 0
@@ -808,6 +927,45 @@ export class CommandController {
 					]
 				: ["Conflicting files: none detected by git merge."];
 
+		const hasBreakingChanges =
+			params.breakingChanges.breakingCommits.length > 0 ||
+			params.breakingChanges.significantFileChanges.length > 0;
+		const displayedBreakingCommits = params.breakingChanges.breakingCommits.slice(0, 10);
+		const breakingCommitLines = displayedBreakingCommits.flatMap(commit => {
+			const lines = [`- ${commit.hash.slice(0, 7)}: ${commit.subject}`];
+			const breakingBodyLine = commit.body
+				.split("\n")
+				.map(line => line.trim())
+				.find(line => /^BREAKING(?:-|\s)CHANGE:/.test(line));
+			if (breakingBodyLine) {
+				lines.push(`  ${breakingBodyLine}`);
+			}
+			return lines;
+		});
+		if (params.breakingChanges.breakingCommits.length > displayedBreakingCommits.length) {
+			breakingCommitLines.push(
+				`... and ${params.breakingChanges.breakingCommits.length - displayedBreakingCommits.length} more breaking changes`,
+			);
+		}
+		const significantFileLines = params.breakingChanges.significantFileChanges.map(
+			change => `- ${change.changeType}: ${change.file}`,
+		);
+
+		const breakingLines = hasBreakingChanges
+			? [
+					"",
+					"Breaking changes from upstream:",
+					...breakingCommitLines,
+					...(significantFileLines.length > 0
+						? [
+								...(breakingCommitLines.length > 0 ? [""] : []),
+								"Significant file changes:",
+								...significantFileLines,
+							]
+						: []),
+				]
+			: [];
+
 		return [
 			"You are in a merge worktree prepared by /merge-omp.",
 			`Merge branch: ${params.mergeBranchName}`,
@@ -815,12 +973,15 @@ export class CommandController {
 			`Upstream commits included: ${params.newCommitCount}`,
 			"",
 			...conflictLines,
+			...breakingLines,
 			"",
 			"Required steps:",
-			"1. Resolve merge conflicts and verify each resolution.",
-			"2. Run lint, typecheck, and tests needed for confidence.",
-			"3. Commit the merge in this worktree when validation is complete.",
-			"4. Merge this branch back into defaceroot/main after review.",
+			"0. Present breaking changes summary to user and confirm approach for each area. Use the ask tool before proceeding.",
+			"1. Delegate conflict resolution to the merge agent with context about conflicting files and upstream breaking changes.",
+			"2. After conflicts are resolved, review each resolution for correctness — especially files affected by breaking changes.",
+			"3. Run lint, typecheck, and tests needed for confidence.",
+			"4. Commit the merge in this worktree when validation is complete.",
+			"5. Merge this branch back into defaceroot/main after review.",
 		].join("\n");
 	}
 
@@ -861,17 +1022,16 @@ export class CommandController {
 			this.ctx.showError("Could not determine the current branch in the fork repository.");
 			return;
 		}
-		const currentBranchName = currentBranch.output.trim() || "main";
-		const upstreamBranchRef = `${FORK_UPSTREAM_REMOTE}/${currentBranchName}`;
-		if (!this.isShellSafeGitRef(upstreamBranchRef)) {
+		const upstreamMergeRef = `${FORK_UPSTREAM_REMOTE}/main`;
+		if (!this.isShellSafeGitRef(upstreamMergeRef)) {
 			this.ctx.showError(
-				`Current branch '${currentBranchName}' contains unsupported shell characters. Rename the branch before running /merge-omp.`,
+				`Upstream ref '${upstreamMergeRef}' contains unsupported shell characters. Check your upstream remote configuration.`,
 			);
 			return;
 		}
 
 		const diffCheck = await this.runBashCommand(
-			`cd ${FORK_REPO_ROOT} && git rev-list --count HEAD..${upstreamBranchRef}`,
+			`cd ${FORK_REPO_ROOT} && git rev-list --count defaceroot/main..${upstreamMergeRef}`,
 			false,
 		);
 		if (!diffCheck || diffCheck.exitCode !== 0) {
@@ -908,7 +1068,7 @@ export class CommandController {
 
 		this.ctx.showStatus("Applying upstream/main into the merge worktree...");
 		const mergeResult = await this.runBashCommand(
-			`cd ${worktreePath} && git merge ${FORK_UPSTREAM_REMOTE}/main --no-commit`,
+			`cd ${worktreePath} && git merge ${upstreamMergeRef} --no-commit`,
 			true,
 		);
 		if (!mergeResult) {
@@ -954,6 +1114,25 @@ export class CommandController {
 			return;
 		}
 
+		const breakingChanges = await this.detectUpstreamBreakingChanges(worktreePath, upstreamMergeRef).catch(error => {
+			if (error instanceof BreakingChangeInspectionCancelledError) {
+				this.ctx.showWarning("Merge cancelled while inspecting upstream breaking changes.");
+				return undefined;
+			}
+			throw error;
+		});
+		if (!breakingChanges) {
+			return;
+		}
+		const deletedFileCount = breakingChanges.significantFileChanges.filter(
+			change => change.changeType === "DELETED",
+		).length;
+		const renamedFileCount = breakingChanges.significantFileChanges.filter(
+			change => change.changeType === "RENAMED",
+		).length;
+		const hasBreakingChanges =
+			breakingChanges.breakingCommits.length > 0 || breakingChanges.significantFileChanges.length > 0;
+
 		const summaryLines = [
 			`Created merge worktree: ${worktreePath}`,
 			`Branch: ${mergeBranchName}`,
@@ -965,6 +1144,21 @@ export class CommandController {
 			`To continue manually: cd ${worktreePath} && omp`,
 			"After validation, merge the worktree branch back into defaceroot/main.",
 		];
+		if (hasBreakingChanges) {
+			summaryLines.push("", "⚠ Breaking changes detected:");
+			const displayedBreakingCommits = breakingChanges.breakingCommits.slice(0, 10);
+			summaryLines.push(
+				...displayedBreakingCommits.map(
+					commit => `  • ${commit.hash.slice(0, 7)} ${commit.subject || "(no subject)"}`,
+				),
+			);
+			if (breakingChanges.breakingCommits.length > displayedBreakingCommits.length) {
+				summaryLines.push(
+					`  ... and ${breakingChanges.breakingCommits.length - displayedBreakingCommits.length} more breaking changes`,
+				);
+			}
+			summaryLines.push(`Deleted files: ${deletedFileCount}`, `Renamed files: ${renamedFileCount}`);
+		}
 		if (conflictingFiles.length > 0) {
 			summaryLines.push("", "Conflicting files:");
 			summaryLines.push(...conflictingFiles.slice(0, 25).map(file => `  - ${file}`));
@@ -995,6 +1189,7 @@ export class CommandController {
 			worktreePath,
 			newCommitCount,
 			conflictingFiles,
+			breakingChanges,
 		});
 		try {
 			this.launchDetachedOmpSession(worktreePath, launchPrompt);

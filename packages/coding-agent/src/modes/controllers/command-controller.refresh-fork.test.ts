@@ -139,11 +139,30 @@ function createContext(results: BashResult[], options?: { confirmResult?: boolea
 	};
 }
 
+type MergeBreakingChanges = {
+	breakingCommits: Array<{ hash: string; subject: string; body: string }>;
+	significantFileChanges: Array<{ file: string; changeType: string }>;
+};
+
+function getBreakingChangeDetector(controller: CommandController): (
+	worktreePath: string,
+	upstreamRef: string,
+) => Promise<MergeBreakingChanges> {
+	return (
+		controller as unknown as {
+			detectUpstreamBreakingChanges: (
+				worktreePath: string,
+				upstreamRef: string,
+			) => Promise<MergeBreakingChanges>;
+		}
+	).detectUpstreamBreakingChanges.bind(controller);
+}
+
 describe("CommandController merge OMP flow", () => {
-	it("creates a merge worktree, merges upstream/main with --no-commit, and can launch omp", async () => {
+	it("creates a merge worktree, merges upstream/main with --no-commit, and can launch omp when no breaking changes are detected", async () => {
 		spawnMock.mockClear();
 		unrefMock.mockClear();
-		const { controller, executeBash, showError, showHookConfirm } = createContext([
+		const { controller, executeBash, showError, showHookConfirm, showStatus } = createContext([
 			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
 			makeBashResult({ exitCode: 0 }),
 			makeBashResult({ exitCode: 0, output: "main\n" }),
@@ -153,6 +172,9 @@ describe("CommandController merge OMP flow", () => {
 			makeBashResult({ exitCode: 0 }),
 			makeBashResult({ exitCode: 0, output: "" }),
 			makeBashResult({ exitCode: 0, output: "src/foo.ts\nsrc/bar.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
 		]);
 
 		await controller.handleMergeUpstreamFork();
@@ -178,6 +200,12 @@ describe("CommandController merge OMP flow", () => {
 			expect.any(Function),
 			{ excludeFromContext: false },
 		);
+		expect(executeBash).toHaveBeenNthCalledWith(
+			10,
+			expect.stringContaining('git log --pretty=format:"%H|||%s|||%b" HEAD..'),
+			expect.any(Function),
+			{ excludeFromContext: false },
+		);
 		expect(showHookConfirm).toHaveBeenCalledWith(
 			"Launch OMP in merge worktree?",
 			expect.stringContaining("Open a new OMP session"),
@@ -192,9 +220,192 @@ describe("CommandController merge OMP flow", () => {
 				stdio: "inherit",
 			}),
 		);
+		const promptArg = spawnMock.mock.calls[0]?.[1]?.[0];
+		expect(typeof promptArg).toBe("string");
+		if (typeof promptArg !== "string") {
+			throw new Error("Expected launch prompt argument.");
+		}
+		expect(promptArg).not.toContain("Breaking changes from upstream:");
+		expect(promptArg).toContain(
+			"0. Present breaking changes summary to user and confirm approach for each area. Use the ask tool before proceeding.",
+		);
+		expect(promptArg).toContain("1. Delegate conflict resolution to the merge agent");
+		expect(showStatus).not.toHaveBeenCalledWith(expect.stringContaining("⚠ Breaking changes detected:"));
 		expect(unrefMock).toHaveBeenCalledTimes(1);
 		expect(showError).not.toHaveBeenCalled();
 	});
+
+	it("uses upstream/main for counting and breaking-change inspection even on non-main branches", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, executeBash, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "feature/auth-migration\n" }),
+			makeBashResult({ exitCode: 0, output: "1\n" }),
+			makeBashResult({ exitCode: 1 }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "src/foo.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(executeBash).toHaveBeenNthCalledWith(
+			4,
+			`cd ${FORK_REPO_ROOT} && git rev-list --count defaceroot/main..${FORK_UPSTREAM_REMOTE}/main`,
+			expect.any(Function),
+			{ excludeFromContext: false },
+		);
+		expect(executeBash).toHaveBeenNthCalledWith(
+			7,
+			expect.stringContaining(`git merge ${FORK_UPSTREAM_REMOTE}/main --no-commit`),
+			expect.any(Function),
+			{ excludeFromContext: true },
+		);
+		expect(executeBash).toHaveBeenNthCalledWith(
+			10,
+			expect.stringContaining(`HEAD..${FORK_UPSTREAM_REMOTE}/main`),
+			expect.any(Function),
+			{ excludeFromContext: false },
+		);
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+
+	it("includes breaking change guidance when upstream has conflicts", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const firstHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const secondHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+		const { controller, showStatus, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "main\n" }),
+			makeBashResult({ exitCode: 0, output: "3\n" }),
+			makeBashResult({ exitCode: 1 }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 1 }),
+			makeBashResult({ exitCode: 0, output: "src/a.ts\nsrc/b.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "src/c.ts\n" }),
+			makeBashResult({
+				exitCode: 0,
+				output:
+					`${firstHash}|||feat!: redesign authentication API|||BREAKING CHANGE: The auth() function signature changed from (token) to (config)\n${secondHash}|||feat: remove legacy database adapter|||BREAKING-CHANGE: PostgresLegacyAdapter has been removed`,
+			}),
+			makeBashResult({ exitCode: 0, output: "src/legacy/postgres-adapter.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "src/auth.ts → src/auth/index.ts\n" }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("⚠ Breaking changes detected:"));
+		expect(showStatus).toHaveBeenCalledWith(
+			expect.stringContaining(`  • ${firstHash.slice(0, 7)} feat!: redesign authentication API`),
+		);
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Deleted files: 1"));
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Renamed files: 1"));
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Conflicting files: 2"));
+
+		const promptArg = spawnMock.mock.calls[0]?.[1]?.[0];
+		expect(typeof promptArg).toBe("string");
+		if (typeof promptArg !== "string") {
+			throw new Error("Expected launch prompt argument.");
+		}
+		expect(promptArg).toContain("Breaking changes from upstream:");
+		expect(promptArg).toContain(`- ${firstHash.slice(0, 7)}: feat!: redesign authentication API`);
+		expect(promptArg).toContain(
+			"BREAKING CHANGE: The auth() function signature changed from (token) to (config)",
+		);
+		expect(promptArg).toContain("Significant file changes:");
+		expect(promptArg).toContain("- DELETED: src/legacy/postgres-adapter.ts");
+		expect(promptArg).toContain("- RENAMED: src/auth.ts → src/auth/index.ts");
+		expect(promptArg).toContain("Use the ask tool before proceeding.");
+		expect(promptArg).toContain("Delegate conflict resolution to the merge agent");
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("detects breaking change markers from commit subject and body", async () => {
+		const firstHash = "cccccccccccccccccccccccccccccccccccccccc";
+		const secondHash = "dddddddddddddddddddddddddddddddddddddddd";
+		const thirdHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+		const { controller, executeBash, showWarning } = createContext([
+			makeBashResult({
+				exitCode: 0,
+				output:
+					`${firstHash}|||feat!: remove legacy auth API|||\n${secondHash}|||feat: tighten auth validation|||Context line\nBREAKING CHANGE: validateAuth now requires options\n${thirdHash}|||fix: update docs|||`,
+			}),
+			makeBashResult({ exitCode: 0, output: "src/legacy/auth.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "src/auth.ts → src/auth/index.ts\n" }),
+		]);
+
+		const detectUpstreamBreakingChanges = getBreakingChangeDetector(controller);
+		const breakingChanges = await detectUpstreamBreakingChanges("/tmp/merge-worktree", "upstream/main");
+
+		expect(executeBash).toHaveBeenNthCalledWith(
+			1,
+			`cd /tmp/merge-worktree && git log --pretty=format:"%H|||%s|||%b" HEAD..upstream/main`,
+			expect.any(Function),
+			{ excludeFromContext: false },
+		);
+		expect(breakingChanges.breakingCommits.map(commit => commit.hash)).toEqual([firstHash, secondHash]);
+		expect(breakingChanges.significantFileChanges).toEqual([
+			{ file: "src/legacy/auth.ts", changeType: "DELETED" },
+			{ file: "src/auth.ts → src/auth/index.ts", changeType: "RENAMED" },
+		]);
+		expect(showWarning).not.toHaveBeenCalled();
+	});
+
+	it("handles git log failure gracefully when checking upstream breaking changes", async () => {
+		const { controller, executeBash, showWarning } = createContext([
+			makeBashResult({ exitCode: 1, output: "fatal: bad revision" }),
+			makeBashResult({ exitCode: 0, output: "src/removed.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "src/old.ts → src/new.ts\n" }),
+		]);
+
+		const detectUpstreamBreakingChanges = getBreakingChangeDetector(controller);
+		const breakingChanges = await detectUpstreamBreakingChanges("/tmp/merge-worktree", "upstream/main");
+
+		expect(showWarning).toHaveBeenCalledWith(
+			expect.stringContaining("Could not inspect upstream commit messages for breaking changes"),
+		);
+		expect(breakingChanges.breakingCommits).toEqual([]);
+		expect(breakingChanges.significantFileChanges).toEqual([
+			{ file: "src/removed.ts", changeType: "DELETED" },
+			{ file: "src/old.ts → src/new.ts", changeType: "RENAMED" },
+		]);
+		expect(executeBash).toHaveBeenCalledTimes(3);
+	});
+
+	it("stops merge flow when breaking change inspection is cancelled", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, showWarning, showHookConfirm, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\nupstream\n" }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "main\n" }),
+			makeBashResult({ exitCode: 0, output: "1\n" }),
+			makeBashResult({ exitCode: 1 }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0 }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "src/merged.ts\n" }),
+			makeBashResult({ exitCode: undefined, cancelled: true }),
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(showWarning).toHaveBeenCalledWith("Merge cancelled while inspecting upstream breaking changes.");
+		expect(showHookConfirm).not.toHaveBeenCalled();
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(unrefMock).not.toHaveBeenCalled();
+		expect(showError).not.toHaveBeenCalled();
+	});
+
 
 	it("shows a clear error when upstream remote is missing", async () => {
 		spawnMock.mockClear();
@@ -242,6 +453,9 @@ describe("CommandController merge OMP flow", () => {
 				makeBashResult({ exitCode: 1 }),
 				makeBashResult({ exitCode: 0, output: "src/a.ts\nsrc/b.ts\n" }),
 				makeBashResult({ exitCode: 0, output: "src/c.ts\n" }),
+				makeBashResult({ exitCode: 0, output: "" }),
+				makeBashResult({ exitCode: 0, output: "" }),
+				makeBashResult({ exitCode: 0, output: "" }),
 			],
 			{ confirmResult: false },
 		);
@@ -305,9 +519,11 @@ describe("CommandController merge OMP flow", () => {
 			makeBashResult({ exitCode: 0 }),
 			makeBashResult({ exitCode: 1 }),
 			makeBashResult({ exitCode: 0 }),
-			makeBashResult({ exitCode: 0 }),
 			makeBashResult({ exitCode: 0, output: "" }),
 			makeBashResult({ exitCode: 0, output: "src/merged.ts\n" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
+			makeBashResult({ exitCode: 0, output: "" }),
 		]);
 
 		await controller.handleMergeUpstreamFork();
