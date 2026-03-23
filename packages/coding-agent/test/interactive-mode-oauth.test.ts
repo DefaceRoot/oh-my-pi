@@ -12,6 +12,7 @@ async function createInteractiveMode(): Promise<InteractiveMode> {
 	const session = {
 		sessionManager: {
 			getSessionName: () => undefined,
+			getSessionFile: () => undefined,
 		},
 		settings: Settings.isolated(),
 		agent: {},
