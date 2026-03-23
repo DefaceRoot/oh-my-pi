@@ -135,7 +135,6 @@ export const TERMINAL_ID: TerminalId = (() => {
 	if (WEZTERM_PANE) return "wezterm";
 	if (ITERM_SESSION_ID) return "iterm2";
 	if (VSCODE_PID) return "vscode";
-	if (ALACRITTY_WINDOW_ID) return "alacritty";
 
 	if (TERM_PROGRAM) {
 		if (caseEq(TERM_PROGRAM, "kitty")) return "kitty";
@@ -145,6 +144,7 @@ export const TERMINAL_ID: TerminalId = (() => {
 		if (caseEq(TERM_PROGRAM, "vscode")) return "vscode";
 		if (caseEq(TERM_PROGRAM, "alacritty")) return "alacritty";
 	}
+	if (ALACRITTY_WINDOW_ID) return "alacritty";
 
 	if (!!TERM && TERM.toLowerCase().includes("ghostty")) return "ghostty";
 
