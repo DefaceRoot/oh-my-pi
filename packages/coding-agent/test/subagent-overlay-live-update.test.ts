@@ -101,6 +101,7 @@ function createModeWithNavigatorOpen(): {
 	mode.showStatus = vi.fn();
 	mode.showWarning = vi.fn();
 	mode.loadMissingTokensForGroups = vi.fn(async () => undefined);
+	mode.subagentIndex = { computeAllEditStats: vi.fn(async () => false) };
 	mode.isInitialized = true;
 
 	// Open the navigator to create the overlay
@@ -260,6 +261,7 @@ describe("overlay live-update: navigator", () => {
 		mode.showStatus = vi.fn();
 		mode.showWarning = vi.fn();
 		mode.loadMissingTokensForGroups = vi.fn(async () => undefined);
+		mode.subagentIndex = { computeAllEditStats: vi.fn(async () => false) };
 		mode.isInitialized = true;
 
 		mode.openSubagentNavigator();

@@ -40,9 +40,9 @@ import {
 	type SessionInitEntry,
 	SessionManager,
 } from "../session/session-manager";
-import { stopSubagentRuntime } from "../task/subagent-runtime-registry";
+import { resumeSubagentRuntime, stopSubagentRuntime } from "../task/subagent-runtime-registry";
 import { buildUserStoppedAbortReason } from "../task/subagent-stop";
-import { TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
+import { TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
@@ -174,6 +174,8 @@ interface LoadedSubagentTranscript {
 	contextFilePath?: string;
 	parentContext?: string;
 	delegationHistory?: string[];
+	/** File edit statistics computed from transcript entries */
+	editStats?: { filesChanged: number; linesAdded: number; linesDeleted: number };
 }
 
 function renderSubagentStatusBadge(): string {
@@ -1798,6 +1800,39 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	private async resumeSubagentSession(ref: SubagentViewRef): Promise<void> {
+		const continueMessage = await this.showHookInput("Continue message (optional)", "Optional message");
+		if (continueMessage === undefined) return;
+
+		let handled = false;
+		this.session.eventBus?.emit(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, {
+			id: ref.id,
+			sessionId: ref.sessionId,
+			sessionPath: ref.sessionPath,
+			respond: (wasHandled: boolean) => {
+				handled = handled || wasHandled;
+			},
+		});
+		if (!handled) {
+			handled = await resumeSubagentRuntime({
+				id: ref.id,
+				sessionId: ref.sessionId,
+				sessionPath: ref.sessionPath,
+			});
+		}
+		if (!handled) {
+			this.showWarning(`Unable to resume subagent '${ref.id}'.`);
+			return;
+		}
+
+		this.showStatus(`Resuming subagent ${ref.id}...`);
+		if (this.subagentViewActiveId === ref.id) {
+			await this.refreshActiveViewerTranscript();
+		} else {
+			this.ui.requestRender();
+		}
+	}
+
 	private markSubagentAsUserStopped(id: string, abortReason: string): void {
 		const now = Date.now();
 		for (const ref of this.subagentSnapshot.refs) {
@@ -2127,6 +2162,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentNavigatorComponent.setGroups(groups, selectionState);
 			this.applySubagentNavigatorSelection(selectionState, groups);
 			void this.loadMissingTokensForGroups(groups);
+			// Background: compute edit stats for completed sessions not yet scanned
+			void this.subagentIndex.computeAllEditStats().then(hasUpdates => {
+				if (!hasUpdates || !this.subagentNavigatorComponent) return;
+				const updatedGroups = this.getSnapshotGroups();
+				this.subagentNavigatorGroups = updatedGroups;
+				this.subagentNavigatorComponent.setGroups(updatedGroups);
+				this.ui.requestRender();
+			});
 		}
 		if (this.subagentSessionViewer && this.subagentViewActiveId) {
 			await this.refreshActiveViewerTranscript();
@@ -2455,9 +2498,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			const lineText = isSelected ? theme.fg("text", line) : theme.fg("dim", line);
 			return ` ${selector} ${lineText}`;
 		});
-		const maxHierarchyLines = 12;
-		const visibleHierarchyLines = hierarchyLines.slice(0, maxHierarchyLines);
-		const hiddenHierarchyCount = Math.max(0, hierarchyLines.length - visibleHierarchyLines.length);
 		const agentLabel = this.getSubagentAgentLabel(resolvedSelectedAgent);
 		const requestedModelMeta = splitSubagentModelLabel(selected.model);
 		const actualModelMeta = splitSubagentModelLabel(transcript.model);
@@ -2503,9 +2543,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.renderSubagentHeaderField("Context", contextLabel),
 			this.renderSubagentHeaderField("Skills", skillsLabel, skillsUsed.length > 0 ? "text" : "muted"),
 			this.renderSubagentHeaderField("Source", shortenPath(transcript.source), "muted"),
-			theme.bold(theme.fg("accent", "Hierarchy")),
-			...visibleHierarchyLines,
-			...(hiddenHierarchyCount > 0 ? [theme.fg("dim", `  … +${hiddenHierarchyCount} more nested subagents`)] : []),
 		];
 		if (!this.subagentSessionViewer) {
 			const viewer = new SubagentSessionViewerComponent({
@@ -2530,6 +2567,15 @@ export class InteractiveMode implements InteractiveModeContext {
 					if (!currentSelection) return;
 					void this.stopSubagentSession(currentSelection);
 				},
+				onResume: () => {
+					const viewerGroups = this.getSnapshotGroups();
+					const viewerGroup = viewerGroups[this.subagentCycleIndex] ?? viewerGroups[0];
+					const currentSelection = viewerGroup
+						? this.getSubagentSelectionRef(viewerGroup, this.subagentNestedCycleIndex)
+						: undefined;
+					if (!currentSelection) return;
+					void this.resumeSubagentSession(currentSelection);
+				},
 			});
 			this.subagentSessionViewer = viewer;
 			this.subagentSessionOverlay = this.ui.showOverlay(viewer, {
@@ -2541,6 +2587,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.subagentSessionViewer.setContent({
 			headerLines,
+			hierarchyLines,
 			renderTranscriptLines: width =>
 				this.renderSubagentTranscriptLines(
 					{
@@ -2569,6 +2616,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				abortReason: selected.abortReason,
 				outcome: selected.outcome,
 				canStop: selected.status === "running" || selected.status === "pending",
+				canResume: (selected.status === "cancelled" || selected.status === "user_stopped") && !!selected.sessionPath,
+				...(transcript.editStats ?? {}),
 			},
 		});
 		this.statusLine.setHookStatus(
@@ -2636,6 +2685,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!details || typeof details !== "object") return undefined;
 		const name = (details as Record<string, unknown>).name;
 		return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
+	}
+
+	private extractSubagentEditStats(
+		entries: SessionEntry[],
+	): { filesChanged: number; linesAdded: number; linesDeleted: number } | undefined {
+		const filePaths = new Set<string>();
+		let linesAdded = 0;
+		let linesDeleted = 0;
+		for (const entry of entries) {
+			if (entry.type !== "message") continue;
+			const msg = entry.message as {
+				role?: string;
+				toolName?: string;
+				content?: Array<{ type: string; text?: string }>;
+			};
+			if (msg.role !== "toolResult") continue;
+			if (msg.toolName !== "edit" && msg.toolName !== "write") continue;
+			const textContent =
+				(msg.content ?? []).find(c => c.type === "text")?.text ?? "";
+			if (msg.toolName === "edit") {
+				const pathMatch = /^Updated\s+(.+?)$/m.exec(textContent);
+				if (pathMatch?.[1]) filePaths.add(pathMatch[1].trim());
+				const changesMatch = /^Changes:\s*\+(\d+)\s+-(\d+)/m.exec(textContent);
+				if (changesMatch) {
+					linesAdded += Number(changesMatch[1]) || 0;
+					linesDeleted += Number(changesMatch[2]) || 0;
+				}
+			} else if (msg.toolName === "write") {
+				const pathMatch = /Successfully wrote\s+\S+\s+to\s+(.+?)$/.exec(textContent);
+				if (pathMatch?.[1]) filePaths.add(pathMatch[1].trim());
+			}
+		}
+		if (filePaths.size === 0) return undefined;
+		return { filesChanged: filePaths.size, linesAdded, linesDeleted };
 	}
 
 	private extractUsedSkillNamesFromEntries(entries: SessionEntry[]): string[] | undefined {
@@ -2894,6 +2977,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					const header = subSession.getHeader();
 					const contextFilePath = this.resolveSubagentContextFilePath(sessionInitEntry?.contextFile);
 					const parentContext = await this.readSubagentContextFile(contextFilePath);
+					const editStats = this.extractSubagentEditStats(entries);
 
 					if (sessionContext.messages.length === 0) {
 						const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
@@ -2913,9 +2997,10 @@ export class InteractiveMode implements InteractiveModeContext {
 							mcpServers: sessionInitEntry?.mcpServers ?? fallback.mcpServers,
 							mcpAllowlist: sessionInitEntry?.mcpAllowlist ?? fallback.mcpAllowlist,
 							contextFilePath: contextFilePath ?? fallback.contextFilePath,
-							parentContext: parentContext ?? (await this.readSubagentContextFile(fallback.contextFilePath)),
-						};
-					}
+						parentContext: parentContext ?? (await this.readSubagentContextFile(fallback.contextFilePath)),
+						...(editStats ? { editStats } : {}),
+					};
+				}
 
 					return {
 						source: ref.sessionPath,
@@ -2933,9 +3018,10 @@ export class InteractiveMode implements InteractiveModeContext {
 						mcpServers: sessionInitEntry?.mcpServers,
 						mcpAllowlist: sessionInitEntry?.mcpAllowlist,
 						contextFilePath,
-						parentContext,
-					};
-				} catch {
+					parentContext,
+					...(editStats ? { editStats } : {}),
+				};
+			} catch {
 					const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
 					return {
 						source: ref.sessionPath,

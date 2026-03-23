@@ -28,6 +28,7 @@ export interface SubagentViewRef {
 	startedAt?: number;
 	elapsedMs?: number;
 	sessionId?: string;
+	parentSessionId?: string;
 	parentAgentName?: string;
 	assignmentPreview?: string;
 	abortReason?: string;
@@ -35,6 +36,11 @@ export interface SubagentViewRef {
 	mcpServers?: string[];
 	mcpAllowlist?: string[];
 	outcome?: SubagentOutcome;
+
+	/** File edit statistics computed from session transcript */
+	filesChanged?: number;
+	linesAdded?: number;
+	linesDeleted?: number;
 
 	/** Delegation metadata — populated from JSON sidecar when available */
 	taskTitle?: string;
