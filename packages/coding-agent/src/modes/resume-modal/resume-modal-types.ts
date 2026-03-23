@@ -90,7 +90,7 @@ export function buildColumnSpec(width: number): ModalColumnSpec {
   const innerWidth = Math.max(1, width - 2); // minus border
   if (mode === "full") {
     const sidebarWidth = Math.min(24, Math.floor(innerWidth * 0.2));
-    const detailWidth = Math.min(30, Math.floor(innerWidth * 0.25));
+    const detailWidth = Math.min(42, Math.floor(innerWidth * 0.28));
     const listWidth = innerWidth - sidebarWidth - detailWidth - 2; // 2 for separators
     return { sidebarWidth, listWidth, detailWidth, showSidebar: true, showDetail: true };
   }
@@ -144,6 +144,20 @@ export function fuzzyMatch(query: string, ...texts: (string | undefined)[]): boo
   return texts.some(t => t?.toLowerCase().includes(lowerQuery));
 }
 
+/** Temp directory prefixes that indicate internal/test sessions */
+const TEMP_SESSION_CWD_PATTERNS = [
+  "/tmp/pi-auto-compaction-",
+  "/tmp/pi-compaction-",
+  "/tmp/pi-handoff-",
+];
+
+/** Check if a session is a temporary/internal session that should be hidden from the resume UI */
+export function isTemporarySession(session: SessionInfo): boolean {
+  if (!session.cwd) return false;
+  const cwd = session.cwd.toLowerCase();
+  return TEMP_SESSION_CWD_PATTERNS.some(pattern => cwd.startsWith(pattern));
+}
+
 /** Enrich raw SessionInfo[] into ResumeSessionEntry[] */
 export function enrichSessions(sessions: SessionInfo[]): ResumeSessionEntry[] {
   const now = Date.now();
@@ -181,14 +195,16 @@ export function buildProjectGroups(
   currentCwd: string,
 ): ProjectGroup[] {
   const groups: ProjectGroup[] = [];
-  Array.from(grouped.entries()).forEach(([projectPath, sessions]) => {
+  for (const [projectPath, sessions] of grouped.entries()) {
+    const enriched = enrichSessions(sessions.filter(s => !isTemporarySession(s)));
+    if (enriched.length === 0) continue;
     groups.push({
       path: projectPath,
       displayName: shortenPath(projectPath),
-      sessions: enrichSessions(sessions),
+      sessions: enriched,
       isCurrentProject: currentCwd.startsWith(projectPath) || projectPath.startsWith(currentCwd),
     });
-  });
+  }
   // Sort: current project first, then by most recent session
   groups.sort((a, b) => {
     if (a.isCurrentProject && !b.isCurrentProject) return -1;
