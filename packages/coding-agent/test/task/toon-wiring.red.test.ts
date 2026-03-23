@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 
@@ -11,6 +12,7 @@ type BuildCall = {
 };
 
 type RunSubprocessCall = {
+	images?: ImageContent[];
 	task?: string;
 	description?: string;
 	[key: string]: unknown;
@@ -105,6 +107,9 @@ const { TaskTool } = await import("@oh-my-pi/pi-coding-agent/task");
 
 class FakeAsyncJobManager {
 	readonly #jobs: Promise<unknown>[] = [];
+	readonly #pendingRuns: Array<() => Promise<unknown>> = [];
+
+	constructor(readonly startImmediately = true) {}
 
 	register(
 		_type: "bash" | "task",
@@ -118,21 +123,32 @@ class FakeAsyncJobManager {
 	): string {
 		const jobId = options?.id ?? `job-${this.#jobs.length + 1}`;
 		const controller = new AbortController();
-		const job = run({
-			jobId,
-			signal: controller.signal,
-			reportProgress: async (text, details) => {
-				await options?.onProgress?.(text, details);
-			},
-		}).catch(() => undefined);
-		this.#jobs.push(job);
+		const start = () =>
+			run({
+				jobId,
+				signal: controller.signal,
+				reportProgress: async (text, details) => {
+					await options?.onProgress?.(text, details);
+				},
+			}).catch(() => undefined);
+		if (this.startImmediately) {
+			this.#jobs.push(start());
+		} else {
+			this.#pendingRuns.push(start);
+		}
 		return jobId;
 	}
 
 	updateProgress(): void {}
 
 	async drain(): Promise<void> {
-		await Promise.all(this.#jobs);
+		const pendingRuns = this.#pendingRuns.splice(0);
+		const pendingJobs = pendingRuns.map(start => {
+			const job = start();
+			this.#jobs.push(job);
+			return job;
+		});
+		await Promise.all([...this.#jobs, ...pendingJobs]);
 	}
 }
 
@@ -165,6 +181,7 @@ function createSession(
 		asyncEnabled: boolean;
 		compactContext?: string;
 		asyncJobManager?: FakeAsyncJobManager;
+		images?: ImageContent[];
 	},
 ): Parameters<typeof TaskTool.create>[0] {
 	return {
@@ -183,6 +200,7 @@ function createSession(
 		getRuntimeRole: () => "implement",
 		getSessionEntries: () => [],
 		getPlanModeState: () => undefined,
+		getLastUserImages: () => options.images,
 		agentOutputManager: {
 			allocateBatch: async (ids: string[]) => ids.map((id, index) => `${index}-${id}`),
 		},
@@ -200,10 +218,12 @@ describe("TaskTool TOON wiring", () => {
 	test("sync execution uses builder TOON and carries inherited parent envelope id", async () => {
 		await withTempDir(async cwd => {
 			const inheritedContext = makeInheritedContext();
+			const images: ImageContent[] = [{ type: "image", data: "Zm9v", mimeType: "image/png" }];
 			const tool = await TaskTool.create(
 				createSession(cwd, {
 					asyncEnabled: false,
 					compactContext: inheritedContext,
+					images,
 				}),
 			);
 
@@ -225,18 +245,21 @@ describe("TaskTool TOON wiring", () => {
 			expect(buildToonCalls[0]?.delegate).toBe("explore");
 			expect(runSubprocessCalls).toHaveLength(1);
 			expect(runSubprocessCalls[0]?.task).toBe(delegatedToon);
+			expect(runSubprocessCalls[0]?.images).toEqual(images);
 		});
 	});
 
 	test("async execution uses builder TOON instead of legacy task shaping", async () => {
 		await withTempDir(async cwd => {
-			const asyncJobManager = new FakeAsyncJobManager();
-			const tool = await TaskTool.create(
-				createSession(cwd, {
-					asyncEnabled: true,
-					asyncJobManager,
-				}),
-			);
+			const asyncJobManager = new FakeAsyncJobManager(false);
+			const images: ImageContent[] = [{ type: "image", data: "YmFy", mimeType: "image/jpeg" }];
+			const laterImages: ImageContent[] = [{ type: "image", data: "cXV4", mimeType: "image/png" }];
+			const sessionState = {
+				asyncEnabled: true,
+				asyncJobManager,
+				images,
+			};
+			const tool = await TaskTool.create(createSession(cwd, sessionState));
 
 			await tool.execute(
 				"async-call",
@@ -256,11 +279,53 @@ describe("TaskTool TOON wiring", () => {
 				() => {},
 			);
 
+			sessionState.images = laterImages;
 			await asyncJobManager.drain();
 
 			expect(buildToonCalls).toHaveLength(1);
 			expect(runSubprocessCalls).toHaveLength(1);
 			expect(runSubprocessCalls[0]?.task).toBe(delegatedToon);
+			expect(runSubprocessCalls[0]?.images).toEqual(images);
+			expect(runSubprocessCalls[0]?.images).not.toEqual(laterImages);
+		});
+	});
+
+	test("async execution preserves empty parent images across delayed start", async () => {
+		await withTempDir(async cwd => {
+			const asyncJobManager = new FakeAsyncJobManager(false);
+			const laterImages: ImageContent[] = [{ type: "image", data: "aW50cnVkZWQ=", mimeType: "image/png" }];
+			const sessionState = {
+				asyncEnabled: true,
+				asyncJobManager,
+				images: undefined as ImageContent[] | undefined,
+			};
+			const tool = await TaskTool.create(createSession(cwd, sessionState));
+
+			await tool.execute(
+				"async-no-images-call",
+				{
+					agent: "explore",
+					context: "Legacy background that should not be rewrapped.",
+					tasks: [
+						{
+							id: "AsyncNoImagesTask",
+							description: "Async path should preserve no-image snapshot",
+							assignment:
+								"Target: render TOON payload.\nChange: pass builder output through.\nEdge Cases: delayed background start after a later image turn.\nAcceptance: subprocess keeps images undefined.",
+						},
+					],
+				},
+				undefined,
+				() => {},
+			);
+
+			sessionState.images = laterImages;
+			await asyncJobManager.drain();
+
+			expect(buildToonCalls).toHaveLength(1);
+			expect(runSubprocessCalls).toHaveLength(1);
+			expect(runSubprocessCalls[0]?.task).toContain("delegation:");
+			expect(runSubprocessCalls[0]?.images).toBeUndefined();
 		});
 	});
 

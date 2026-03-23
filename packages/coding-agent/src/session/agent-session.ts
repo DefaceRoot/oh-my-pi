@@ -1200,6 +1200,18 @@ export class AgentSession {
 		return hasImages ? "[Image]" : "";
 	}
 
+	/** Find the last user message in agent state */
+	#findLastUserMessage(): Message | undefined {
+		const messages = this.agent.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === "user") {
+				return msg;
+			}
+		}
+		return undefined;
+	}
+
 	/** Find the last assistant message in agent state (including aborted ones) */
 	#findLastAssistantMessage(): AssistantMessage | undefined {
 		const messages = this.agent.state.messages;
@@ -1644,6 +1656,16 @@ export class AgentSession {
 	/** Most recent assistant message in agent state. */
 	getLastAssistantMessage(): AssistantMessage | undefined {
 		return this.#findLastAssistantMessage();
+	}
+
+	/** Most recent user images in agent state. */
+	getLastUserImages(): ImageContent[] | undefined {
+		const message = this.#findLastUserMessage();
+		if (!message) return undefined;
+		const content = message.content;
+		if (typeof content === "string") return undefined;
+		const images = content.filter((part): part is ImageContent => part.type === "image");
+		return images.length > 0 ? images : undefined;
 	}
 	/** Current effective system prompt (includes any per-turn extension modifications) */
 	get systemPrompt(): string {

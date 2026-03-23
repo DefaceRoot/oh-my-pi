@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, Effort, type ImageContent } from "@oh-my-pi/pi-ai";
 import { Settings } from "../../src/config/settings";
 import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
 import * as sdkModule from "../../src/sdk";
@@ -44,6 +44,7 @@ function createAssistantErrorMessage(errorMessage: string, text = ""): Assistant
 function createMockSession(
 	onPrompt: (params: {
 		text: string;
+		options?: { expandPromptTemplates?: boolean; images?: ImageContent[] };
 		promptIndex: number;
 		emit: (event: AgentSessionEvent) => void;
 		state: { messages: AssistantMessage[] };
@@ -74,9 +75,9 @@ function createMockSession(
 				if (index >= 0) listeners.splice(index, 1);
 			};
 		},
-		prompt: async (text: string) => {
+		prompt: async (text: string, options?: { expandPromptTemplates?: boolean; images?: ImageContent[] }) => {
 			promptIndex += 1;
-			onPrompt({ text, promptIndex, emit, state });
+			onPrompt({ text, options, promptIndex, emit, state });
 		},
 		waitForIdle: async () => {},
 		getLastAssistantMessage: () => state.messages[state.messages.length - 1],
@@ -110,6 +111,37 @@ describe("runSubprocess submit_result reminders", () => {
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
 		enableLsp: false,
 	};
+
+	it("passes images through to the first task prompt", async () => {
+		const images: ImageContent[] = [{ type: "image", data: "Zm9v", mimeType: "image/png" }];
+		const promptOptions: Array<{ expandPromptTemplates?: boolean; images?: ImageContent[] }> = [];
+		const session = createMockSession(({ text, options, promptIndex, emit, state }) => {
+			promptOptions.push(options ?? {});
+			if (promptIndex !== 1) return;
+			expect(text).toBe(baseOptions.task);
+			const assistant = createAssistantStopMessage("done");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-images",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-images", images });
+		expect(result.exitCode).toBe(0);
+		expect(promptOptions).toEqual([{ expandPromptTemplates: false, images }]);
+	});
 
 	it("sends reminder prompt when subagent stops without submit_result", async () => {
 		const prompts: string[] = [];

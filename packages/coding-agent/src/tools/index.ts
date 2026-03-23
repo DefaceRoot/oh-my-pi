@@ -1,4 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -145,6 +146,8 @@ export interface ToolSession {
 	getCompactContext?: () => string;
 	/** Get current session entries for delegation metadata extraction. */
 	getSessionEntries?: () => ReadonlyArray<Record<string, unknown>>;
+	/** Get image attachments from the last user message. */
+	getLastUserImages?: () => ImageContent[] | undefined;
 	/** Get cached todo phases for this session. */
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */

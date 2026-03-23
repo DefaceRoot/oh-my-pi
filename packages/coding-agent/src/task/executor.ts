@@ -5,7 +5,7 @@
  */
 import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { Api, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
@@ -113,6 +113,7 @@ export interface ExecutorOptions {
 	modelOverride?: string | string[];
 	thinkingLevel?: ThinkingLevel;
 	outputSchema?: unknown;
+	images?: ImageContent[];
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	enableLsp?: boolean;
@@ -134,6 +135,28 @@ export interface ExecutorOptions {
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
 }
+
+/** Metadata stored for a subagent that was aborted before completion. */
+export interface CancelledSubagentMetadata {
+	/** Subagent runtime id. */
+	id: string;
+	/** Path to the persisted session file. */
+	sessionFile: string;
+	/** OMP session id at time of cancellation. */
+	sessionId: string | undefined;
+	/** Original executor options, minus the (now-aborted) abort signal. */
+	options: Omit<ExecutorOptions, "signal">;
+	/** Timestamp (ms) when the subagent was cancelled. */
+	cancelledAt: number;
+	/** Human-readable abort reason, if available. */
+	abortReason: string | undefined;
+}
+
+/**
+ * Active record of aborted subagents eligible for resume.
+ * Keyed by subagent id. Cleared only by explicit consumer action.
+ */
+export const cancelledSubagents = new Map<string, CancelledSubagentMetadata>();
 
 function parseStringifiedJson(value: unknown): unknown {
 	if (typeof value !== "string") return value;
@@ -383,6 +406,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		enableLsp,
 		signal,
 		onProgress,
+		images,
 	} = options;
 	const startTime = Date.now();
 	let lastActivityMs = startTime;
@@ -1030,6 +1054,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					requestAbort("signal", reason);
 					return true;
 				},
+				resume: async () => false,
 			});
 
 			const sessionInitExtra = { agentName: agent.name };
@@ -1132,7 +1157,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			});
 
-			await session.prompt(task);
+			await session.prompt(task, { expandPromptTemplates: false, images });
 			await session.waitForIdle();
 
 			let abortedContinueCount = 0;
@@ -1259,6 +1284,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 			unregisterSubagentRuntime(id);
+			if (aborted && sessionFile) {
+				const { signal: _sig, ...storedOptions } = options;
+				cancelledSubagents.set(id, {
+					id,
+					sessionFile,
+					sessionId: progress.sessionId,
+					options: storedOptions,
+					cancelledAt: Date.now(),
+					abortReason: abortReasonText,
+				});
+			}
 		}
 
 		return {
@@ -1405,4 +1441,54 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		extractedToolData: progress.extractedToolData,
 		outputMeta,
 	};
+}
+
+/**
+ * Resume a previously cancelled subagent by opening its persisted session file
+ * and creating a new AgentSession restored to the point of cancellation.
+ *
+ * The returned session has its conversation history intact; callers should send
+ * a continuation prompt (e.g. "Continue where you left off.") to restart work.
+ *
+ * Returns null when no cancelled subagent with the given id is on record.
+ */
+export async function resumeCancelledSubagent(id: string): Promise<AgentSession | null> {
+	const metadata = cancelledSubagents.get(id);
+	if (!metadata) return null;
+
+	const { options: opts } = metadata;
+	const authStorage = opts.authStorage ?? (await discoverAuthStorage());
+	const modelRegistry = opts.modelRegistry ?? new ModelRegistry(authStorage);
+	await modelRegistry.refresh();
+
+	const sessionManager = await SessionManager.open(metadata.sessionFile);
+
+	const { session } = await createAgentSession({
+		cwd: opts.worktree ?? opts.cwd,
+		authStorage,
+		modelRegistry,
+		settings: opts.settings,
+		sessionManager,
+		role: opts.runtimeRole ?? opts.agent.name,
+		thinkingLevel: opts.thinkingLevel,
+		skills: opts.skills,
+		contextFiles: opts.contextFiles,
+		promptTemplates: opts.promptTemplates,
+		systemPrompt: defaultPrompt =>
+			renderPromptTemplate(subagentSystemPromptTemplate, {
+				base: defaultPrompt,
+				agent: opts.agent.systemPrompt,
+				worktree: opts.worktree ?? "",
+				outputSchema: "",
+				contextFile: opts.contextFile,
+			}),
+		outputSchema: opts.outputSchema,
+		requireSubmitResultTool: true,
+		hasUI: false,
+		eventBus: opts.eventBus,
+		mcpAllowlist: opts.mcpAllowlist,
+		mcpManager: opts.mcpManager,
+	});
+
+	return session;
 }

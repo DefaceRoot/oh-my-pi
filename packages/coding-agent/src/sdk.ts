@@ -7,7 +7,7 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { Message, Model } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Message, Model } from "@oh-my-pi/pi-ai";
 
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -934,7 +934,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		getPlanModeState: () => session.getPlanModeState(),
 		getCompactContext: () => session.formatCompactContext(),
-		getSessionEntries: () => sessionManager.getEntries() as Array<Record<string, unknown>>,
+		getLastUserImages: (): ImageContent[] | undefined => session.getLastUserImages(),
+		getSessionEntries: () => sessionManager.getEntries() as unknown as Array<Record<string, unknown>>,
 		getTodoPhases: () => session.getTodoPhases(),
 		setTodoPhases: phases => session.setTodoPhases(phases),
 		getCheckpointState: () => session.getCheckpointState(),

@@ -1,23 +1,33 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 
 let mergeScenario: "conflict" | "success" = "conflict";
+const capturedRunSubprocessImages: Array<ImageContent[] | undefined> = [];
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
-	runSubprocess: async (params: { index: number; id: string; task: string }): Promise<SingleResult> => ({
-		index: params.index,
-		id: params.id,
-		agent: "explore",
-		agentSource: "bundled",
-		task: params.task,
-		description: undefined,
-		exitCode: 0,
-		output: "ok",
-		stderr: "",
-		truncated: false,
-		durationMs: 5,
-		tokens: 0,
-	}),
+	runSubprocess: async (params: {
+		index: number;
+		id: string;
+		task: string;
+		images?: ImageContent[];
+	}): Promise<SingleResult> => {
+		capturedRunSubprocessImages.push(params.images);
+		return {
+			index: params.index,
+			id: params.id,
+			agent: "explore",
+			agentSource: "bundled",
+			task: params.task,
+			description: undefined,
+			exitCode: 0,
+			output: "ok",
+			stderr: "",
+			truncated: false,
+			durationMs: 5,
+			tokens: 0,
+		};
+	},
 }));
 
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
@@ -79,7 +89,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/worktree", () => ({
 const { TaskTool } = await import("@oh-my-pi/pi-coding-agent/task");
 const { Settings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
 
-function createSession() {
+function createSession(options?: { images?: ImageContent[] }) {
 	return {
 		cwd: "/tmp/test-cwd",
 		hasUI: false,
@@ -92,6 +102,7 @@ function createSession() {
 		}),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
+		getLastUserImages: () => options?.images,
 		taskDepth: 0,
 	} as Parameters<typeof TaskTool.create>[0];
 }
@@ -99,19 +110,18 @@ function createSession() {
 describe("TaskTool branch merge summaries", () => {
 	beforeEach(() => {
 		mergeScenario = "conflict";
+		capturedRunSubprocessImages.length = 0;
 	});
 
 	test("includes merge-agent guidance and branch details on merge conflict", async () => {
-		const tool = await TaskTool.create(createSession());
+		const images: ImageContent[] = [{ type: "image", data: "Z2xvYmFs", mimeType: "image/png" }];
+		const tool = await TaskTool.create(createSession({ images }));
 		const taskId = "ConflictedTask";
-		const result = await tool.execute(
-			"call-merge-conflict",
-			{
-				agent: "explore",
-				tasks: [{ id: taskId, description: "conflict case", assignment: "noop" }],
-				isolated: true,
-			} as Parameters<TaskTool["execute"]>[1],
-		);
+		const result = await tool.execute("call-merge-conflict", {
+			agent: "explore",
+			tasks: [{ id: taskId, description: "conflict case", assignment: "noop" }],
+			isolated: true,
+		} as any);
 
 		const summaryText = result.content.find(part => part.type === "text")?.text ?? "";
 		const branchName = result.details?.results[0]?.branchName;
@@ -129,20 +139,19 @@ describe("TaskTool branch merge summaries", () => {
 			conflict: `${branchNameText}: cherry-pick conflict`,
 			branchSummaries: [{ branch: branchNameText, taskId: resultTaskId, description: "No description" }],
 		});
+		expect(capturedRunSubprocessImages).toHaveLength(1);
+		expect(capturedRunSubprocessImages[0]).toEqual(images);
 	});
 
 	test("keeps successful merge summary path unchanged", async () => {
 		mergeScenario = "success";
 		const tool = await TaskTool.create(createSession());
 		const taskId = "MergedTask";
-		const result = await tool.execute(
-			"call-merge-success",
-			{
-				agent: "explore",
-				tasks: [{ id: taskId, description: "success case", assignment: "noop" }],
-				isolated: true,
-			} as Parameters<TaskTool["execute"]>[1],
-		);
+		const result = await tool.execute("call-merge-success", {
+			agent: "explore",
+			tasks: [{ id: taskId, description: "success case", assignment: "noop" }],
+			isolated: true,
+		} as any);
 
 		const summaryText = result.content.find(part => part.type === "text")?.text ?? "";
 		const mergedBranch = result.details?.results[0]?.branchName;

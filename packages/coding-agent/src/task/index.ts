@@ -17,7 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
@@ -34,19 +34,21 @@ import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { collectDelegationContext } from "./delegation-context";
 import { discoverAgents, getAgent } from "./discovery";
-import { runSubprocess } from "./executor";
+import { resumeCancelledSubagent, runSubprocess } from "./executor";
+import { resumeSubagentRuntime } from "./subagent-runtime-registry";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
-import { renderTemplate, type RenderResult } from "./template";
+import { type RenderResult, renderTemplate } from "./template";
 import { buildToonDelegation, type DelegationTask, type ToonDelegationResult } from "./toon-delegation-builder";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
 	type TaskItem,
 	type TaskParams,
@@ -56,6 +58,7 @@ import {
 	taskSchema,
 	taskSchemaNoIsolation,
 } from "./types";
+import type { SubagentResumeRequest } from "./subagent-resume-request";
 import {
 	applyBaseline,
 	applyNestedPatches,
@@ -265,10 +268,10 @@ function buildFallbackDelegationToon(session: ToolSession, delegate: string, tas
 		...(inherited.worktreePath ? [`    worktree:`, `      path: ${JSON.stringify(inherited.worktreePath)}`] : []),
 		...(inherited.branchName || inherited.baseBranch
 			? [
-				`    git:`,
-				...(inherited.branchName ? [`      branch: ${JSON.stringify(inherited.branchName)}`] : []),
-				...(inherited.baseBranch ? [`      base_branch: ${JSON.stringify(inherited.baseBranch)}`] : []),
-			]
+					`    git:`,
+					...(inherited.branchName ? [`      branch: ${JSON.stringify(inherited.branchName)}`] : []),
+					...(inherited.baseBranch ? [`      base_branch: ${JSON.stringify(inherited.baseBranch)}`] : []),
+				]
 			: []),
 		...(inherited.planFilePath ? [`    plan_path: ${JSON.stringify(inherited.planFilePath)}`] : []),
 		...(inherited.planWorkspaceDir ? [`    plan_workspace_dir: ${JSON.stringify(inherited.planWorkspaceDir)}`] : []),
@@ -438,6 +441,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
+		const parentImages = this.session.getLastUserImages?.();
 		const renderedTasks = await Promise.all(
 			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem, params.context)),
 		);
@@ -562,6 +566,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								singleParams,
 								runSignal,
 								forwardProgressUpdate,
+								parentImages,
+								true,
 								[uniqueId],
 							);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
@@ -788,6 +794,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		params: TaskParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		parentImagesSnapshot?: ImageContent[],
+		parentImagesSnapshotCaptured = false,
 		preAllocatedIds?: string[],
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
@@ -800,6 +808,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const commitStyle = this.session.settings.get("task.isolation.commits");
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const taskDepth = this.session.taskDepth ?? 0;
+		const parentImages = parentImagesSnapshotCaptured ? parentImagesSnapshot : this.session.getLastUserImages?.();
 
 		if (isolationMode === "none" && "isolated" in params) {
 			return {
@@ -1018,6 +1027,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			});
 		};
 		let disposeStopListener: (() => void) | undefined;
+		let disposeResumeListener: (() => void) | undefined;
 
 		try {
 			// Check self-recursion prevention
@@ -1081,6 +1091,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				if (!payload || typeof payload !== "object") return;
 				const request = payload as TaskSubagentStopRequest;
 				const handled = abortSubtask(request.id, request.reason);
+				request.respond?.(handled);
+			});
+			disposeResumeListener = this.session.eventBus?.on(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, async payload => {
+				if (!payload || typeof payload !== "object") return;
+				const request = payload as SubagentResumeRequest;
+				const lookup = { id: request.id, sessionId: request.sessionId, sessionPath: request.sessionPath };
+				let handled = await resumeSubagentRuntime(lookup);
+				if (!handled && request.id) {
+					handled = (await resumeCancelledSubagent(request.id)) !== null;
+				}
 				request.respond?.(handled);
 			});
 
@@ -1176,6 +1196,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							contextFiles,
 							skills: availableSkills,
 							promptTemplates,
+							images: parentImages,
 						});
 					}
 
@@ -1229,6 +1250,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							contextFiles,
 							skills: availableSkills,
 							promptTemplates,
+							images: parentImages,
 						});
 						if (mergeMode === "branch" && result.exitCode === 0) {
 							try {
@@ -1608,6 +1630,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				await fs.rm(tempArtifactsDir, { recursive: true, force: true });
 			}
 			disposeStopListener?.();
+			disposeResumeListener?.();
 
 			return {
 				content: [{ type: "text", text: summary }],
@@ -1622,6 +1645,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		} catch (err) {
 			disposeStopListener?.();
+			disposeResumeListener?.();
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: {
