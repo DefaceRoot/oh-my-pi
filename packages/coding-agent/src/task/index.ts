@@ -599,6 +599,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								extractedToolData: singleResult?.extractedToolData,
 							});
 							completedJobs += 1;
+							// Suppress background delivery when subagent already reported via submit_result.
+							// Matches the pattern used in await-tool.ts and the timeout path.
+							if (singleResult?.hasSubmitResult) {
+								manager.acknowledgeDeliveries([jobId]);
+							}
 							if (singleResult && ((singleResult.aborted ?? false) || singleResult.exitCode !== 0)) {
 								failedJobs += 1;
 							}
