@@ -191,6 +191,7 @@ function createSubmitInterceptFixture() {
 	const editorAddToHistorySpy = vi.fn();
 	const sessionPromptSpy = vi.fn(async () => undefined);
 	const showStatusSpy = vi.fn();
+	const openResumeModalSpy = vi.fn(async () => undefined);
 	const editor = {
 		setText: editorSetTextSpy,
 		addToHistory: editorAddToHistorySpy,
@@ -211,6 +212,7 @@ function createSubmitInterceptFixture() {
 		ui: { requestRender: vi.fn() },
 		showStatus: showStatusSpy,
 		showWarning: vi.fn(),
+		openResumeModal: openResumeModalSpy,
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	const openLazygitSpy = vi.spyOn(controller, "openLazygit").mockResolvedValue();
@@ -219,6 +221,7 @@ function createSubmitInterceptFixture() {
 	return {
 		openLazygitSpy,
 		toggleSTTSpy,
+		openResumeModalSpy,
 		showStatusSpy,
 		editorSetTextSpy,
 		editorAddToHistorySpy,
@@ -483,6 +486,30 @@ describe("InputController shortcut and submit wiring", () => {
 		expect(fixture.openLazygitSpy).toHaveBeenCalledTimes(1);
 		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
 		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+
+	it("intercepts typed /resume before streaming prompt dispatch", async () => {
+		const fixture = createSubmitInterceptFixture();
+		await fixture.submit("/resume");
+
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.openResumeModalSpy).toHaveBeenCalledTimes(1);
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
+	});
+
+	it("treats typed deprecated resume alias as normal streaming input", async () => {
+		const fixture = createSubmitInterceptFixture();
+		const deprecatedResumeCommand = "/resume" + "-ui";
+		await fixture.submit(deprecatedResumeCommand);
+
+		expect(fixture.openResumeModalSpy).not.toHaveBeenCalled();
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.editorAddToHistorySpy).toHaveBeenCalledWith(deprecatedResumeCommand);
+		expect(fixture.sessionPromptSpy).toHaveBeenCalledWith(deprecatedResumeCommand, {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
 	});
 
 	it("intercepts typed /stt before streaming prompt dispatch", async () => {
