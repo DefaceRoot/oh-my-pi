@@ -668,7 +668,9 @@ export class ExtensionRunner {
 					if (result?.handled) return result;
 					if (result?.text !== undefined) {
 						currentText = result.text;
-						currentImages = result.images ?? currentImages;
+					}
+					if (result?.images !== undefined) {
+						currentImages = result.images;
 					}
 				} catch (err) {
 					this.emitError({
