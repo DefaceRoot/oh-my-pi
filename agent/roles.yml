@@ -111,8 +111,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - better-context
-      - ref
     skills: all
   implement: 
     tools: 
@@ -225,8 +223,8 @@ roles:
       - resolve
     mcp: 
       - augment
-      - better-context
       - ref
+      - better-context
     skills: all
   grafana: 
     tools: 
@@ -256,7 +254,6 @@ roles:
       - augment
       - chrome-devtools
       - grafana
-      - ref
     skills: all
   verifier: 
     tools: 
@@ -313,7 +310,6 @@ roles:
       - resolve
     mcp: 
       - augment
-      - ref
     skills: all
   plan-verifier: 
     tools: 
@@ -371,6 +367,142 @@ roles:
     mcp: 
       - augment
       - ref
+      - chrome-devtools
+    skills: all
+  commit: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  lint: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  merge: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  curator: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
+    skills: all
+  worktree-setup: 
+    tools: 
+      - read
+      - write
+      - edit
+      - find
+      - grep
+      - bash
+      - python
+      - ssh
+      - web_search
+      - fetch
+      - lsp
+      - ast_grep
+      - ast_edit
+      - task
+      - cancel_job
+      - await
+      - todo_write
+      - ask
+      - checkpoint
+      - rewind
+      - browser
+      - resolve
+    mcp: 
+      - augment
     skills: all
 subagents: 
   designer: 
