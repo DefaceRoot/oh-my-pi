@@ -14,6 +14,7 @@ import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { t
 import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 import oracleMd from "../prompts/agents/oracle.md" with { type: "text" };
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
+import planVerifierMd from "../prompts/agents/plan-verifier.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import { parseFrontmatter } from "../utils/frontmatter";
@@ -46,6 +47,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "librarian.md", template: librarianMd },
 	{ fileName: "oracle.md", template: oracleMd },
 	{ fileName: "plan.md", template: planMd },
+	{ fileName: "plan-verifier.md", template: planVerifierMd },
 	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "debug.md", template: debugMd },
 	{ fileName: "reviewer.md", template: reviewerMd },

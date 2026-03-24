@@ -39,7 +39,7 @@ import { resumeSubagentRuntime } from "./subagent-runtime-registry";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
-import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
+import { PLAN_MODE_PLAN_VERIFIER_TOOLS, PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
 import { type RenderResult, renderTemplate } from "./template";
@@ -871,12 +871,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const planModeState = this.session.getPlanModeState?.();
 		const effectiveAgent: typeof agent = planModeState?.enabled
-			? {
-					...agent,
-					systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-					tools: [...PLAN_MODE_SUBAGENT_TOOLS],
-					spawns: undefined,
-				}
+			? agent.name === "plan-verifier"
+				? {
+						...agent,
+						tools: [...PLAN_MODE_PLAN_VERIFIER_TOOLS],
+						spawns: undefined,
+					}
+				: {
+						...agent,
+						systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+						tools: [...PLAN_MODE_SUBAGENT_TOOLS],
+						spawns: undefined,
+					}
 			: agent;
 
 		const rolesConfig = new RolesConfig(path.join(this.session.settings.getAgentDir(), "roles.yml"));

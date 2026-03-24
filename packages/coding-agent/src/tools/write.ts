@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as nodePath from "node:path";
+
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -98,9 +101,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-			enforcePlanModeWrite(this.session, path, { op: "create" });
-			const absolutePath = resolvePlanPath(this.session, path);
-			const batchRequest = getLspBatchRequest(context?.toolCall);
+				enforcePlanModeWrite(this.session, path, { op: "create" });
+				const absolutePath = resolvePlanPath(this.session, path);
+				await fs.mkdir(nodePath.dirname(absolutePath), { recursive: true });
+				const batchRequest = getLspBatchRequest(context?.toolCall);
 
 			const diagnostics = await this.#writethrough(absolutePath, content, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
