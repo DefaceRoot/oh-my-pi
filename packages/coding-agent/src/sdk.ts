@@ -286,8 +286,10 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
  */
 export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsResult> {
 	const resolvedCwd = cwd ?? getProjectDir();
+	const settings = await Settings.init({ cwd: resolvedCwd });
+	const disabledExtensionIds = ((settings.get("disabledExtensions") as string[]) ?? []).slice();
 
-	return discoverAndLoadExtensions([], resolvedCwd);
+	return discoverAndLoadExtensions([], resolvedCwd, undefined, disabledExtensionIds);
 }
 
 /**
@@ -1146,7 +1148,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	} else {
 		// Merge CLI extension paths with settings extension paths
 		const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+		const disabledExtensionIds = ((settings.get("disabledExtensions") as string[]) ?? []).slice();
 		extensionsResult = await logger.timeAsync(
 			"discoverAndLoadExtensions",
 			discoverAndLoadExtensions,

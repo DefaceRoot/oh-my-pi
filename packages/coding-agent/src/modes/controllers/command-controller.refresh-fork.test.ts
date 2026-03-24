@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, vi } from "bun:test";
-import { FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
+import { FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE, FORK_UPSTREAM_URL } from "../../cli/update-cli";
 import type { InteractiveModeContext } from "../../modes/types";
 
 class MockBashExecutionComponent {
@@ -407,17 +407,44 @@ describe("CommandController merge OMP flow", () => {
 	});
 
 
-	it("shows a clear error when upstream remote is missing", async () => {
+	it("auto-registers upstream remote when missing and continues the flow", async () => {
 		spawnMock.mockClear();
 		unrefMock.mockClear();
-		const { controller, shutdown, showError } = createContext([makeBashResult({ exitCode: 0, output: "origin\n" })]);
+		const { controller, executeBash, showStatus, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\n" }),      // git remote (no upstream)
+			makeBashResult({ exitCode: 0 }),                            // git remote add upstream
+			makeBashResult({ exitCode: 0 }),                            // git fetch upstream
+			makeBashResult({ exitCode: 0, output: "main\n" }),         // git rev-parse HEAD
+			makeBashResult({ exitCode: 0, output: "0\n" }),            // rev-list --count (up to date)
+		]);
+
+		await controller.handleMergeUpstreamFork();
+
+		expect(executeBash).toHaveBeenNthCalledWith(
+			2,
+			`cd ${FORK_REPO_ROOT} && git remote add ${FORK_UPSTREAM_REMOTE} ${FORK_UPSTREAM_URL}`,
+			expect.any(Function),
+			expect.any(Object),
+		);
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining(`${FORK_UPSTREAM_URL}`));
+		expect(showStatus).toHaveBeenCalledWith("Already up to date with upstream. No changes to merge.");
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("shows error when auto-registration of upstream remote fails", async () => {
+		spawnMock.mockClear();
+		unrefMock.mockClear();
+		const { controller, shutdown, showError } = createContext([
+			makeBashResult({ exitCode: 0, output: "origin\n" }),  // git remote (no upstream)
+			makeBashResult({ exitCode: 1 }),                        // git remote add upstream → fails
+		]);
 
 		await controller.handleMergeUpstreamFork();
 
 		expect(spawnMock).not.toHaveBeenCalled();
 		expect(unrefMock).not.toHaveBeenCalled();
 		expect(shutdown).not.toHaveBeenCalled();
-		expect(showError).toHaveBeenCalledWith(expect.stringContaining(`No '${FORK_UPSTREAM_REMOTE}' remote found`));
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining(`Failed to register '${FORK_UPSTREAM_REMOTE}' remote`));
 	});
 
 	it("stops early when upstream has no new commits", async () => {

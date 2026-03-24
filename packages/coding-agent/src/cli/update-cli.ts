@@ -13,8 +13,10 @@ import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 
 const REPO = "can1357/oh-my-pi";
+export const FORK_UPSTREAM_URL = `https://github.com/${REPO}.git`;
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
-export const FORK_REPO_ROOT = "/home/colin/devpod-repos/DefaceRoot/oh-my-pi";
+// Resolved at runtime from this file's location: packages/coding-agent/src/cli/update-cli.ts → repo root is 4 levels up
+export const FORK_REPO_ROOT = path.resolve(import.meta.dirname, "../../../../");
 export const PATH_PRECEDENCE_CHECK_COMMAND = "command -v omp && bun pm bin -g";
 export const FORK_REINSTALL_COMMAND = `bun --cwd=${FORK_REPO_ROOT} install`;
 export const FORK_DIRECT_ENTRY = `${FORK_REPO_ROOT}/packages/coding-agent/src/cli.ts`;

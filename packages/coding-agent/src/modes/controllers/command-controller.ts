@@ -15,7 +15,7 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
-import { FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE } from "../../cli/update-cli";
+import { FORK_REPO_ROOT, FORK_UPSTREAM_REMOTE, FORK_UPSTREAM_URL } from "../../cli/update-cli";
 import type { BashResult } from "../../exec/bash-executor";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
@@ -1081,10 +1081,15 @@ export class CommandController {
 		}
 		const remotes = new Set(remoteList.output.trim().split("\n").filter(Boolean));
 		if (!remotes.has(FORK_UPSTREAM_REMOTE)) {
-			this.ctx.showError(
-				`No '${FORK_UPSTREAM_REMOTE}' remote found. Add it with: git remote add ${FORK_UPSTREAM_REMOTE} <upstream-url>`,
+			this.ctx.showStatus(`'${FORK_UPSTREAM_REMOTE}' remote not found — registering ${FORK_UPSTREAM_URL}...`);
+			const addResult = await this.runBashCommand(
+				`cd ${FORK_REPO_ROOT} && git remote add ${FORK_UPSTREAM_REMOTE} ${FORK_UPSTREAM_URL}`,
+				false,
 			);
-			return;
+			if (!addResult || addResult.exitCode !== 0) {
+				this.ctx.showError(`Failed to register '${FORK_UPSTREAM_REMOTE}' remote (${FORK_UPSTREAM_URL}).`);
+				return;
+			}
 		}
 
 		this.ctx.showStatus("Fetching upstream changes...");

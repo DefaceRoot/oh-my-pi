@@ -1,14 +1,14 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: github-copilot/gpt-5.4:high
+  default: anthropic/claude-sonnet-4-6:high
   ask: kimi-code/kimi-k2-turbo-preview:high
   orchestrator: anthropic/claude-sonnet-4-6:high
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
   implement: anthropic/claude-sonnet-4-6:high
-  explore: xiaomi/mimo-v2-flash:low
+  explore: kilo/minimax/minimax-m2.5:free
   lint: zai/glm-5:medium
-  merge: openai-codex/gpt-5.4:xhigh
+  merge: anthropic/claude-opus-4-6:xhigh
   curator: kimi-code/kimi-k2.5:medium
   research: anthropic/claude-sonnet-4-6:low
   verifier: openai-codex/gpt-5.4:high
@@ -17,7 +17,7 @@ modelRoles:
   plan-verifier: openai-codex/gpt-5.4:high
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
-  designer: github-copilot/gemini-3.1-pro-preview:high
+  designer: anthropic/claude-opus-4-6:high
   grafana: anthropic/claude-opus-4-6:high
   debug: openai-codex/gpt-5.4:xhigh
 defaultThinkingLevel: high
@@ -29,6 +29,7 @@ statusLine:
   separator: pipe
 disabledExtensions: 
   - extension-module:worktree-policy
+  - extension-module:plan-worktree
 steeringMode: one-at-a-time
 task: 
   maxRecursionDepth: 3
