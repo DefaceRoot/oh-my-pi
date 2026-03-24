@@ -194,6 +194,60 @@ describe("screenshots picker modal hosting", () => {
 		}
 	});
 
+	test("requests non-image redraws when no inline image protocol is available", async () => {
+		const originalProtocol = TERMINAL.imageProtocol;
+		(TERMINAL as unknown as { imageProtocol: ImageProtocol | null }).imageProtocol = null;
+		try {
+			const cwd = createTempDir("overlay-picker-no-protocol");
+			const screenshotsDir = join(cwd, "screenshots");
+			const screenshotPath = join(screenshotsDir, "selection-2026-03-07.png");
+			mkdirSync(screenshotsDir, { recursive: true });
+			tempDirs.push(cwd);
+			await writeTinyPng(screenshotPath);
+
+			let showCommand: ((args: string[], ctx: ExtensionContext) => Promise<void>) | undefined;
+			const customCalls: Array<{ options?: { overlay?: boolean } }> = [];
+			const editorTextCalls: string[] = [];
+			const renderCalls: Array<boolean | undefined> = [];
+			const extensionApi = {
+				on: () => {},
+				registerCommand: (name: string, options: { handler: (args: string[], ctx: ExtensionContext) => Promise<void> }) => {
+					if (name === "ss") {
+						showCommand = options.handler;
+					}
+				},
+				registerShortcut: () => {},
+			} as unknown as ExtensionAPI;
+
+			screenshotsPickerExtension(extensionApi);
+			expect(showCommand).toBeDefined();
+
+			await showCommand!([], {
+				hasUI: true,
+				cwd,
+				ui: {
+					custom: async (factory, options) => {
+						customCalls.push({ options });
+						await factory({ requestRender: (force?: boolean) => renderCalls.push(force) } as never, {} as never, {} as never, () => {});
+						return null;
+					},
+					notify: () => {},
+					setStatus: () => {},
+					setEditorText: (text) => {
+						editorTextCalls.push(text);
+					},
+				},
+			} as ExtensionContext);
+
+			expect(customCalls).toHaveLength(1);
+			expect(customCalls[0]?.options).toEqual({ overlay: true });
+			expect(editorTextCalls).toEqual([""]);
+			expect(renderCalls).not.toContain(true);
+		} finally {
+			(TERMINAL as unknown as { imageProtocol: ImageProtocol | null }).imageProtocol = originalProtocol;
+		}
+	});
+
 });
 
 

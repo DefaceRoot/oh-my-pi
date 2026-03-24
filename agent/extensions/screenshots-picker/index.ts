@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFile, execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -604,6 +604,80 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		const thumbnails = new Map<string, { data: string; mimeType: string } | null>();
 		const thumbnailLoads = new Map<string, Promise<void>>();
 		const imageDimensionsCache = new Map<string, { width: number; height: number } | null>();
+			const chafaBinary = Bun.which("chafa");
+			const chafaRenders = new Map<string, string[] | null>();
+			const chafaLoads = new Map<string, Promise<void>>();
+
+			function getChafaKey(path: string, widthCells: number, heightCells: number): string {
+				return `${path}:${widthCells}:${heightCells}`;
+			}
+
+			function isChafaLoading(key: string): boolean {
+				return chafaLoads.has(key);
+			}
+
+			function startChafaLoad(path: string, widthCells: number, heightCells: number): void {
+				if (!chafaBinary) return;
+				const key = getChafaKey(path, widthCells, heightCells);
+				if (chafaRenders.has(key) || chafaLoads.has(key)) {
+					return;
+				}
+
+				const args = ["-f", "symbols", "-c", "full", "--relative=off", "-s", `${widthCells}x${heightCells}`, path];
+				const promise = new Promise<void>((resolve) => {
+					execFile(chafaBinary, args, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+						if (err || !stdout) {
+							chafaRenders.set(key, null);
+							resolve();
+							return;
+						}
+						const lines = stdout.replaceAll("\r", "").split("\n");
+						if (lines.length > 0 && lines[lines.length - 1] === "") {
+							lines.pop();
+						}
+						chafaRenders.set(key, lines.length > 0 ? lines : null);
+						resolve();
+					});
+				})
+					.finally(() => {
+						chafaLoads.delete(key);
+						requestPreviewRender?.();
+					});
+
+				chafaLoads.set(key, promise);
+			}
+
+			function loadChafa(path: string, sizeBytes: number, widthCells: number, heightCells: number): string[] | null {
+				const key = getChafaKey(path, widthCells, heightCells);
+				if (chafaRenders.has(key)) {
+					return chafaRenders.get(key) ?? null;
+				}
+				if (!chafaBinary) {
+					chafaRenders.set(key, null);
+					return null;
+				}
+				if (sizeBytes <= SYNC_THUMB_SIZE) {
+					try {
+						const stdout = execFileSync(
+							chafaBinary,
+							["-f", "symbols", "-c", "full", "--relative=off", "-s", `${widthCells}x${heightCells}`, path],
+							{ encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+						);
+						const lines = stdout.replaceAll("\r", "").split("\n");
+						if (lines.length > 0 && lines[lines.length - 1] === "") {
+							lines.pop();
+						}
+						const rendered = lines.length > 0 ? lines : null;
+						chafaRenders.set(key, rendered);
+						return rendered;
+					} catch {
+						chafaRenders.set(key, null);
+						return null;
+					}
+				}
+				startChafaLoad(path, widthCells, heightCells);
+				return null;
+			}
 		let requestPreviewRender: (() => void) | null = null;
 		const supportsKittyInspector = TERMINAL.imageProtocol === ImageProtocol.Kitty;
 		let result: string[] | null = null;
@@ -687,7 +761,7 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		selectorOpen = true;
 		try {
 			result = await ctx.ui.custom<string[] | null>((tui, theme, _keybindings, done) => {
-			const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol !== null);
+				const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol !== null);
 				requestPreviewRender = requestPickerRender;
 				let activeTab = 0;
 				let cursor = 0;
@@ -985,7 +1059,24 @@ function clearRenderedKittyImage(): void {
 					if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 						return renderKittyThumbnail(screenshot, maxPreviewWidthCells, previewLines);
 					}
-
+					if (!TERMINAL.imageProtocol) {
+						const rendered = loadChafa(screenshot.path, screenshot.size, maxPreviewWidthCells, previewLines);
+						const name = screenshot.name.slice(-20);
+						if (!rendered) {
+							const loading = isChafaLoading(getChafaKey(screenshot.path, maxPreviewWidthCells, previewLines));
+							const hint = chafaBinary ? "" : " (install chafa)";
+							const lines = [theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]${hint}`)];
+							while (lines.length < previewLines) {
+								lines.push("");
+							}
+							return lines;
+						}
+						const lines = rendered.slice(0, previewLines);
+						while (lines.length < previewLines) {
+							lines.push("");
+						}
+						return lines;
+					}
 					const thumbnail = loadThumbnail(screenshot);
 					const name = screenshot.name.slice(-20);
 					if (!thumbnail) {
@@ -996,7 +1087,6 @@ function clearRenderedKittyImage(): void {
 						}
 						return lines;
 					}
-
 					const dimensions = getScreenshotDimensions(screenshot);
 					const maxWidth = dimensions ? calculateConstrainedWidth(dimensions, previewLines, maxPreviewWidthCells) : maxPreviewWidthCells;
 					const image = new Image(
