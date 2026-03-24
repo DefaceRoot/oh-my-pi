@@ -26,6 +26,7 @@ let runResult: SingleResult = buildResult();
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async () => runResult,
 }));
 

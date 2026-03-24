@@ -41,6 +41,7 @@ const availableAgents = [
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		const agent = opts.agent as { name: string };
 		lastRunSubprocessAgent = opts.agent as Record<string, unknown>;

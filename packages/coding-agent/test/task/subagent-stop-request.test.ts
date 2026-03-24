@@ -47,6 +47,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 		return createDeferredResult(id);
 	},
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 }));
 
 

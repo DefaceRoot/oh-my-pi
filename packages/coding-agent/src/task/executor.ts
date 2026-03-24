@@ -134,6 +134,11 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/**
+	 * When set, open this session file to restore full conversation history before resuming.
+	 * The entry is removed from cancelledSubagents and the session continues from the prior context.
+	 */
+	resumeFromSessionFile?: string;
 }
 
 /** Metadata stored for a subagent that was aborted before completion. */
@@ -977,9 +982,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
 
-			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile)
-				: SessionManager.inMemory(worktree ?? cwd);
+			// When resuming a cancelled subagent, restore history from the prior session file.
+			// Remove from the store before starting to prevent concurrent double-resume.
+			if (options.resumeFromSessionFile) {
+				cancelledSubagents.delete(id);
+			}
+			const sessionManager = options.resumeFromSessionFile
+				? await SessionManager.open(options.resumeFromSessionFile)
+				: sessionFile
+					? await SessionManager.open(sessionFile)
+					: SessionManager.inMemory(worktree ?? cwd);
 
 			const inheritedMcpTools = options.mcpManager?.getTools() ?? [];
 			const enableMCP = !options.mcpManager;
@@ -1284,7 +1296,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 			unregisterSubagentRuntime(id);
-			if (aborted && sessionFile) {
+			if ((aborted || exitCode !== 0) && sessionFile) {
 				const { signal: _sig, ...storedOptions } = options;
 				cancelledSubagents.set(id, {
 					id,

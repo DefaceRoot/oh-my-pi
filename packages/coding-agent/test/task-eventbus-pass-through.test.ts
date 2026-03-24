@@ -30,6 +30,7 @@ const stubResult: SingleResult = {
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		capturedCalls.push({ eventBus: opts.eventBus });
 		return { ...stubResult };

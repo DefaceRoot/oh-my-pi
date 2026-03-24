@@ -23,6 +23,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 		} as SingleResult;
 	},
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 }));
 
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({

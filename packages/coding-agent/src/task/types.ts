@@ -40,6 +40,9 @@ export const TASK_SUBAGENT_STOP_REQUEST_CHANNEL = "task:subagent:stop-request";
 /** EventBus channel for targeted subagent resume requests from the UI */
 export const TASK_SUBAGENT_RESUME_REQUEST_CHANNEL = "task:subagent:resume-request";
 
+/** EventBus channel emitted when a standalone (post-execute) subagent resume finishes. */
+export const TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL = "task:subagent:resume-complete";
+
 /** Single task item for parallel execution */
 export const taskItemSchema = Type.Object({
 	id: Type.String({

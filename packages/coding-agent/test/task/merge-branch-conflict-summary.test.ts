@@ -7,6 +7,7 @@ const capturedRunSubprocessImages: Array<ImageContent[] | undefined> = [];
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async (params: {
 		index: number;
 		id: string;
