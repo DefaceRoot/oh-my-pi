@@ -1,4 +1,4 @@
-import { execFile, execFileSync, execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -54,6 +54,37 @@ interface ConsumedStagedInput {
 	nextState: StagedImageState;
 }
 
+interface KittyTmuxPlaceholderTool {
+	command: string;
+	prefixArgs: string[];
+}
+
+interface KittyTmuxPreviewPlacement {
+	columns: number;
+	rows: number;
+	col: number;
+	row: number;
+}
+
+interface TerminalWindowSize {
+	columns: number;
+	rows: number;
+	widthPx: number;
+	heightPx: number;
+}
+
+type PreviewBackend =
+	| { kind: "kitty-direct"; protocol: ImageProtocol.Kitty; usesInlineImages: true; supportsKittyInspector: true }
+	| {
+			kind: "kitty-tmux-placeholder";
+			protocol: null;
+			usesInlineImages: false;
+			supportsKittyInspector: false;
+			tool: KittyTmuxPlaceholderTool;
+	  }
+	| { kind: "terminal-image"; protocol: ImageProtocol; usesInlineImages: true; supportsKittyInspector: false }
+	| { kind: "text-fallback"; protocol: null; usesInlineImages: false; supportsKittyInspector: false; hint?: string };
+
 const SCREENSHOT_PATTERNS = [
 	/^Screenshot\s/i,
 	/^Capture\s/i,
@@ -75,8 +106,7 @@ const SCREENSHOT_PATTERNS = [
 	/^grim/i,
 ];
 
-const MAX_THUMB_SIZE = 5 * 1024 * 1024;
-const SYNC_THUMB_SIZE = 300 * 1024;
+const MAX_THUMB_SIZE = 15 * 1024 * 1024;
 const LIST_WIDTH = 45;
 const LIST_VISIBLE_ITEMS = 10;
 const PREVIEW_LINES = 14;
@@ -457,7 +487,7 @@ function updateStagedWidget(ctx: ExtensionContext, state: StagedImageState, opti
 }
 
 function deleteKittyImage(imageId: number): string {
-	return `\x1b_Ga=d,d=I,i=${imageId}\x1b\\`;
+	return wrapTmuxPassthrough(`\x1b_Ga=d,d=I,i=${imageId}\x1b\\`);
 }
 
 function getImageDimensions(base64Data: string, mimeType: string): { width: number; height: number } | null {
@@ -512,6 +542,147 @@ interface ZoomViewportGeometry {
 	renderRows: number;
 }
 
+
+function wrapTmuxPassthrough(sequence: string): string {
+	if (!Bun.env.TMUX) {
+		return sequence;
+	}
+	return `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`;
+}
+
+function resolveKittyTmuxPlaceholderTool(options: {
+	kittenBinary: string | null;
+	kittyBinary: string | null;
+}): KittyTmuxPlaceholderTool | null {
+	if (options.kittenBinary) {
+		return { command: options.kittenBinary, prefixArgs: ["icat"] };
+	}
+	if (options.kittyBinary) {
+		return { command: options.kittyBinary, prefixArgs: ["+kitten", "icat"] };
+	}
+	return null;
+}
+
+function resolvePreviewBackend(options: {
+	terminalImageProtocol: ImageProtocol | null;
+	inTmux: boolean;
+	kittenBinary: string | null;
+	kittyBinary: string | null;
+}): PreviewBackend {
+	if (options.terminalImageProtocol === ImageProtocol.Kitty) {
+		if (!options.inTmux) {
+			return {
+				kind: "kitty-direct",
+				protocol: ImageProtocol.Kitty,
+				usesInlineImages: true,
+				supportsKittyInspector: true,
+			};
+		}
+		const tool = resolveKittyTmuxPlaceholderTool({
+			kittenBinary: options.kittenBinary,
+			kittyBinary: options.kittyBinary,
+		});
+		if (tool) {
+			return {
+				kind: "kitty-tmux-placeholder",
+				protocol: null,
+				usesInlineImages: false,
+				supportsKittyInspector: false,
+				tool,
+			};
+		}
+		return {
+			kind: "text-fallback",
+			protocol: null,
+			usesInlineImages: false,
+			supportsKittyInspector: false,
+			hint: " (install kitten, kitty, or chafa for tmux previews)",
+		};
+	}
+	if (options.terminalImageProtocol) {
+		return {
+			kind: "terminal-image",
+			protocol: options.terminalImageProtocol,
+			usesInlineImages: true,
+			supportsKittyInspector: false,
+		};
+	}
+	return { kind: "text-fallback", protocol: null, usesInlineImages: false, supportsKittyInspector: false };
+}
+
+function buildKittyTmuxPlaceholderCommand(options: {
+	tool: KittyTmuxPlaceholderTool;
+	imagePath: string;
+	imageId: number;
+	placement: KittyTmuxPreviewPlacement;
+	window: TerminalWindowSize;
+}): { command: string; args: string[] } {
+	return {
+		command: options.tool.command,
+		args: [
+			...options.tool.prefixArgs,
+			"--stdin=no",
+			"--use-window-size",
+			`${options.window.columns},${options.window.rows},${options.window.widthPx},${options.window.heightPx}`,
+			"--transfer-mode",
+			"stream",
+			"--passthrough",
+			"tmux",
+			"--place",
+			`${options.placement.columns}x${options.placement.rows}@${options.placement.col}x${options.placement.row}`,
+			"--image-id",
+			String(options.imageId),
+			options.imagePath,
+		],
+	};
+}
+
+function splitRenderedOutput(stdout: string): string[] | null {
+	const lines = stdout.replaceAll("\r", "").split("\n");
+	if (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines.length > 0 ? lines : null;
+}
+
+function getStandardPreviewOverlayHeight(options: { previewLines: number; hasTabStrip: boolean }): number {
+	const contentRows = Math.max(LIST_VISIBLE_ITEMS, options.previewLines);
+	return 1 + (options.hasTabStrip ? 2 : 0) + 3 + contentRows + 1 + 2 + 1;
+}
+
+function resolveStandardPreviewPlacement(options: {
+	terminalWidth: number;
+	terminalHeight: number;
+	overlayWidth: number;
+	previewWidthCells: number;
+	previewLines: number;
+	hasTabStrip: boolean;
+}): KittyTmuxPreviewPlacement {
+	const overlayHeight = getStandardPreviewOverlayHeight({
+		previewLines: options.previewLines,
+		hasTabStrip: options.hasTabStrip,
+	});
+	const overlayRow = Math.max(0, options.terminalHeight - overlayHeight);
+	const overlayCol = Math.max(0, Math.floor((options.terminalWidth - options.overlayWidth) / 2));
+	const previewTopOffset = 1 + (options.hasTabStrip ? 2 : 0) + 3;
+	return {
+		columns: Math.max(1, options.previewWidthCells),
+		rows: Math.max(1, options.previewLines),
+		col: overlayCol + LIST_WIDTH + 2,
+		row: overlayRow + previewTopOffset,
+	};
+}
+
+function resolveTerminalWindowSize(columns: number, rows: number): TerminalWindowSize {
+	const cellDimensions = getCellDimensions();
+	return {
+		columns: Math.max(1, columns),
+		rows: Math.max(1, rows),
+		widthPx: Math.max(1, Math.floor(columns * cellDimensions.widthPx)),
+		heightPx: Math.max(1, Math.floor(rows * cellDimensions.heightPx)),
+	};
+}
+
 function encodeKittyWithCrop(
 	base64Data: string,
 	options: {
@@ -539,7 +710,7 @@ function encodeKittyWithCrop(
 	];
 
 	if (base64Data.length <= chunkSize) {
-		return `\x1b_G${params.join(",")};${base64Data}\x1b\\`;
+		return wrapTmuxPassthrough(`\x1b_G${params.join(",")};${base64Data}\x1b\\`);
 	}
 
 	const chunks: string[] = [];
@@ -559,7 +730,7 @@ function encodeKittyWithCrop(
 		offset += chunkSize;
 	}
 
-	return chunks.join("");
+	return wrapTmuxPassthrough(chunks.join(""));
 }
 
 export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
@@ -646,82 +817,135 @@ function toggleStagedScreenshot(screenshot: ScreenshotInfo, ctx: ExtensionContex
 		const thumbnailLoads = new Map<string, Promise<void>>();
 		const imageDimensionsCache = new Map<string, { width: number; height: number } | null>();
 		const resizedDimensionsCache = new Map<string, { width: number; height: number }>();
-			const chafaBinary = Bun.which("chafa");
-			const chafaRenders = new Map<string, string[] | null>();
-			const chafaLoads = new Map<string, Promise<void>>();
+		const kittenBinary = Bun.which("kitten") ?? null;
+		const kittyBinary = Bun.which("kitty") ?? null;
+		const chafaBinary = Bun.which("chafa");
+		const previewBackend = resolvePreviewBackend({
+			terminalImageProtocol: TERMINAL.imageProtocol,
+			inTmux: Boolean(Bun.env.TMUX),
+			kittenBinary,
+			kittyBinary,
+		});
+		const chafaRenders = new Map<string, string[] | null>();
+		let kittyPlaceholderRuntimeAvailable = previewBackend.kind === "kitty-tmux-placeholder";
+		const chafaLoads = new Map<string, Promise<void>>();
+		const kittyPlaceholderRenders = new Map<string, string[] | null>();
+		const kittyPlaceholderLoads = new Map<string, Promise<void>>();
 
-			function getChafaKey(path: string, widthCells: number, heightCells: number): string {
-				return `${path}:${widthCells}:${heightCells}`;
+		function getChafaKey(path: string, widthCells: number, heightCells: number): string {
+			return `${path}:${widthCells}:${heightCells}`;
+		}
+
+		function isChafaLoading(key: string): boolean {
+			return chafaLoads.has(key);
+		}
+
+		function startChafaLoad(path: string, widthCells: number, heightCells: number): void {
+			if (!chafaBinary) return;
+			const key = getChafaKey(path, widthCells, heightCells);
+			if (chafaRenders.has(key) || chafaLoads.has(key)) {
+				return;
 			}
 
-			function isChafaLoading(key: string): boolean {
-				return chafaLoads.has(key);
-			}
-
-			function startChafaLoad(path: string, widthCells: number, heightCells: number): void {
-				if (!chafaBinary) return;
-				const key = getChafaKey(path, widthCells, heightCells);
-				if (chafaRenders.has(key) || chafaLoads.has(key)) {
-					return;
-				}
-
-				const args = ["-f", "symbols", "-c", "full", "--relative=off", "-s", `${widthCells}x${heightCells}`, path];
-				const promise = new Promise<void>((resolve) => {
-					execFile(chafaBinary, args, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-						if (err || !stdout) {
-							chafaRenders.set(key, null);
-							resolve();
-							return;
-						}
-						const lines = stdout.replaceAll("\r", "").split("\n");
-						if (lines.length > 0 && lines[lines.length - 1] === "") {
-							lines.pop();
-						}
-						chafaRenders.set(key, lines.length > 0 ? lines : null);
-						resolve();
-					});
-				})
-					.finally(() => {
-						chafaLoads.delete(key);
-						requestPreviewRender?.();
-					});
-
-				chafaLoads.set(key, promise);
-			}
-
-			function loadChafa(path: string, sizeBytes: number, widthCells: number, heightCells: number): string[] | null {
-				const key = getChafaKey(path, widthCells, heightCells);
-				if (chafaRenders.has(key)) {
-					return chafaRenders.get(key) ?? null;
-				}
-				if (!chafaBinary) {
-					chafaRenders.set(key, null);
-					return null;
-				}
-				if (sizeBytes <= SYNC_THUMB_SIZE) {
-					try {
-						const stdout = execFileSync(
-							chafaBinary,
-							["-f", "symbols", "-c", "full", "--relative=off", "-s", `${widthCells}x${heightCells}`, path],
-							{ encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
-						);
-						const lines = stdout.replaceAll("\r", "").split("\n");
-						if (lines.length > 0 && lines[lines.length - 1] === "") {
-							lines.pop();
-						}
-						const rendered = lines.length > 0 ? lines : null;
-						chafaRenders.set(key, rendered);
-						return rendered;
-					} catch {
+			const args = ["-f", "symbols", "-c", "full", "--relative=off", "-s", `${widthCells}x${heightCells}`, path];
+			const promise = new Promise<void>((resolve) => {
+				execFile(chafaBinary, args, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+					if (err || !stdout) {
 						chafaRenders.set(key, null);
-						return null;
+						resolve();
+						return;
 					}
-				}
-				startChafaLoad(path, widthCells, heightCells);
+					chafaRenders.set(key, splitRenderedOutput(stdout));
+					resolve();
+				});
+			}).finally(() => {
+				chafaLoads.delete(key);
+				requestPreviewRender?.();
+			});
+
+			chafaLoads.set(key, promise);
+		}
+
+		function loadChafa(path: string, widthCells: number, heightCells: number): string[] | null {
+			const key = getChafaKey(path, widthCells, heightCells);
+			if (chafaRenders.has(key)) {
+				return chafaRenders.get(key) ?? null;
+			}
+			if (!chafaBinary) {
+				chafaRenders.set(key, null);
 				return null;
 			}
+			startChafaLoad(path, widthCells, heightCells);
+			return null;
+		}
+
+		function getKittyTmuxPlaceholderKey(
+			path: string,
+			placement: KittyTmuxPreviewPlacement,
+			window: TerminalWindowSize,
+		): string {
+			return `${path}:${placement.columns}:${placement.rows}:${placement.col}:${placement.row}:${window.columns}:${window.rows}:${window.widthPx}:${window.heightPx}`;
+		}
+
+		function isKittyTmuxPlaceholderLoading(key: string): boolean {
+			return kittyPlaceholderLoads.has(key);
+		}
+
+		function startKittyTmuxPlaceholderLoad(
+			screenshot: ScreenshotInfo,
+			placement: KittyTmuxPreviewPlacement,
+			window: TerminalWindowSize,
+		): void {
+			if (previewBackend.kind !== "kitty-tmux-placeholder") {
+				return;
+			}
+			const key = getKittyTmuxPlaceholderKey(screenshot.path, placement, window);
+			if (kittyPlaceholderRenders.has(key) || kittyPlaceholderLoads.has(key)) {
+				return;
+			}
+			const invocation = buildKittyTmuxPlaceholderCommand({
+				tool: previewBackend.tool,
+				imagePath: screenshot.path,
+				imageId: KITTY_IMAGE_ID,
+				placement,
+				window,
+			});
+			const promise = new Promise<void>((resolve) => {
+				execFile(invocation.command, invocation.args, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+					const lines = stdout ? splitRenderedOutput(stdout) : null;
+					if (err || !lines) {
+						kittyPlaceholderRuntimeAvailable = false;
+						kittyPlaceholderRenders.set(key, null);
+						resolve();
+						return;
+					}
+					kittyPlaceholderRenders.set(key, lines);
+					resolve();
+				});
+			}).finally(() => {
+				kittyPlaceholderLoads.delete(key);
+				requestPreviewRender?.();
+			});
+			kittyPlaceholderLoads.set(key, promise);
+		}
+
+		function loadKittyTmuxPlaceholder(
+			screenshot: ScreenshotInfo,
+			placement: KittyTmuxPreviewPlacement,
+			window: TerminalWindowSize,
+		): string[] | null {
+			const key = getKittyTmuxPlaceholderKey(screenshot.path, placement, window);
+			if (kittyPlaceholderRenders.has(key)) {
+				return kittyPlaceholderRenders.get(key) ?? null;
+			}
+			startKittyTmuxPlaceholderLoad(screenshot, placement, window);
+			return null;
+		}
+
+		const previewImageProtocol = previewBackend.protocol;
 		let requestPreviewRender: (() => void) | null = null;
-		const supportsKittyInspector = TERMINAL.imageProtocol === ImageProtocol.Kitty;
+		const supportsKittyInspector = previewBackend.supportsKittyInspector;
+		const supportsPreviewZoom = previewBackend.kind !== "kitty-tmux-placeholder";
 		let result: string[] | null = null;
 
 		function isThumbnailLoading(path: string): boolean {
@@ -773,17 +997,6 @@ function startThumbnailLoad(screenshot: ScreenshotInfo): void {
 				thumbnails.set(screenshot.path, null);
 				return null;
 			}
-			if (screenshot.size <= SYNC_THUMB_SIZE) {
-				try {
-					const image = loadImageBase64(screenshot.path);
-					thumbnails.set(screenshot.path, image);
-					return image;
-				} catch {
-					thumbnails.set(screenshot.path, null);
-					return null;
-				}
-			}
-
 			startThumbnailLoad(screenshot);
 			return thumbnails.get(screenshot.path) ?? null;
 		}
@@ -818,25 +1031,25 @@ function startThumbnailLoad(screenshot: ScreenshotInfo): void {
 		selectorOpen = true;
 		try {
 			result = await ctx.ui.custom<string[] | null>((tui, theme, _keybindings, done) => {
-				const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol !== null);
-				requestPreviewRender = requestPickerRender;
-				let activeTab = 0;
-				let cursor = 0;
-				let scrollOffset = 0;
-				let previewZoom = false;
-				let zoomLevel = 1;
-				let panX = 0;
-				let panY = 0;
-				let lastRenderWidth = process.stdout.columns || 120;
-				let lastRenderedKittyFrameKey = "";
-				let deletePendingPath: string | null = null;
+			const requestPickerRender = () => tui.requestRender(previewBackend.usesInlineImages);
+			requestPreviewRender = requestPickerRender;
+			let activeTab = 0;
+			let cursor = 0;
+			let scrollOffset = 0;
+			let previewZoom = false;
+			let zoomLevel = 1;
+			let panX = 0;
+			let panY = 0;
+			let lastRenderWidth = process.stdout.columns || 120;
+			let lastRenderedKittyFrameKey = "";
+			let deletePendingPath: string | null = null;
 
-function clearRenderedKittyImage(): void {
-	if (TERMINAL.imageProtocol === ImageProtocol.Kitty && lastRenderedKittyFrameKey) {
-		process.stdout.write(deleteKittyImage(KITTY_IMAGE_ID));
-	}
-	lastRenderedKittyFrameKey = "";
-}
+			function clearRenderedKittyImage(): void {
+				if ((previewBackend.kind === "kitty-direct" || previewBackend.kind === "kitty-tmux-placeholder") && lastRenderedKittyFrameKey) {
+					process.stdout.write(deleteKittyImage(KITTY_IMAGE_ID));
+				}
+				lastRenderedKittyFrameKey = "";
+			}
 
 				function buildTabsSignature(sourceTabs: SourceTab[]): string {
 					return sourceTabs
@@ -1061,104 +1274,173 @@ function clearRenderedKittyImage(): void {
 					return true;
 				}
 
-				function renderKittyThumbnail(
-					screenshot: ScreenshotInfo,
-					maxPreviewWidthCells: number,
-					previewLines: number,
-				): string[] {
-					const thumbnail = loadThumbnail(screenshot);
-					const name = screenshot.name.slice(-20);
-					const frameKey = `${screenshot.path}:${maxPreviewWidthCells}:${previewLines}`;
-					const deletePrefix = lastRenderedKittyFrameKey && lastRenderedKittyFrameKey !== frameKey ? deleteKittyImage(KITTY_IMAGE_ID) : "";
-					lastRenderedKittyFrameKey = frameKey;
+			function renderKittyThumbnail(
+				screenshot: ScreenshotInfo,
+				maxPreviewWidthCells: number,
+				previewLines: number,
+			): string[] {
+				const thumbnail = loadThumbnail(screenshot);
+				const name = screenshot.name.slice(-20);
+				const frameKey = `${screenshot.path}:${maxPreviewWidthCells}:${previewLines}`;
+				const deletePrefix = lastRenderedKittyFrameKey && lastRenderedKittyFrameKey !== frameKey ? deleteKittyImage(KITTY_IMAGE_ID) : "";
+				lastRenderedKittyFrameKey = frameKey;
 
-					if (!thumbnail) {
-						const loading = isThumbnailLoading(screenshot.path);
-						const lines = [deletePrefix + theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]`)];
-						while (lines.length < previewLines) {
-							lines.push("");
-						}
-						return lines;
-					}
-
-					const dimensions = getScreenshotDimensions(screenshot);
-					if (!dimensions) {
-						const lines = [deletePrefix + theme.fg("dim", `  [No preview: ${name}]`)];
-						while (lines.length < previewLines) {
-							lines.push("");
-						}
-						return lines;
-					}
-
-					const fit = calculateKittyFit(dimensions, maxPreviewWidthCells, previewLines);
-					const sequence = encodeKitty(thumbnail.data, {
-						columns: fit.columns,
-						rows: fit.rows,
-						imageId: KITTY_IMAGE_ID,
-					});
-					const moveUp = fit.rows > 1 ? `\x1b[${fit.rows - 1}A` : "";
-					const lines: string[] = [];
-					for (let index = 0; index < fit.rows - 1; index++) {
-						lines.push("");
-					}
-					lines.push(deletePrefix + moveUp + sequence);
+				if (!thumbnail) {
+					const loading = isThumbnailLoading(screenshot.path);
+					const lines = [deletePrefix + theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]`)];
 					while (lines.length < previewLines) {
 						lines.push("");
 					}
 					return lines;
 				}
 
-				function renderStandardThumbnail(
-					screenshot: ScreenshotInfo,
-					maxPreviewWidthCells: number,
-					previewLines: number,
-				): string[] {
-					if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
-						return renderKittyThumbnail(screenshot, maxPreviewWidthCells, previewLines);
-					}
-					if (!TERMINAL.imageProtocol) {
-						const rendered = loadChafa(screenshot.path, screenshot.size, maxPreviewWidthCells, previewLines);
-						const name = screenshot.name.slice(-20);
-						if (!rendered) {
-							const loading = isChafaLoading(getChafaKey(screenshot.path, maxPreviewWidthCells, previewLines));
-							const hint = chafaBinary ? "" : " (install chafa)";
-							const lines = [theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]${hint}`)];
-							while (lines.length < previewLines) {
-								lines.push("");
-							}
-							return lines;
-						}
-						const lines = rendered.slice(0, previewLines);
-						while (lines.length < previewLines) {
-							lines.push("");
-						}
-						return lines;
-					}
-					const thumbnail = loadThumbnail(screenshot);
-					const name = screenshot.name.slice(-20);
-					if (!thumbnail) {
-						const loading = isThumbnailLoading(screenshot.path);
-						const lines = [theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]`)];
-						while (lines.length < previewLines) {
-							lines.push("");
-						}
-						return lines;
-					}
-					const dimensions = getScreenshotDimensions(screenshot);
-					const maxWidth = dimensions ? calculateConstrainedWidth(dimensions, previewLines, maxPreviewWidthCells) : maxPreviewWidthCells;
-					const image = new Image(
-						thumbnail.data,
-						thumbnail.mimeType,
-						{ fallbackColor: (value: string) => theme.fg("dim", value) },
-						{ maxWidthCells: maxWidth, maxHeightCells: previewLines, filename: screenshot.name },
-					);
-					const rendered = image.render(maxWidth + 2);
-					const lines = rendered.slice(0, previewLines);
+				const dimensions = getScreenshotDimensions(screenshot);
+				if (!dimensions) {
+					const lines = [deletePrefix + theme.fg("dim", `  [No preview: ${name}]`)];
 					while (lines.length < previewLines) {
 						lines.push("");
 					}
 					return lines;
 				}
+
+				const fit = calculateKittyFit(dimensions, maxPreviewWidthCells, previewLines);
+				const sequence = encodeKitty(thumbnail.data, {
+					columns: fit.columns,
+					rows: fit.rows,
+					imageId: KITTY_IMAGE_ID,
+				});
+				const moveUp = fit.rows > 1 ? `\x1b[${fit.rows - 1}A` : "";
+				const lines: string[] = [];
+				for (let index = 0; index < fit.rows - 1; index++) {
+					lines.push("");
+				}
+				lines.push(deletePrefix + moveUp + sequence);
+				while (lines.length < previewLines) {
+					lines.push("");
+				}
+				return lines;
+			}
+
+			function renderTextFallbackThumbnail(
+				screenshot: ScreenshotInfo,
+				maxPreviewWidthCells: number,
+				previewLines: number,
+				options?: { deletePrefix?: string; hint?: string },
+			): string[] {
+				const rendered = loadChafa(screenshot.path, maxPreviewWidthCells, previewLines);
+				const name = screenshot.name.slice(-20);
+				if (!rendered) {
+					const loading = isChafaLoading(getChafaKey(screenshot.path, maxPreviewWidthCells, previewLines));
+					const hint = chafaBinary ? "" : options?.hint ?? " (install chafa)";
+					const lines = [
+						(options?.deletePrefix ?? "") +
+							theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]${hint}`),
+					];
+					while (lines.length < previewLines) {
+						lines.push("");
+					}
+					return lines;
+				}
+				const lines = rendered.slice(0, previewLines);
+				if (options?.deletePrefix) {
+					if (lines.length > 0) {
+						lines[0] = options.deletePrefix + lines[0];
+					} else {
+						lines.push(options.deletePrefix);
+					}
+				}
+				while (lines.length < previewLines) {
+					lines.push("");
+				}
+				return lines;
+			}
+
+			function renderKittyTmuxPlaceholderThumbnail(
+				screenshot: ScreenshotInfo,
+				maxPreviewWidthCells: number,
+				previewLines: number,
+			): string[] {
+				if (previewBackend.kind !== "kitty-tmux-placeholder") {
+					return [];
+				}
+				if (!kittyPlaceholderRuntimeAvailable) {
+					const deletePrefix = lastRenderedKittyFrameKey ? deleteKittyImage(KITTY_IMAGE_ID) : "";
+					lastRenderedKittyFrameKey = "";
+					return renderTextFallbackThumbnail(screenshot, maxPreviewWidthCells, previewLines, { deletePrefix });
+				}
+				const terminalHeight = process.stdout.rows || 40;
+				const placement = resolveStandardPreviewPlacement({
+					terminalWidth: Math.max(1, lastRenderWidth),
+					terminalHeight,
+					overlayWidth: Math.max(1, lastRenderWidth),
+					previewWidthCells: maxPreviewWidthCells,
+					previewLines,
+					hasTabStrip: tabs.length > 1,
+				});
+				const window = resolveTerminalWindowSize(Math.max(1, lastRenderWidth), terminalHeight);
+				const key = getKittyTmuxPlaceholderKey(screenshot.path, placement, window);
+				const rendered = loadKittyTmuxPlaceholder(screenshot, placement, window);
+				const name = screenshot.name.slice(-20);
+				const frameKey = `${screenshot.path}:${placement.columns}:${placement.rows}:${placement.col}:${placement.row}`;
+				const deletePrefix = lastRenderedKittyFrameKey && lastRenderedKittyFrameKey !== frameKey ? deleteKittyImage(KITTY_IMAGE_ID) : "";
+				lastRenderedKittyFrameKey = frameKey;
+				if (!rendered) {
+					const loading = isKittyTmuxPlaceholderLoading(key);
+					const lines = [deletePrefix + theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]`)];
+					while (lines.length < previewLines) {
+						lines.push("");
+					}
+					return lines;
+				}
+				const lines = rendered.slice(0, previewLines);
+				if (lines.length > 0) {
+					lines[0] = deletePrefix + lines[0];
+				}
+				while (lines.length < previewLines) {
+					lines.push("");
+				}
+				return lines;
+			}
+
+			function renderStandardThumbnail(
+				screenshot: ScreenshotInfo,
+				maxPreviewWidthCells: number,
+				previewLines: number,
+			): string[] {
+				if (previewBackend.kind === "kitty-direct") {
+					return renderKittyThumbnail(screenshot, maxPreviewWidthCells, previewLines);
+				}
+				if (previewBackend.kind === "kitty-tmux-placeholder") {
+					return renderKittyTmuxPlaceholderThumbnail(screenshot, maxPreviewWidthCells, previewLines);
+				}
+				if (previewBackend.kind === "text-fallback") {
+					return renderTextFallbackThumbnail(screenshot, maxPreviewWidthCells, previewLines, { hint: previewBackend.hint });
+				}
+				const thumbnail = loadThumbnail(screenshot);
+				const name = screenshot.name.slice(-20);
+				if (!thumbnail || !previewImageProtocol) {
+					const loading = isThumbnailLoading(screenshot.path);
+					const lines = [theme.fg("dim", loading ? `  [Loading preview: ${name}]` : `  [No preview: ${name}]`)];
+					while (lines.length < previewLines) {
+						lines.push("");
+					}
+					return lines;
+				}
+				const dimensions = getScreenshotDimensions(screenshot);
+				const maxWidth = dimensions ? calculateConstrainedWidth(dimensions, previewLines, maxPreviewWidthCells) : maxPreviewWidthCells;
+				const image = new Image(
+					thumbnail.data,
+					thumbnail.mimeType,
+					{ fallbackColor: (value: string) => theme.fg("dim", value) },
+					{ maxWidthCells: maxWidth, maxHeightCells: previewLines, filename: screenshot.name },
+				);
+				const rendered = image.render(maxWidth + 2);
+				const lines = rendered.slice(0, previewLines);
+				while (lines.length < previewLines) {
+					lines.push("");
+				}
+				return lines;
+			}
 
 				function renderZoomInspectorThumbnail(
 					screenshot: ScreenshotInfo,
@@ -1280,7 +1562,10 @@ function clearRenderedKittyImage(): void {
 								tabLine += index === activeTab ? theme.fg("accent", theme.bold(`[${label}]`)) : theme.fg("dim", ` ${label} `);
 								tabLine += " ";
 							}
-							tabLine += theme.fg("dim", previewZoom ? "  Ctrl+T switch • z split" : "  Ctrl+T switch • z zoom");
+							tabLine += theme.fg(
+								"dim",
+								previewZoom ? "  Ctrl+T switch • z split" : supportsPreviewZoom ? "  Ctrl+T switch • z zoom" : "  Ctrl+T switch",
+							);
 							if (previewZoom) {
 								lines.push(tabLine);
 								lines.push("");
@@ -1370,7 +1655,9 @@ function clearRenderedKittyImage(): void {
 											? supportsKittyInspector
 												? "↑↓←→ pan • +/- zoom • [ ] nav • 0 reset • z split • s toggle • enter done"
 												: "↑↓ nav • +/- zoom • z split • s toggle • enter done"
-											: "↑↓ nav • z zoom • s toggle • o open • d delete • enter done",
+											: supportsPreviewZoom
+												? "↑↓ nav • z zoom • s toggle • o open • d delete • enter done"
+												: "↑↓ nav • s toggle • o open • d delete • enter done",
 									),
 							);
 						} else {
@@ -1386,7 +1673,9 @@ function clearRenderedKittyImage(): void {
 											? supportsKittyInspector
 												? "↑↓←→ pan • +/- zoom • [ ] nav • 0 reset • z split • x clear • enter done"
 												: "↑↓ nav • +/- zoom • z split • x clear • enter done"
-											: "z zoom • s toggle • x clear • d delete • enter done",
+											: supportsPreviewZoom
+												? "z zoom • s toggle • x clear • d delete • enter done"
+												: "s toggle • x clear • d delete • enter done",
 									),
 							);
 						}
@@ -1437,6 +1726,9 @@ function clearRenderedKittyImage(): void {
 							return;
 						}
 						if (data === "z" || data === "Z") {
+							if (!supportsPreviewZoom) {
+								return;
+							}
 							previewZoom = !previewZoom;
 							resetZoomViewport();
 							clearPendingDelete();
@@ -1631,9 +1923,12 @@ toggleStagedScreenshot(currentScreenshot, ctx);
 }
 
 export const _testExports = {
+	buildKittyTmuxPlaceholderCommand,
 	consumeStagedInput,
+	deleteKittyImage,
 	getScreenshotsFromSource,
 	renderStagedStatusText,
 	resolveDefaultSources,
+	resolvePreviewBackend,
 	screenshotsStatusKey: SCREENSHOTS_STATUS_KEY,
 };
