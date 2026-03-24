@@ -1441,3 +1441,4 @@ export class TUI extends Container {
 		this.terminal.write(`\x1b[?2026h${buffer}\x1b[?2026l`);
 		this.#hardwareCursorRow = targetRow;
 	}
+}
