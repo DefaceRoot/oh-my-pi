@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { parseEffort } from "../thinking";
 import { BUILTIN_TOOLS } from "../tools";
 
-export type Mode = "text" | "json" | "rpc";
+export type Mode = "text" | "json" | "rpc" | "acp";
 
 export interface Args {
 	cwd?: string;
@@ -28,6 +28,8 @@ export interface Args {
 	mode?: Mode;
 	noSession?: boolean;
 	sessionDir?: string;
+	providerSessionId?: string;
+	fork?: string;
 	models?: string[];
 	tools?: string[];
 	noTools?: boolean;
@@ -67,7 +69,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.allowHome = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {
@@ -79,6 +81,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			} else {
 				result.resume = true;
 			}
+		} else if (arg === "--fork" && i + 1 < args.length) {
+			result.fork = args[++i];
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
@@ -95,6 +99,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
 			result.appendSystemPrompt = args[++i];
+		} else if (arg === "--provider-session-id" && i + 1 < args.length) {
+			result.providerSessionId = args[++i];
 		} else if (arg === "--no-session") {
 			result.noSession = true;
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
@@ -108,7 +114,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
 		} else if (arg === "--tools" && i + 1 < args.length) {
-			const toolNames = args[++i].split(",").map(s => s.trim());
+			const toolNames = args[++i]
+				.split(",")
+				.map(s => s.trim().toLowerCase())
+				.filter(Boolean);
 			const validTools: string[] = [];
 			for (const name of toolNames) {
 				if (name in BUILTIN_TOOLS) {
@@ -222,6 +231,7 @@ export function getExtraHelpText(): string {
   BRAVE_API_KEY              - Brave web search
   PERPLEXITY_API_KEY         - Perplexity web search (API)
   PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
+  TAVILY_API_KEY             - Tavily web search
   ANTHROPIC_SEARCH_API_KEY   - Anthropic search provider
 
   ${chalk.dim("# Configuration")}
@@ -234,22 +244,23 @@ export function getExtraHelpText(): string {
 
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}
-${chalk.bold("Available Tools (all enabled by default):")}
-  read       - Read file contents
-  bash       - Execute bash commands
-  edit       - Edit files with find/replace
-  write      - Write files (creates/overwrites)
-  grep       - Search file contents
-  find       - Find files by glob pattern
-  lsp        - Language server protocol (code intelligence)
-  python     - Execute Python code (requires: ${APP_NAME} setup python)
-  notebook   - Edit Jupyter notebooks
-  browser    - Browser automation (Puppeteer)
-  task       - Launch sub-agents for parallel tasks
-  todo_write - Manage todo/task lists
-  fetch      - Fetch and process URLs
-  web_search - Search the web
-  ask        - Ask user questions (interactive mode only)
+${chalk.bold("Available Tools (default-enabled unless noted):")}
+  read          - Read file contents
+  bash          - Execute bash commands
+  edit          - Edit files with find/replace
+  write         - Write files (creates/overwrites)
+  grep          - Search file contents
+  find          - Find files by glob pattern
+  lsp           - Language server protocol (code intelligence)
+  python        - Execute Python code (requires: ${APP_NAME} setup python)
+  notebook      - Edit Jupyter notebooks
+  inspect_image - Analyze images with a vision model
+  browser       - Browser automation (Puppeteer)
+  task          - Launch sub-agents for parallel tasks
+  todo_write    - Manage todo/task lists
+  fetch         - Fetch and process URLs
+  web_search    - Search the web
+  ask           - Ask user questions (interactive mode only)
 
 ${chalk.bold("Useful Commands:")}
   omp agents unpack           - Export bundled subagents to ~/.omp/agent/agents (default)

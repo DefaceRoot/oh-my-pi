@@ -124,4 +124,41 @@ describe("system Handlebars prompt templates", () => {
 		expect(neither).not.toContain("## Context");
 		expect(neither).not.toContain("## Version Control");
 	});
+
+	test("system-prompt conditionally renders inspect_image guidance", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const baseTools = baseRenderContext.tools as string[];
+		const withInspectImage = renderPromptTemplate(template, {
+			...baseRenderContext,
+			tools: [...baseTools, "inspect_image"],
+		});
+		expect(withInspectImage).toContain("### Image inspection");
+		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
+		expect(withInspectImage).toContain("Write a specific `question` for `inspect_image`");
+
+		const withoutInspectImage = renderPromptTemplate(template, {
+			...baseRenderContext,
+			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
+		});
+		expect(withoutInspectImage).not.toContain("### Image inspection");
+	});
+
+	test("system-prompt renders MCP discovery hint when enabled", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			mcpDiscoveryMode: true,
+			hasMCPDiscoveryServers: true,
+			mcpDiscoveryServerSummaries: ["github (2 tools)", "slack (1 tool)"],
+		});
+
+		expect(rendered).toContain("### MCP tool discovery");
+		expect(rendered).toContain("Discoverable MCP servers in this session: github (2 tools), slack (1 tool).");
+		expect(rendered).not.toContain("Example discoverable MCP tools:");
+		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
+	});
 });

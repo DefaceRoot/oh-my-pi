@@ -29,6 +29,7 @@ import type { EventBus } from "../utils/event-bus";
 import { getTotalUsageTokens } from "../utils/usage-tokens";
 import { deriveSubagentOutcomeFromReviewData, type SubagentOutcome } from "./subagent-outcome";
 import { registerSubagentRuntime, unregisterSubagentRuntime } from "./subagent-runtime-registry";
+import { buildNamedToolChoice } from "../utils/tool-choice";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { validateSuccessToolRequirements } from "./success-evidence";
 import {
@@ -84,22 +85,6 @@ function getReportFindingKey(value: unknown): string | null {
 	return `${filePath}:${lineStart}:${lineEnd}:${priority ?? ""}:${title}`;
 }
 
-function buildSubmitResultToolChoice(model?: Model<Api>): ToolChoice | undefined {
-	if (!model) return undefined;
-	if (
-		model.api === "openai-codex-responses" ||
-		model.api === "openai-responses" ||
-		model.api === "openai-completions" ||
-		model.api === "azure-openai-responses"
-	) {
-		return { type: "function", name: "submit_result" };
-	}
-	if (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") {
-		return { type: "tool", name: "submit_result" };
-	}
-	return undefined;
-}
-
 /** Options for subagent execution */
 export interface ExecutorOptions {
 	cwd: string;
@@ -107,6 +92,7 @@ export interface ExecutorOptions {
 	agent: AgentDefinition;
 	runtimeRole?: string;
 	task: string;
+	assignment?: string;
 	description?: string;
 	index: number;
 	id: string;
@@ -397,6 +383,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		cwd,
 		agent,
 		task,
+		assignment,
 		index,
 		id,
 		worktree,
@@ -419,6 +406,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agentSource: agent.source,
 		status: "running",
 		task,
+		assignment,
 		description: options.description,
 		lastIntent: undefined,
 		recentTools: [],
@@ -445,6 +433,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			agent: agent.name,
 			agentSource: agent.source,
 			task,
+			assignment,
 			description: options.description,
 			exitCode: 1,
 			output: "",
@@ -599,6 +588,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				agent: agent.name,
 				agentSource: agent.source,
 				task,
+				assignment,
 				progress: { ...progress },
 			});
 		}
@@ -703,6 +693,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				agent: agent.name,
 				agentSource: agent.source,
 				task,
+				assignment,
 				event,
 			});
 		}
@@ -1157,7 +1148,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			});
 
-			await session.prompt(task, { expandPromptTemplates: false, images });
+			await session.prompt(task, { expandPromptTemplates: false, images, attribution: "agent" });
 			await session.waitForIdle();
 
 			let abortedContinueCount = 0;
@@ -1174,7 +1165,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				await session.waitForIdle();
 			}
 
-			const reminderToolChoice = buildSubmitResultToolChoice(session.model);
+			const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
 
 			const initialAssistant = session.getLastAssistantMessage();
 			const shouldForceSubmitResultReminder = initialAssistant?.stopReason !== "error";
@@ -1217,7 +1208,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					submitResultOnlyMode = true;
 					submitResultErrorAttempts = 0;
 					try {
-						await session.prompt(reminder, reminderToolChoice ? { toolChoice: reminderToolChoice } : undefined);
+						await session.prompt(reminder, {
+							attribution: "agent",
+							...(reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+						});
 						await session.waitForIdle();
 					} finally {
 						submitResultOnlyMode = false;
@@ -1412,12 +1406,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent: agent.name,
 		agentSource: agent.source,
 		task,
+		assignment,
 		description: options.description,
 		lastIntent: progress.lastIntent,
 		exitCode,
 		output: truncatedOutput,
 		stderr,
-		truncated,
+		truncated: Boolean(truncated),
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
 		hasSubmitResult,

@@ -5,6 +5,8 @@ import type { TaskItem } from "./types";
 export interface RenderResult {
 	/** Full task text sent to the subagent */
 	task: string;
+	/** Raw per-task assignment text, without prompt template boilerplate */
+	assignment: string;
 	id: string;
 	description: string;
 }
@@ -31,18 +33,19 @@ export function renderTemplate(
 	assignment = assignment.trim();
 	const directContext = context?.trim();
 	if (directContext?.startsWith("delegation:")) {
-		return { task: directContext, id, description };
+		return { task: directContext, assignment: directContext, id, description };
 	}
 	const delegationContext = options.delegationContext?.trim();
 	if (delegationContext?.startsWith("delegation:")) {
-		return { task: delegationContext, id, description };
+		return { task: delegationContext, assignment: delegationContext, id, description };
 	}
 	const background = buildBackground(context, options.delegationContext);
 	if (!background || !assignment) {
-		return { task: assignment || background || "", id, description };
+		return { task: assignment || background || "", assignment: assignment || background || "", id, description };
 	}
 	return {
 		task: renderPromptTemplate(subagentUserPromptTemplate, { context: background, assignment }),
+		assignment,
 		id,
 		description,
 	};

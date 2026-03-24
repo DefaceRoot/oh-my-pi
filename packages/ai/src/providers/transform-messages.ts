@@ -55,19 +55,26 @@ export function transformMessages<TApi extends Api>(
 				index === latestAssistantIndex &&
 				model.api === "anthropic-messages" &&
 				assistantMsg.api === "anthropic-messages";
+			// Aborted/errored messages may have partially-streamed thinking signatures.
+			// A partial signature is invalid and will be rejected by the API, so we must
+			// strip signatures from thinking blocks in these messages.
+			const hasInvalidSignatures = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
 
 			const transformedContent = assistantMsg.content.flatMap(block => {
 				if (block.type === "thinking") {
-					if (mustPreserveLatestAnthropicThinking) return block;
+					// Strip signature from aborted/errored messages — it's likely incomplete
+					const sanitized =
+						hasInvalidSignatures && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block;
+					if (mustPreserveLatestAnthropicThinking) return sanitized;
 					// For same model: keep thinking blocks with signatures (needed for replay)
 					// even if the thinking text is empty (OpenAI encrypted reasoning)
-					if (isSameModel && block.thinkingSignature) return block;
+					if (isSameModel && sanitized.thinkingSignature) return sanitized;
 					// Skip empty thinking blocks, convert others to plain text
-					if (!block.thinking || block.thinking.trim() === "") return [];
-					if (isSameModel) return block;
+					if (!sanitized.thinking || sanitized.thinking.trim() === "") return [];
+					if (isSameModel) return sanitized;
 					return {
 						type: "text" as const,
-						text: block.thinking,
+						text: sanitized.thinking,
 					};
 				}
 
@@ -117,101 +124,105 @@ export function transformMessages<TApi extends Api>(
 	});
 
 	// Second pass: insert synthetic empty tool results for orphaned tool calls
-	// This preserves thinking signatures and satisfies API requirements
+	// and preserve aborted/errored tool results when they were already persisted.
 	const result: Message[] = [];
 	let pendingToolCalls: ToolCall[] = [];
-	// Track tool call status: whether resolved (has result) or aborted (skip real results)
+	let pendingAbortedToolCalls = new Map<string, ToolCall>();
+	let pendingAbortedTimestamp: number | undefined;
+	// Track tool call status: whether resolved (has result) or aborted (synthetic result injected, skip later real results)
 	const toolCallStatus = new Map<string, ToolCallStatus>();
+
+	const flushPendingToolCalls = (timestamp: number): void => {
+		if (pendingToolCalls.length === 0) return;
+		for (const tc of pendingToolCalls) {
+			if (!toolCallStatus.has(tc.id)) {
+				result.push({
+					role: "toolResult",
+					toolCallId: tc.id,
+					toolName: tc.name,
+					content: [{ type: "text", text: "No result provided" }],
+					isError: true,
+					timestamp,
+				} as ToolResultMessage);
+				toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
+			}
+		}
+		pendingToolCalls = [];
+	};
+
+	const flushPendingAbortedToolCalls = (): void => {
+		if (pendingAbortedTimestamp === undefined) return;
+		for (const tc of pendingAbortedToolCalls.values()) {
+			if (!toolCallStatus.has(tc.id)) {
+				result.push({
+					role: "toolResult",
+					toolCallId: tc.id,
+					toolName: tc.name,
+					content: [{ type: "text", text: "aborted" }],
+					isError: true,
+					timestamp: pendingAbortedTimestamp,
+				} as ToolResultMessage);
+				toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
+			}
+		}
+		result.push({
+			role: "developer",
+			content: turnAbortedGuidance,
+			timestamp: pendingAbortedTimestamp + 1,
+		} as DeveloperMessage);
+		pendingAbortedToolCalls = new Map();
+		pendingAbortedTimestamp = undefined;
+	};
 
 	for (let i = 0; i < transformed.length; i++) {
 		const msg = transformed[i];
+		const messageTimestamp = "timestamp" in msg && typeof msg.timestamp === "number" ? msg.timestamp : Date.now();
 
 		if (msg.role === "assistant") {
-			// If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
-			if (pendingToolCalls.length > 0) {
-				for (const tc of pendingToolCalls) {
-					if (!toolCallStatus.has(tc.id)) {
-						result.push({
-							role: "toolResult",
-							toolCallId: tc.id,
-							toolName: tc.name,
-							content: [{ type: "text", text: "No result provided" }],
-							isError: true,
-							timestamp: Date.now(),
-						} as ToolResultMessage);
-						toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
-					}
-				}
-				pendingToolCalls = [];
-			}
+			flushPendingToolCalls(messageTimestamp);
+			flushPendingAbortedToolCalls();
 
-			// For errored/aborted assistant messages: keep tool calls intact,
-			// inject synthetic "aborted" results, and add guidance marker.
-			// This preserves structure so the model knows what was attempted.
 			const assistantMsg = msg as AssistantMessage;
 			const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall") as ToolCall[];
 
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				// Push the assistant message with tool calls intact
+				// Keep the assistant message with tool calls intact. If real tool results follow, preserve them;
+				// otherwise synthesize aborted results before the next turn boundary.
 				result.push(msg);
-
-				// Inject synthetic "aborted" results for each tool call
-				for (const tc of toolCalls) {
-					toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
-					result.push({
-						role: "toolResult",
-						toolCallId: tc.id,
-						toolName: tc.name,
-						content: [{ type: "text", text: "aborted" }],
-						isError: true,
-						timestamp: assistantMsg.timestamp,
-					} as ToolResultMessage);
-				}
-
-				// Inject turn-aborted guidance marker as developer message
-				result.push({
-					role: "developer",
-					content: turnAbortedGuidance,
-					timestamp: assistantMsg.timestamp + 1,
-				} as DeveloperMessage);
-
+				pendingAbortedToolCalls = new Map(toolCalls.map(toolCall => [toolCall.id, toolCall] as const));
+				pendingAbortedTimestamp = assistantMsg.timestamp;
 				continue;
 			}
 
-			// Track tool calls from this normal assistant message
 			if (toolCalls.length > 0) {
 				pendingToolCalls = toolCalls;
 			}
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
-			// Skip tool results for aborted tool calls (we already injected synthetic ones)
+			if (pendingAbortedToolCalls.has(msg.toolCallId)) {
+				pendingAbortedToolCalls.delete(msg.toolCallId);
+				toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
+				result.push(msg);
+				continue;
+			}
+
 			if (toolCallStatus.get(msg.toolCallId) === ToolCallStatus.Aborted) continue;
 			toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
 			result.push(msg);
 		} else if (msg.role === "user" || msg.role === "developer") {
-			// User/developer message interrupts tool flow - insert synthetic results for orphaned calls
-			if (pendingToolCalls.length > 0) {
-				for (const tc of pendingToolCalls) {
-					if (!toolCallStatus.has(tc.id)) {
-						result.push({
-							role: "toolResult",
-							toolCallId: tc.id,
-							toolName: tc.name,
-							content: [{ type: "text", text: "No result provided" }],
-							isError: true,
-							timestamp: Date.now(),
-						} as ToolResultMessage);
-						toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
-					}
-				}
-				pendingToolCalls = [];
-			}
+			flushPendingToolCalls(messageTimestamp);
+			flushPendingAbortedToolCalls();
 			result.push(msg);
 		} else {
+			flushPendingToolCalls(messageTimestamp);
+			flushPendingAbortedToolCalls();
 			result.push(msg);
 		}
 	}
+
+	flushPendingToolCalls(Date.now());
+	flushPendingAbortedToolCalls();
 
 	return result;
 }

@@ -5,6 +5,7 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 	"github-copilot/claude-haiku-4.5": 0.33,
 	"github-copilot/claude-opus-4.6": 3,
 	"github-copilot/gpt-4o": 0,
+	"github-copilot/gpt-5.4-mini": 0.33,
 	"github-copilot/grok-code-fast-1": 0.25,
 };
 
@@ -303,9 +304,6 @@ async function generateModels() {
 		}
 	}
 
-	applyGeneratedModelPolicies(allModels);
-	linkSparkPromotionTargets(allModels);
-
 	// Merge previous models.json entries as fallback for any provider/model
 	// not fetched dynamically. This replaces all hardcoded fallback lists —
 	// static-only providers (vertex, gemini-cli), auth-gated providers when
@@ -325,6 +323,8 @@ async function generateModels() {
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
+	applyGeneratedModelPolicies(allModels);
+	linkSparkPromotionTargets(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};

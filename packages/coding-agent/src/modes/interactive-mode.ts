@@ -6,24 +6,31 @@
 import * as path from "node:path";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
-import type { Component, Loader, OverlayHandle, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
+import type { Component, OverlayHandle, SlashCommand, TerminalMouseEvent } from "@oh-my-pi/pi-tui";
 import {
 	CombinedAutocompleteProvider,
 	Container,
+	Loader,
 	Markdown,
 	ProcessTerminal,
 	Spacer,
 	Text,
 	TUI,
+	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { $env, isEnoent, logger, parseJsonlLenient, postmortem } from "@oh-my-pi/pi-utils";
+import { $env, hsvToRgb, isEnoent, logger, parseJsonlLenient, postmortem } from "@oh-my-pi/pi-utils";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { parseModelString } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type Settings, settings } from "../config/settings";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
+import type {
+	ExtensionUIContext,
+	ExtensionUIDialogOptions,
+	ExtensionWidgetContent,
+	ExtensionWidgetOptions,
+} from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
@@ -46,7 +53,7 @@ import { TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, TASK_SUBAGENT_STOP_REQUEST_CHANNE
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
-import { setTerminalTitle } from "../utils/title-generator";
+import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle, setTerminalTitle } from "../utils/title-generator";
 import { getTotalUsageTokens } from "../utils/usage-tokens";
 import {
 	ACTION_BUTTONS,
@@ -71,6 +78,8 @@ import { StatusLineComponent } from "./components/status-line";
 import { SubagentSessionViewerComponent } from "./components/subagent-session-viewer";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
+import { BtwController } from "./controllers/btw-controller";
+import { STTController, type SttState } from "../stt";
 import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
@@ -90,12 +99,24 @@ import type {
 } from "./subagent-view/types";
 import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme, ThemeColor } from "./theme/theme";
-import { getEditorTheme, getMarkdownTheme, onThemeChange, theme } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, TodoItem } from "./types";
+import {
+	getEditorTheme,
+	getMarkdownTheme,
+	getSymbolTheme,
+	onTerminalAppearanceChange,
+	onThemeChange,
+	theme,
+} from "./theme/theme";
+import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 /** Conditional startup debug prints (stderr) when PI_DEBUG_STARTUP is set */
 const debugStartup = $env.PI_DEBUG_STARTUP ? (stage: string) => process.stderr.write(`[startup] ${stage}\n`) : () => {};
+
+const EDITOR_MAX_HEIGHT_MIN = 6;
+const EDITOR_MAX_HEIGHT_MAX = 18;
+const EDITOR_RESERVED_ROWS = 12;
+const EDITOR_FALLBACK_ROWS = 24;
 
 const TODO_FILE_NAME = "todos.json";
 const SUBAGENT_VIEWER_STATUS_KEY = "subagent-viewer";
@@ -219,8 +240,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	public pendingMessagesContainer: Container;
 	public statusContainer: Container;
 	public todoContainer: Container;
+	public btwContainer: Container;
 	public editor: CustomEditor;
 	public editorContainer: Container;
+	public hookWidgetContainerAbove: Container;
+	public hookWidgetContainerBelow: Container;
 	public statusLine: StatusLineComponent;
 	public oauthManualInput = new OAuthManualInputManager();
 	private readonly mainLayoutContainer: Container;
@@ -256,7 +280,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	public autoCompactionEscapeHandler?: () => void;
 	public retryEscapeHandler?: () => void;
 	public unsubscribe?: () => void;
-	public onInputCallback?: (input: { text: string; images?: ImageContent[] }) => void;
+	public onInputCallback?: (input: SubmittedUserInput) => void;
+	public optimisticUserMessageSignature: string | undefined = undefined;
+	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	public lastSigintTime = 0;
 	public lastEscapeTime = 0;
 	public shutdownRequested = false;
@@ -313,12 +339,19 @@ export class InteractiveMode implements InteractiveModeContext {
 	private sidebarAnimationFrame = 0;
 	private sidebarAnimationInterval: ReturnType<typeof setInterval> | undefined;
 
+	private readonly btwController: BtwController;
 	private readonly commandController: CommandController;
 	private readonly eventController: EventController;
 	private readonly extensionUiController: ExtensionUiController;
 	private readonly inputController: InputController;
 	private readonly selectorController: SelectorController;
 	private readonly uiHelpers: UiHelpers;
+	#sttController: STTController | undefined;
+	#voiceAnimationInterval: NodeJS.Timeout | undefined;
+	#voiceHue = 0;
+	#voicePreviousShowHardwareCursor: boolean | null = null;
+	#voicePreviousUseTerminalCursor: boolean | null = null;
+	#resizeHandler?: () => void;
 
 	constructor(
 		session: AgentSession,
@@ -348,6 +381,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
+		this.btwContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.onAutocompleteCancel = () => {
@@ -362,6 +396,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
+		this.hookWidgetContainerAbove = new Container();
+		this.hookWidgetContainerAbove.addChild(new Spacer(1));
+		this.hookWidgetContainerBelow = new Container();
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
@@ -374,8 +411,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mainLayoutContainer.addChild(this.pendingMessagesContainer);
 		this.mainLayoutContainer.addChild(this.statusContainer);
 		this.mainLayoutContainer.addChild(this.todoContainer);
-		this.mainLayoutContainer.addChild(new Spacer(1));
+		this.mainLayoutContainer.addChild(this.hookWidgetContainerAbove);
 		this.mainLayoutContainer.addChild(this.editorContainer);
+		this.mainLayoutContainer.addChild(this.hookWidgetContainerBelow);
 		this.sidebarPanel = new SidebarPanelComponent();
 		this.responsiveLayout = {
 			render: width => {
@@ -423,6 +461,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.pendingSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands, ...skillCommandList];
 
 		this.uiHelpers = new UiHelpers(this);
+		this.btwController = new BtwController(this);
 		this.extensionUiController = new ExtensionUiController(this);
 		this.eventController = new EventController(this);
 		this.commandController = new CommandController(this);
@@ -525,13 +564,13 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Start the UI
 		this.ui.start();
+		pushTerminalTitle();
+		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		this.ensureSidebarOverlay();
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender(true);
-
-		// Set initial terminal title (will be updated when session title is generated)
-		this.ui.terminal.setTitle("π");
 
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
@@ -553,6 +592,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		});
 
+		// Subscribe to terminal dark/light appearance changes.
+		// The terminal queries background color via OSC 11 at startup and on
+		// Mode 2031 notifications, computing luminance to detect dark/light.
+		this.ui.terminal.onAppearanceChange(mode => {
+			onTerminalAppearanceChange(mode);
+		});
+
 		// Set up git branch watcher
 		this.statusLine.watchBranch(() => {
 			this.updateEditorTopBorder();
@@ -563,13 +609,99 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorTopBorder();
 	}
 
-	async getUserInput(): Promise<{ text: string; images?: ImageContent[] }> {
-		const { promise, resolve } = Promise.withResolvers<{ text: string; images?: ImageContent[] }>();
+	/** Reload slash commands and autocomplete for the provided working directory. */
+	async refreshSlashCommandState(cwd?: string): Promise<void> {
+		const basePath = cwd ?? this.sessionManager.getCwd();
+		const fileCommands = await loadSlashCommands({ cwd: basePath });
+		this.fileSlashCommands = new Set(fileCommands.map(cmd => cmd.name));
+		const fileSlashCommands: SlashCommand[] = fileCommands.map(cmd => ({
+			name: cmd.name,
+			description: cmd.description,
+		}));
+		const autocompleteProvider = new CombinedAutocompleteProvider(
+			[...this.pendingSlashCommands, ...fileSlashCommands],
+			basePath,
+		);
+		this.editor.setAutocompleteProvider(autocompleteProvider);
+		this.session.setSlashCommands(fileCommands);
+	}
+
+	async getUserInput(): Promise<SubmittedUserInput> {
+		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
 		return promise;
+	}
+
+	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {
+		const submission: SubmittedUserInput = {
+			text: input.text,
+			images: input.images,
+			cancelled: false,
+			started: false,
+		};
+		this.#pendingSubmittedInput = submission;
+		this.optimisticUserMessageSignature = `${submission.text}\u0000${submission.images?.length ?? 0}`;
+		this.addMessageToChat({
+			role: "user",
+			content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		this.editor.setText("");
+		this.ensureLoadingAnimation();
+		this.ui.requestRender();
+		return submission;
+	}
+
+	cancelPendingSubmission(): boolean {
+		const submission = this.#pendingSubmittedInput;
+		if (!submission || submission.started) {
+			return false;
+		}
+
+		submission.cancelled = true;
+		this.#pendingSubmittedInput = undefined;
+		this.optimisticUserMessageSignature = undefined;
+		this.pendingWorkingMessage = undefined;
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+			this.statusContainer.clear();
+		}
+		this.pendingImages = submission.images ? [...submission.images] : [];
+		this.rebuildChatFromMessages();
+		this.editor.setText(submission.text);
+		this.updateEditorBorderColor();
+		this.ui.requestRender();
+		return true;
+	}
+
+	markPendingSubmissionStarted(input: SubmittedUserInput): boolean {
+		if (this.#pendingSubmittedInput !== input || input.cancelled) {
+			return false;
+		}
+		input.started = true;
+		return true;
+	}
+
+	finishPendingSubmission(input: SubmittedUserInput): void {
+		if (this.#pendingSubmittedInput === input) {
+			this.#pendingSubmittedInput = undefined;
+		}
+	}
+
+	#computeEditorMaxHeight(): number {
+		const rows = this.ui.terminal.rows;
+		const terminalRows = Number.isFinite(rows) && rows > 0 ? rows : EDITOR_FALLBACK_ROWS;
+		const maxHeight = terminalRows - EDITOR_RESERVED_ROWS;
+		return Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, maxHeight));
+	}
+
+	#syncEditorMaxHeight(): void {
+		this.editor.setMaxHeight(this.#computeEditorMaxHeight());
 	}
 
 	updateEditorBorderColor(): void {
@@ -822,8 +954,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		switch (todo.status) {
 			case "completed":
 				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`);
-			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${label}`);
+			case "in_progress": {
+				const main = theme.fg("accent", `${prefix}${checkbox.unchecked} ${label}`);
+				if (!todo.details) return main;
+				const detailLines = todo.details.split("\n").map(line => theme.fg("dim", `${prefix}  ${line}`));
+				return [main, ...detailLines].join("\n");
+			}
+			case "abandoned":
+				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`);
 			default:
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${label}`);
 		}
@@ -849,7 +987,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const visibleTodos = this.todoExpanded ? this.todoItems : this.getCollapsedTodos(this.todoItems);
 		const indent = "  ";
 		const hook = theme.tree.hook;
-		const lines = [indent + theme.bold(theme.fg("accent", "Todos"))];
+		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		visibleTodos.forEach((todo, index) => {
 			const prefix = `${indent}${index === 0 ? hook : " "} `;
@@ -1124,6 +1262,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
+		this.#cleanupMicAnimation();
+		if (this.#sttController) {
+			this.#sttController.dispose();
+			this.#sttController = undefined;
+		}
+		this.extensionUiController.clearExtensionTerminalInputListeners();
+		this.extensionUiController.clearHookWidgets();
 		this.statusLine.dispose();
 		if (this.unsubscribe) {
 			this.unsubscribe();
@@ -1144,6 +1289,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.sessionManager.flush();
 		// Flush pending settings writes (e.g., model role changes via /model) before shutdown
 		await this.settings.flush();
+		this.btwController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.emitCustomToolSessionEvent("shutdown");
@@ -1159,7 +1305,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);
-
+		popTerminalTitle();
 		this.stop();
 
 		// Print resumption hint if this is a persisted session
@@ -1280,11 +1426,35 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showError(message: string): void {
+		this.#pendingSubmittedInput = undefined;
+		this.optimisticUserMessageSignature = undefined;
+		this.pendingWorkingMessage = undefined;
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+			this.statusContainer.clear();
+		}
 		this.uiHelpers.showError(message);
 	}
 
 	showWarning(message: string): void {
 		this.uiHelpers.showWarning(message);
+	}
+
+	ensureLoadingAnimation(): void {
+		if (!this.loadingAnimation) {
+			this.statusContainer.clear();
+			this.loadingAnimation = new Loader(
+				this.ui,
+				spinner => theme.fg("accent", spinner),
+				text => theme.fg("muted", text),
+				this.defaultWorkingMessage,
+				getSymbolTheme().spinnerFrames,
+			);
+			this.statusContainer.addChild(this.loadingAnimation);
+		}
+
+		this.applyPendingWorkingMessage();
 	}
 
 	setWorkingMessage(message?: string): void {
@@ -1401,8 +1571,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.commandController.handleShareCommand();
 	}
 
-	handleCopyCommand(): void {
-		this.commandController.handleCopyCommand();
+	handleCopyCommand(sub?: string) {
+		return this.commandController.handleCopyCommand(sub);
 	}
 
 	handleSessionCommand(): Promise<void> {
@@ -1422,15 +1592,102 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleClearCommand(): Promise<void> {
+		this.btwController.dispose();
+		this.extensionUiController.clearExtensionTerminalInputListeners();
 		return this.commandController.handleClearCommand();
 	}
 
 	handleForkCommand(): Promise<void> {
+		this.btwController.dispose();
 		return this.commandController.handleForkCommand();
 	}
 
 	mergeUpstreamFork(): Promise<void> {
 		return this.commandController.handleMergeUpstreamFork();
+	}
+
+	handleMoveCommand(targetPath: string): Promise<void> {
+		return this.commandController.handleMoveCommand(targetPath);
+	}
+
+	handleMemoryCommand(text: string): Promise<void> {
+		return this.commandController.handleMemoryCommand(text);
+	}
+
+	async handleSTTToggle(): Promise<void> {
+		if (!settings.get("stt.enabled")) {
+			this.showWarning("Speech-to-text is disabled. Enable it in settings: stt.enabled");
+			return;
+		}
+		if (!this.#sttController) {
+			this.#sttController = new STTController();
+		}
+		await this.#sttController.toggle(this.editor, {
+			showWarning: (msg: string) => this.showWarning(msg),
+			showStatus: (msg: string) => this.showStatus(msg),
+			onStateChange: (state: SttState) => {
+				if (state === "recording") {
+					this.#voicePreviousShowHardwareCursor = this.ui.getShowHardwareCursor();
+					this.#voicePreviousUseTerminalCursor = this.editor.getUseTerminalCursor();
+					this.ui.setShowHardwareCursor(false);
+					this.editor.setUseTerminalCursor(false);
+					this.#startMicAnimation();
+				} else if (state === "transcribing") {
+					this.#stopMicAnimation();
+					this.#setMicCursor({ r: 200, g: 200, b: 200 });
+				} else {
+					this.#cleanupMicAnimation();
+				}
+				this.updateEditorTopBorder();
+				this.ui.requestRender();
+			},
+		});
+	}
+
+	#setMicCursor(color: { r: number; g: number; b: number }): void {
+		this.editor.cursorOverride = `\x1b[38;2;${color.r};${color.g};${color.b}m${theme.icon.mic}\x1b[0m`;
+		// Theme symbols can be wide (for example, 🎤), so measure the rendered override.
+		this.editor.cursorOverrideWidth = visibleWidth(this.editor.cursorOverride);
+	}
+
+	#updateMicIcon(): void {
+		const { r, g, b } = hsvToRgb({ h: this.#voiceHue, s: 0.9, v: 1.0 });
+		this.#setMicCursor({ r, g, b });
+	}
+
+	#startMicAnimation(): void {
+		if (this.#voiceAnimationInterval) return;
+		this.#voiceHue = 0;
+		this.#updateMicIcon();
+		this.#voiceAnimationInterval = setInterval(() => {
+			this.#voiceHue = (this.#voiceHue + 8) % 360;
+			this.#updateMicIcon();
+			this.ui.requestRender();
+		}, 60);
+	}
+
+	#stopMicAnimation(): void {
+		if (this.#voiceAnimationInterval) {
+			clearInterval(this.#voiceAnimationInterval);
+			this.#voiceAnimationInterval = undefined;
+		}
+	}
+
+	#cleanupMicAnimation(): void {
+		if (this.#voiceAnimationInterval) {
+			clearInterval(this.#voiceAnimationInterval);
+			this.#voiceAnimationInterval = undefined;
+		}
+		this.editor.cursorOverride = undefined;
+		this.editor.cursorOverrideWidth = undefined;
+		if (this.#voicePreviousShowHardwareCursor !== null) {
+			this.ui.setShowHardwareCursor(this.#voicePreviousShowHardwareCursor);
+			this.#voicePreviousShowHardwareCursor = null;
+		}
+		if (this.#voicePreviousUseTerminalCursor !== null) {
+			this.editor.setUseTerminalCursor(this.#voicePreviousUseTerminalCursor);
+			this.#voicePreviousUseTerminalCursor = null;
+		}
 	}
 
 	showDebugSelector(): void {
@@ -1443,6 +1700,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void> {
 		return this.commandController.handlePythonCommand(code, excludeFromContext);
+	}
+
+	async handleMCPCommand(text: string): Promise<void> {
+		const { MCPCommandController } = await import("./controllers/mcp-command-controller");
+		const controller = new MCPCommandController(this);
+		await controller.handle(text);
+	}
+
+	async handleSSHCommand(text: string): Promise<void> {
+		const { SSHCommandController } = await import("./controllers/ssh-command-controller");
+		const controller = new SSHCommandController(this);
+		await controller.handle(text);
 	}
 
 	handleCompactCommand(customInstructions?: string): Promise<void> {
@@ -1524,6 +1793,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleResumeSession(sessionPath: string): Promise<void> {
+		this.btwController.dispose();
 		return this.selectorController.handleResumeSession(sessionPath);
 	}
 
@@ -1562,6 +1832,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
 	}
+
+	handleSessionDeleteCommand(): Promise<void> {
+		return this.selectorController.handleSessionDeleteCommand();
+	}
+
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		return this.selectorController.showOAuthSelector(mode, providerId);
 	}
@@ -3120,6 +3395,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.inputController.handleImagePaste();
 	}
 
+	handleBtwCommand(question: string): Promise<void> {
+		return this.#btwController.start(question);
+	}
+
+	hasActiveBtw(): boolean {
+		return this.#btwController.hasActiveRequest();
+	}
+
+	handleBtwEscape(): boolean {
+		return this.#btwController.handleEscape();
+	}
+
 	cycleThinkingLevel(): void {
 		this.inputController.cycleThinkingLevel();
 	}
@@ -3177,8 +3464,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.extensionUiController.emitCustomToolSessionEvent(reason, previousSessionFile);
 	}
 
-	setHookWidget(key: string, content: unknown): void {
-		this.extensionUiController.setHookWidget(key, content);
+	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void {
+		this.extensionUiController.setHookWidget(key, content, options);
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {

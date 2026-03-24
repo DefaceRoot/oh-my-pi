@@ -105,17 +105,16 @@ export class ToolExecutionComponent extends Container {
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
-	#spinnerFrame = 0;
+	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
 	#renderState: {
-		spinnerFrame: number;
+		spinnerFrame?: number;
 		expanded: boolean;
 		isPartial: boolean;
 		renderContext?: Record<string, unknown>;
 	} = {
-		spinnerFrame: 0,
 		expanded: false,
 		isPartial: true,
 	};
@@ -328,10 +327,9 @@ export class ToolExecutionComponent extends Container {
 			this.#spinnerInterval = setInterval(() => {
 				const frameCount = theme.spinnerFrames.length;
 				if (frameCount === 0) return;
-				this.#spinnerFrame = (this.#spinnerFrame + 1) % frameCount;
+				this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
 				this.#renderState.spinnerFrame = this.#spinnerFrame;
 				this.#ui.requestRender();
-				// NO updateDisplay() — existing component closures read from renderState
 			}, 80);
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
@@ -346,6 +344,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
+			this.#spinnerFrame = undefined;
 		}
 	}
 
@@ -478,7 +477,7 @@ export class ToolExecutionComponent extends Container {
 						},
 						this.#renderState,
 						theme,
-						this.#args, // Pass args for tools that need them
+						this.#getCallArgsForRender(),
 					);
 					if (resultComponent) {
 						this.#contentBox.addChild(ensureInvalidate(resultComponent));
@@ -560,10 +559,14 @@ export class ToolExecutionComponent extends Container {
 			return Math.max(1, Math.min(maxSeconds, value));
 		};
 
-		if (this.#toolName === "bash" && this.#result) {
-			// Pass raw output and expanded state - renderer handles width-aware truncation
-			const output = this.#getTextOutput().trimEnd();
-			context.output = output;
+		if (this.#toolName === "bash") {
+			// Bash needs render context even before a result exists. The renderer uses the pending-call args
+			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
+			if (this.#result) {
+				// Pass raw output and expanded state - renderer handles width-aware truncation
+				const output = this.#getTextOutput().trimEnd();
+				context.output = output;
+			}
 			context.expanded = this.#expanded;
 			context.previewLines = BASH_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 3600);

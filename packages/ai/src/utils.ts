@@ -1,5 +1,8 @@
 import { $env } from "@oh-my-pi/pi-utils";
-import type { CacheRetention } from "./types";
+import type { ResponseInput } from "openai/resources/responses/responses";
+import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
+
+type OpenAIResponsesReplayItem = ResponseInput[number];
 
 export { isRecord } from "@oh-my-pi/pi-utils";
 
@@ -60,6 +63,73 @@ function normalizeResponsesItemId(itemId: string): string {
 export function truncateResponseItemId(id: string, prefix: string): string {
 	if (id.length <= 64) return id;
 	return `${prefix}_${Bun.hash.xxHash64(id).toString(36)}`;
+}
+
+export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record<string, unknown>>): ResponseInput {
+	const normalizedCallIds = new Map<string, string>();
+	return items.flatMap(item => {
+		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(item, normalizedCallIds);
+		return sanitized ? [sanitized] : [];
+	});
+}
+
+function sanitizeOpenAIResponsesHistoryItemForReplay(
+	item: Record<string, unknown>,
+	normalizedCallIds: Map<string, string>,
+): OpenAIResponsesReplayItem | undefined {
+	if (item.type === "item_reference") return undefined;
+
+	// providerPayload stores raw output items; replay strips item ids and keeps only normalized call_id.
+	const { id: _id, ...sanitizedItem } = item;
+	if (typeof item.call_id === "string") {
+		sanitizedItem.call_id = normalizeReplayedResponsesHistoryCallId(item.call_id, normalizedCallIds);
+	}
+
+	return sanitizedItem as unknown as OpenAIResponsesReplayItem;
+}
+
+function normalizeReplayedResponsesHistoryCallId(value: string, normalizedValues: Map<string, string>): string {
+	const normalized = normalizedValues.get(value);
+	if (normalized) return normalized;
+	const next = truncateResponseItemId(value, getIdPrefix(value, "call"));
+	normalizedValues.set(value, next);
+	return next;
+}
+
+export function createOpenAIResponsesHistoryPayload(
+	provider: string,
+	items: Array<Record<string, unknown>>,
+	incremental = true,
+): OpenAIResponsesHistoryPayload {
+	return {
+		type: "openaiResponsesHistory",
+		provider,
+		...(incremental ? { dt: true } : {}),
+		items,
+	};
+}
+
+export function getOpenAIResponsesHistoryPayload(
+	providerPayload: ProviderPayload | undefined,
+	currentProvider: string,
+	fallbackProvider?: string,
+): OpenAIResponsesHistoryPayload | undefined {
+	if (providerPayload?.type !== "openaiResponsesHistory" || !Array.isArray(providerPayload.items)) {
+		return undefined;
+	}
+	const payloadProvider = providerPayload.provider ?? fallbackProvider;
+	if (!payloadProvider || payloadProvider !== currentProvider) {
+		return undefined;
+	}
+	return { ...providerPayload, provider: payloadProvider };
+}
+
+export function getOpenAIResponsesHistoryItems(
+	providerPayload: ProviderPayload | undefined,
+	currentProvider: string,
+	fallbackProvider?: string,
+): Array<Record<string, unknown>> | undefined {
+	return getOpenAIResponsesHistoryPayload(providerPayload, currentProvider, fallbackProvider)?.items;
 }
 
 /**

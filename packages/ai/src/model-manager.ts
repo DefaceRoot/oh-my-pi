@@ -4,7 +4,7 @@ import { type GeneratedProvider, getBundledModels } from "./models";
 import type { Api, Model, Provider } from "./types";
 import { isRecord } from "./utils";
 
-const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
 
 /**
@@ -111,8 +111,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const dynamicFetchSucceeded = fetchedDynamicModels !== null;
 	const cacheModels = dynamicFetchSucceeded ? [] : normalizeModelList<TApi>(cache?.models ?? []);
 	const dynamicModels = fetchedDynamicModels ?? [];
-	const mergedWithoutDynamic = mergeModelSources(staticModels, modelsDevModels, cacheModels);
-	const models = mergeDynamicModels(mergedWithoutDynamic, dynamicModels);
+	const mergedWithCache = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), cacheModels);
+	const models = mergeDynamicModels(mergedWithCache, dynamicModels);
 	const dynamicAuthoritative = !hasDynamicFetcher || dynamicFetchSucceeded || shouldUseFreshCacheAsAuthoritative;
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
@@ -125,7 +125,10 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			writeModelCache(
 				options.providerId,
 				now(),
-				mergeModelSources(staticModels, modelsDevModels, latestCache?.models ?? cache?.models ?? []),
+				mergeDynamicModels(
+					mergeModelSources(staticModels, modelsDevModels),
+					normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+				),
 				false,
 				dbPath,
 			);

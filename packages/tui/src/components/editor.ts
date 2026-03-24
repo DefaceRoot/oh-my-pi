@@ -1,8 +1,8 @@
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import type { AutocompleteProvider, CombinedAutocompleteProvider } from "../autocomplete";
 import { BracketedPasteHandler } from "../bracketed-paste";
-import { type EditorKeybindingsManager, getEditorKeybindings } from "../keybindings";
-import { matchesKey } from "../keys";
+import { getKeybindings, type KeybindingsManager } from "../keybindings";
+import { extractPrintableText, matchesKey } from "../keys";
 import { KillRing } from "../kill-ring";
 import type { SymbolTheme } from "../symbols";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
@@ -15,7 +15,12 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../utils";
-import { SelectList, type SelectListTheme } from "./select-list";
+import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
+
+const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	minPrimaryColumnWidth: 12,
+	maxPrimaryColumnWidth: 32,
+};
 
 const segmenter = getSegmenter();
 
@@ -255,62 +260,6 @@ function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 	return chunks.length > 0 ? chunks : [{ text: "", startIndex: 0, endIndex: 0 }];
 }
 
-// Kitty CSI-u sequences for printable keys, including optional shifted/base codepoints and text field.
-const KITTY_CSI_U_REGEX = /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?(?:;([\d:]*))?u$/;
-const KITTY_MOD_SHIFT = 1;
-const KITTY_MOD_ALT = 2;
-const KITTY_MOD_CTRL = 4;
-
-// Decode a printable CSI-u sequence, preferring the shifted key when present.
-function decodeKittyPrintable(data: string): string | undefined {
-	const match = data.match(KITTY_CSI_U_REGEX);
-	if (!match) return undefined;
-
-	// CSI-u groups: <codepoint>[:<shifted>[:<base>]];<mod>u
-	const codepoint = Number.parseInt(match[1] ?? "", 10);
-	if (!Number.isFinite(codepoint)) return undefined;
-
-	const shiftedKey = match[2] && match[2].length > 0 ? Number.parseInt(match[2], 10) : undefined;
-	const modValue = match[4] ? Number.parseInt(match[4], 10) : 1;
-	// Modifiers are 1-indexed in CSI-u; normalize to our bitmask.
-	const modifier = Number.isFinite(modValue) ? modValue - 1 : 0;
-
-	// Ignore CSI-u sequences used for Alt/Ctrl shortcuts.
-	if (modifier & (KITTY_MOD_ALT | KITTY_MOD_CTRL)) return undefined;
-
-	const textField = match[6];
-	if (textField && textField.length > 0) {
-		const codepoints = textField
-			.split(":")
-			.filter(Boolean)
-			.map(value => Number.parseInt(value, 10))
-			.filter(value => Number.isFinite(value) && value >= 32);
-		if (codepoints.length > 0) {
-			try {
-				return String.fromCodePoint(...codepoints);
-			} catch {
-				return undefined;
-			}
-		}
-	}
-
-	// Prefer the shifted keycode when Shift is held.
-	let effectiveCodepoint = codepoint;
-	if (modifier & KITTY_MOD_SHIFT && typeof shiftedKey === "number") {
-		effectiveCodepoint = shiftedKey;
-	}
-	if (effectiveCodepoint >= 0xe000 && effectiveCodepoint <= 0xf8ff) {
-		return undefined;
-	}
-	// Drop control characters or invalid codepoints.
-	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32) return undefined;
-
-	try {
-		return String.fromCodePoint(effectiveCodepoint);
-	} catch {
-		return undefined;
-	}
-}
 const DEFAULT_PAGE_SCROLL_LINES = 10;
 
 interface EditorState {
@@ -747,21 +696,21 @@ export class Editor implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		const kb = getEditorKeybindings();
+		const kb = getKeybindings();
 
 		// Handle character jump mode (awaiting next character to jump to)
 		if (this.#jumpMode !== null) {
 			// Cancel if the hotkey is pressed again
-			if (kb.matches(data, "jumpForward") || kb.matches(data, "jumpBackward")) {
+			if (kb.matches(data, "tui.editor.jumpForward") || kb.matches(data, "tui.editor.jumpBackward")) {
 				this.#jumpMode = null;
 				return;
 			}
 
-			if (data.charCodeAt(0) >= 32) {
-				// Printable character - perform the jump
+			const printableText = extractPrintableText(data);
+			if (printableText) {
 				const direction = this.#jumpMode;
 				this.#jumpMode = null;
-				this.#jumpToChar(data, direction);
+				this.#jumpToChar(printableText, direction);
 				return;
 			}
 
@@ -783,13 +732,15 @@ export class Editor implements Component, Focusable {
 
 		// Handle special key combinations first
 
-		// Ctrl+C - Exit (let parent handle this)
+		// Ctrl+C is reserved by parent components for app-level handling.
+		// Do not consume arbitrary user-bound "copy" keys here, since the editor
+		// has no copy implementation and would make those keys disappear.
 		if (matchesKey(data, "ctrl+c")) {
 			return;
 		}
 
-		// Ctrl+- / Ctrl+_ - Undo last edit
-		if (matchesKey(data, "ctrl+-") || matchesKey(data, "ctrl+_")) {
+		// Undo
+		if (kb.matches(data, "tui.editor.undo")) {
 			this.#applyUndo();
 			return;
 		}
@@ -797,27 +748,26 @@ export class Editor implements Component, Focusable {
 		// Handle autocomplete special keys first (but don't block other input)
 		if (this.#autocompleteState && this.#autocompleteList) {
 			// Escape - cancel autocomplete
-			if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
+			if (kb.matches(data, "tui.select.cancel")) {
 				this.#cancelAutocomplete(true);
 				return;
 			}
 			// Let the autocomplete list handle navigation and selection
 			else if (
-				matchesKey(data, "up") ||
-				matchesKey(data, "down") ||
-				matchesKey(data, "pageUp") ||
-				matchesKey(data, "pageDown") ||
-				matchesKey(data, "enter") ||
-				matchesKey(data, "return") ||
+				kb.matches(data, "tui.select.up") ||
+				kb.matches(data, "tui.select.down") ||
+				kb.matches(data, "tui.select.pageUp") ||
+				kb.matches(data, "tui.select.pageDown") ||
+				kb.matches(data, "tui.input.submit") ||
 				data === "\n" ||
-				matchesKey(data, "tab")
+				kb.matches(data, "tui.input.tab")
 			) {
 				// Only pass navigation keys to the list, not Enter/Tab (we handle those directly)
 				if (
-					matchesKey(data, "up") ||
-					matchesKey(data, "down") ||
-					matchesKey(data, "pageUp") ||
-					matchesKey(data, "pageDown")
+					kb.matches(data, "tui.select.up") ||
+					kb.matches(data, "tui.select.down") ||
+					kb.matches(data, "tui.select.pageUp") ||
+					kb.matches(data, "tui.select.pageDown")
 				) {
 					this.#autocompleteList.handleInput(data);
 					this.onAutocompleteUpdate?.();
@@ -825,9 +775,10 @@ export class Editor implements Component, Focusable {
 				}
 
 				// If Tab was pressed, always apply the selection
-				if (matchesKey(data, "tab")) {
+				if (kb.matches(data, "tui.input.tab")) {
 					const selected = this.#autocompleteList.getSelectedItem();
 					if (selected && this.#autocompleteProvider) {
+						const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
 						const result = this.#autocompleteProvider.applyCompletion(
 							this.#state.lines,
 							this.#state.cursorLine,
@@ -847,15 +798,18 @@ export class Editor implements Component, Focusable {
 						if (this.onChange) {
 							this.onChange(this.getText());
 						}
+
+						result.onApplied?.();
+
+						if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
+							void this.#tryTriggerAutocomplete();
+						}
 					}
 					return;
 				}
 
 				// If Enter was pressed on a slash command, apply completion and submit
-				if (
-					(matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") &&
-					this.#autocompletePrefix.startsWith("/")
-				) {
+				if ((kb.matches(data, "tui.input.submit") || data === "\n") && this.#autocompletePrefix.startsWith("/")) {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
@@ -878,6 +832,7 @@ export class Editor implements Component, Focusable {
 							this.#state.lines = result.lines;
 							this.#state.cursorLine = result.cursorLine;
 							this.#setCursorCol(result.cursorCol);
+							result.onApplied?.();
 						}
 						if (this.#cancelAutocomplete()) {
 							this.onAutocompleteUpdate?.();
@@ -886,7 +841,7 @@ export class Editor implements Component, Focusable {
 					// Don't return - fall through to submission logic
 				}
 				// If Enter was pressed on a file path, apply completion
-				else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 					const selected = this.#autocompleteList.getSelectedItem();
 					if (selected && this.#autocompleteProvider) {
 						const result = this.#autocompleteProvider.applyCompletion(
@@ -908,6 +863,8 @@ export class Editor implements Component, Focusable {
 						if (this.onChange) {
 							this.onChange(this.getText());
 						}
+
+						result.onApplied?.();
 					}
 					return;
 				}
@@ -917,7 +874,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Tab key - context-aware completion (but not when already autocompleting)
-		if (matchesKey(data, "tab") && !this.#autocompleteState) {
+		if (kb.matches(data, "tui.input.tab") && !this.#autocompleteState) {
 			this.#handleTabCompletion();
 			return;
 		}
@@ -975,7 +932,7 @@ export class Editor implements Component, Focusable {
 			data === "\x1b\r" || // Option+Enter in some terminals (legacy)
 			data === "\x1b[13;2~" || // Shift+Enter in some terminals (legacy format)
 			data === "\x1b[13;2u" || // Shift+Enter (Kitty CSI-u format)
-			matchesKey(data, "shift+enter") || // Shift+Enter (Kitty protocol, handles lock bits)
+			kb.matches(data, "tui.input.newLine") || // Shift+Enter (Kitty protocol, handles lock bits)
 			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
 			(data === "\n" && data.length === 1) // Shift+Enter from iTerm2 mapping
 		) {
@@ -987,7 +944,7 @@ export class Editor implements Component, Focusable {
 			this.#addNewLine();
 		}
 		// Plain Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
-		else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+		else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 			// If submit is disabled, do nothing
 			if (this.disableSubmit) {
 				return;
@@ -996,17 +953,17 @@ export class Editor implements Component, Focusable {
 			this.#submitValue();
 		}
 		// Backspace (including Shift+Backspace)
-		else if (matchesKey(data, "backspace") || matchesKey(data, "shift+backspace")) {
+		else if (kb.matches(data, "tui.editor.deleteCharBackward") || matchesKey(data, "shift+backspace")) {
 			this.#handleBackspace();
 		}
 		// Line navigation shortcuts (Home/End keys)
-		else if (matchesKey(data, "home")) {
+		else if (kb.matches(data, "tui.editor.cursorLineStart")) {
 			this.#moveToLineStart();
-		} else if (matchesKey(data, "end")) {
+		} else if (kb.matches(data, "tui.editor.cursorLineEnd")) {
 			this.#moveToLineEnd();
 		}
 		// Page navigation (PageUp/PageDown)
-		else if (matchesKey(data, "pageUp")) {
+		else if (kb.matches(data, "tui.editor.pageUp")) {
 			if (this.#isEditorEmpty()) {
 				this.#navigateHistory(-1);
 			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
@@ -1014,7 +971,7 @@ export class Editor implements Component, Focusable {
 			} else {
 				this.#pageScroll(-1);
 			}
-		} else if (matchesKey(data, "pageDown")) {
+		} else if (kb.matches(data, "tui.editor.pageDown")) {
 			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
 				this.#navigateHistory(1);
 			} else {
@@ -1022,21 +979,21 @@ export class Editor implements Component, Focusable {
 			}
 		}
 		// Forward delete (Fn+Backspace or Delete key, including Shift+Delete)
-		else if (matchesKey(data, "delete") || matchesKey(data, "shift+delete")) {
+		else if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
 			this.#handleForwardDelete();
 		}
 		// Word navigation (Option/Alt + Arrow or Ctrl + Arrow)
-		else if (matchesKey(data, "alt+left") || matchesKey(data, "ctrl+left")) {
+		else if (kb.matches(data, "tui.editor.cursorWordLeft")) {
 			// Word left
 			this.#resetKillSequence();
 			this.#moveWordBackwards();
-		} else if (matchesKey(data, "alt+right") || matchesKey(data, "ctrl+right")) {
+		} else if (kb.matches(data, "tui.editor.cursorWordRight")) {
 			// Word right
 			this.#resetKillSequence();
 			this.#moveWordForwards();
 		}
 		// Arrow keys
-		else if (matchesKey(data, "up")) {
+		else if (kb.matches(data, "tui.editor.cursorUp")) {
 			// Up - history navigation or cursor movement
 			if (this.#isEditorEmpty()) {
 				this.#navigateHistory(-1); // Start browsing history
@@ -1048,7 +1005,7 @@ export class Editor implements Component, Focusable {
 			} else {
 				this.#moveCursor(-1, 0); // Cursor movement (within text or history entry)
 			}
-		} else if (matchesKey(data, "down")) {
+		} else if (kb.matches(data, "tui.editor.cursorDown")) {
 			// Down - history navigation or cursor movement
 			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
 				this.#navigateHistory(1); // Navigate to newer history entry or clear
@@ -1058,10 +1015,10 @@ export class Editor implements Component, Focusable {
 			} else {
 				this.#moveCursor(1, 0); // Cursor movement (within text or history entry)
 			}
-		} else if (matchesKey(data, "right")) {
+		} else if (kb.matches(data, "tui.editor.cursorRight")) {
 			// Right
 			this.#moveCursor(0, 1);
-		} else if (matchesKey(data, "left")) {
+		} else if (kb.matches(data, "tui.editor.cursorLeft")) {
 			// Left
 			this.#moveCursor(0, -1);
 		}
@@ -1070,21 +1027,16 @@ export class Editor implements Component, Focusable {
 			this.#insertCharacter(" ");
 		}
 		// Character jump mode triggers
-		else if (kb.matches(data, "jumpForward")) {
+		else if (kb.matches(data, "tui.editor.jumpForward")) {
 			this.#jumpMode = "forward";
-		} else if (kb.matches(data, "jumpBackward")) {
+		} else if (kb.matches(data, "tui.editor.jumpBackward")) {
 			this.#jumpMode = "backward";
 		}
-		// Kitty CSI-u printable characters (shifted symbols like @, ?, {, })
+		// Printable keystrokes, including Kitty CSI-u text-producing sequences.
 		else {
-			const kittyChar = decodeKittyPrintable(data);
-			if (kittyChar) {
-				this.insertText(kittyChar);
-				return;
-			}
-			// Regular characters (printable characters and unicode, but not control characters)
-			if (data.charCodeAt(0) >= 32) {
-				this.#insertCharacter(data);
+			const printableText = extractPrintableText(data);
+			if (printableText) {
+				this.#insertCharacter(printableText);
 			}
 		}
 	}
@@ -1181,17 +1133,21 @@ export class Editor implements Component, Focusable {
 		return this.#state.lines.join("\n");
 	}
 
+	#expandPasteMarkers(text: string): string {
+		let result = text;
+		for (const [pasteId, pasteContent] of this.#pastes) {
+			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
+			result = result.replace(markerRegex, () => pasteContent);
+		}
+		return result;
+	}
+
 	/**
 	 * Get text with paste markers expanded to their actual content.
 	 * Use this when you need the full content (e.g., for external editor).
 	 */
 	getExpandedText(): string {
-		let result = this.#state.lines.join("\n");
-		for (const [pasteId, pasteContent] of this.#pastes) {
-			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
-			result = result.replace(markerRegex, pasteContent);
-		}
-		return result;
+		return this.#expandPasteMarkers(this.#state.lines.join("\n"));
 	}
 
 	getLines(): string[] {
@@ -1200,6 +1156,74 @@ export class Editor implements Component, Focusable {
 
 	getCursor(): { line: number; col: number } {
 		return { line: this.#state.cursorLine, col: this.#state.cursorCol };
+	}
+
+	moveToLineStart(): void {
+		this.#moveToLineStart();
+	}
+
+	moveToLineEnd(): void {
+		this.#moveToLineEnd();
+	}
+
+	moveToMessageStart(): void {
+		this.#moveToMessageStart();
+	}
+
+	moveToMessageEnd(): void {
+		this.#moveToMessageEnd();
+	}
+
+	/**
+	 * Undo the last meaningful edit while ignoring transient text that is still present at the cursor.
+	 * Used for command-like autocomplete actions whose typed trigger should not count as the edit being undone.
+	 */
+	undoPastTransientText(transientText: string): void {
+		if (transientText.length === 0) {
+			this.#applyUndo();
+			return;
+		}
+
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		const transientStartCol = this.#state.cursorCol - transientText.length;
+		if (transientStartCol < 0 || currentLine.slice(transientStartCol, this.#state.cursorCol) !== transientText) {
+			this.#applyUndo();
+			return;
+		}
+
+		const beforeTransient = currentLine.slice(0, transientStartCol);
+		const afterTransient = currentLine.slice(this.#state.cursorCol);
+		this.#historyIndex = -1;
+		this.#resetKillSequence();
+		this.#preferredVisualCol = null;
+		this.#state.lines[this.#state.cursorLine] = beforeTransient + afterTransient;
+		this.#setCursorCol(transientStartCol);
+
+		while (true) {
+			const snapshot = this.#undoStack.at(-1);
+			if (
+				!snapshot ||
+				!this.#matchesTransientUndoSnapshot(
+					snapshot,
+					transientText,
+					transientStartCol,
+					beforeTransient,
+					afterTransient,
+				)
+			) {
+				break;
+			}
+			this.#undoStack.pop();
+		}
+
+		if (this.#undoStack.length === 0) {
+			if (this.onChange) {
+				this.onChange(this.getText());
+			}
+			return;
+		}
+
+		this.#applyUndo();
 	}
 
 	setText(text: string): void {
@@ -1273,7 +1297,11 @@ export class Editor implements Component, Focusable {
 					this.#tryTriggerAutocomplete();
 				}
 			}
-			// Also auto-trigger when typing letters/path chars in a slash command context
+			// Auto-trigger for "#" prompt actions anywhere in the current token
+			else if (char === "#") {
+				this.#tryTriggerAutocomplete();
+			}
+			// Also auto-trigger when typing letters/path chars in a completable context
 			else if (/[a-zA-Z0-9.\-_/]/.test(char)) {
 				const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
@@ -1283,6 +1311,10 @@ export class Editor implements Component, Focusable {
 				}
 				// Check if we're in an @ file reference context
 				else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+					this.#tryTriggerAutocomplete();
+				}
+				// Check if we're in a # prompt action context
+				else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 					this.#tryTriggerAutocomplete();
 				}
 			}
@@ -1376,10 +1408,10 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	#shouldSubmitOnBackslashEnter(data: string, kb: EditorKeybindingsManager): boolean {
+	#shouldSubmitOnBackslashEnter(data: string, kb: KeybindingsManager): boolean {
 		if (this.disableSubmit) return false;
 		if (!matchesKey(data, "enter")) return false;
-		const submitKeys = kb.getKeys("submit");
+		const submitKeys = kb.getKeys("tui.input.submit");
 		const hasShiftEnter = submitKeys.includes("shift+enter") || submitKeys.includes("shift+return");
 		if (!hasShiftEnter) return false;
 
@@ -1390,11 +1422,7 @@ export class Editor implements Component, Focusable {
 	#submitValue(): void {
 		this.#resetKillSequence();
 
-		let result = this.#state.lines.join("\n").trim();
-		for (const [pasteId, pasteContent] of this.#pastes) {
-			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
-			result = result.replace(markerRegex, pasteContent);
-		}
+		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.#pastes.clear();
@@ -1456,6 +1484,10 @@ export class Editor implements Component, Focusable {
 			}
 			// @ file reference context
 			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
+				this.#tryTriggerAutocomplete();
+			}
+			// # prompt action context
+			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
 		}
@@ -1553,6 +1585,19 @@ export class Editor implements Component, Focusable {
 		this.#setCursorCol(currentLine.length);
 	}
 
+	#moveToMessageStart(): void {
+		this.#resetKillSequence();
+		this.#state.cursorLine = 0;
+		this.#setCursorCol(0);
+	}
+
+	#moveToMessageEnd(): void {
+		this.#resetKillSequence();
+		this.#state.cursorLine = this.#state.lines.length - 1;
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		this.#setCursorCol(currentLine.length);
+	}
+
 	#resetKillSequence(): void {
 		this.#lastAction = null;
 	}
@@ -1594,8 +1639,34 @@ export class Editor implements Component, Focusable {
 				this.#tryTriggerAutocomplete();
 			} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
+			} else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+				this.#tryTriggerAutocomplete();
 			}
 		}
+	}
+
+	#matchesTransientUndoSnapshot(
+		snapshot: EditorState,
+		transientText: string,
+		transientStartCol: number,
+		beforeTransient: string,
+		afterTransient: string,
+	): boolean {
+		if (snapshot.cursorLine !== this.#state.cursorLine) return false;
+		if (snapshot.lines.length !== this.#state.lines.length) return false;
+
+		const transientLength = snapshot.cursorCol - transientStartCol;
+		if (transientLength < 0 || transientLength >= transientText.length) return false;
+
+		for (let i = 0; i < snapshot.lines.length; i++) {
+			if (i === this.#state.cursorLine) continue;
+			if (snapshot.lines[i] !== this.#state.lines[i]) return false;
+		}
+
+		return (
+			snapshot.lines[snapshot.cursorLine] ===
+			beforeTransient + transientText.slice(0, transientLength) + afterTransient
+		);
 	}
 
 	#recordKill(text: string, direction: "forward" | "backward", accumulate = this.#lastAction === "kill"): void {
@@ -1885,6 +1956,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// # prompt action context
+			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -2079,6 +2154,26 @@ export class Editor implements Component, Focusable {
 		return beforeCursor.trim() === "" || beforeCursor.trim() === "/";
 	}
 
+	#isSlashCommandNameAutocompleteSelection(): boolean {
+		if (this.#autocompleteState !== "regular") {
+			return false;
+		}
+
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol).trimStart();
+		return textBeforeCursor.startsWith("/") && !textBeforeCursor.includes(" ");
+	}
+
+	#isCompletedSlashCommandAtCursor(): boolean {
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		if (this.#state.cursorCol !== currentLine.length) {
+			return false;
+		}
+
+		const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol).trimStart();
+		return /^\/\S+ $/.test(textBeforeCursor);
+	}
+
 	// Autocomplete methods
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
@@ -2104,17 +2199,23 @@ export class Editor implements Component, Focusable {
 
 		if (suggestions && suggestions.items.length > 0) {
 			this.#autocompletePrefix = suggestions.prefix;
-			this.#autocompleteList = new SelectList(
-				suggestions.items,
-				this.#autocompleteMaxVisible,
-				this.#theme.selectList,
-			);
+			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "regular";
 			this.onAutocompleteUpdate?.();
 		} else {
 			this.#cancelAutocomplete();
 			this.onAutocompleteUpdate?.();
 		}
+	}
+	#createAutocompleteList(
+		prefix: string,
+		items: Array<{ value: string; label: string; description?: string }>,
+	): SelectList {
+		// Layout options prepared for future SelectList enhancements (e.g., for slash commands)
+		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : undefined;
+		// TODO: Pass layout to SelectList when constructor is updated to support it
+		void layout; // Use layout variable to avoid lint warnings
+		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList);
 	}
 
 	#handleTabCompletion(): void {
@@ -2183,11 +2284,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 			}
 
 			this.#autocompletePrefix = suggestions.prefix;
-			this.#autocompleteList = new SelectList(
-				suggestions.items,
-				this.#autocompleteMaxVisible,
-				this.#theme.selectList,
-			);
+			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "force";
 			this.onAutocompleteUpdate?.();
 		} else {
@@ -2234,11 +2331,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		if (suggestions && suggestions.items.length > 0) {
 			this.#autocompletePrefix = suggestions.prefix;
 			// Always create new SelectList to ensure update
-			this.#autocompleteList = new SelectList(
-				suggestions.items,
-				this.#autocompleteMaxVisible,
-				this.#theme.selectList,
-			);
+			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.onAutocompleteUpdate?.();
 		} else {
 			this.#cancelAutocomplete();

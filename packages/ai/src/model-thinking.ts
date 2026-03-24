@@ -1,3 +1,4 @@
+import { resolveOpenAICompat } from "./providers/openai-completions-compat";
 import type { Api, Model as ApiModel, ThinkingConfig } from "./types";
 
 /** User-facing thinking levels, ordered least to most intensive. */
@@ -41,7 +42,13 @@ type SemVer = {
 
 type GeminiKind = "pro" | "flash";
 type AnthropicKind = "opus" | "sonnet";
-type OpenAIVariant = "base" | "codex" | "codex-max" | "codex-mini" | "codex-spark" | "max" | "nano";
+type OpenAIVariant = "base" | "codex" | "codex-max" | "codex-mini" | "codex-spark" | "mini" | "max" | "nano";
+
+const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> = {
+	base: 0,
+	mini: 1,
+	nano: 2,
+};
 
 interface GeminiModel {
 	family: "gemini";
@@ -329,10 +336,12 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 		model.cost.cacheWrite = 6.25;
 	}
 
-	// Bedrock Opus 4.6: upstream cache pricing is incorrect.
+	// Bedrock Opus 4.6: upstream metadata is stale for cache pricing and context.
 	if (model.provider === "amazon-bedrock" && parsedModel.kind === "opus" && semverEqual(parsedModel.version, "4.6")) {
 		model.cost.cacheRead = 0.5;
 		model.cost.cacheWrite = 6.25;
+		model.contextWindow = 1000000;
+		model.maxTokens = 128000;
 	}
 
 	// Opus 4.6 / Sonnet 4.6: 1M context is beta; clamp to 200K when metadata does not opt in.
@@ -363,6 +372,20 @@ function applyOpenAICatalogPolicy(model: ApiModel<Api>, parsedModel: OpenAIModel
 		!semverGte(parsedModel.version, "5.4")
 	) {
 		model.contextWindow = 272000;
+		return;
+	}
+	// GPT-5.4 mini/nano use plain OpenAI IDs on the Codex transport, but Codex still
+	// enforces the lower prompt budget for these variants. Codex discovery can also
+	// report inconsistent priorities for the GPT-5.4 family, so normalize by parsed
+	// variant instead of special-casing raw model ids.
+	if (model.api === "openai-codex-responses" && semverEqual(parsedModel.version, "5.4")) {
+		const normalizedPriority = CODEX_GPT_5_4_PRIORITY_BY_VARIANT[parsedModel.variant];
+		if (normalizedPriority !== undefined) {
+			model.priority = normalizedPriority;
+		}
+		if (parsedModel.variant === "mini" || parsedModel.variant === "nano") {
+			model.contextWindow = 272000;
+		}
 	}
 }
 
@@ -441,7 +464,10 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 	parsedModel: AnthropicModel,
 	model: ApiModel<TApi>,
 ): readonly Effort[] {
-	if (model.api === "anthropic-messages" && semverGte(parsedModel.version, "4.6")) {
+	if (
+		(model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+		semverGte(parsedModel.version, "4.6")
+	) {
 		return parsedModel.kind === "opus" ? DEFAULT_REASONING_EFFORTS_WITH_XHIGH : DEFAULT_REASONING_EFFORTS;
 	}
 	return inferFallbackEfforts(model);
@@ -453,6 +479,17 @@ function inferFallbackEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly
 	}
 	if (model.api === "bedrock-converse-stream") {
 		return DEFAULT_REASONING_EFFORTS;
+	}
+	if (model.api === "openai-completions") {
+		const compat = resolveOpenAICompat(model as ApiModel<"openai-completions">);
+		if (compat.thinkingFormat === "openai" && compat.supportsReasoningEffort) {
+			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+		}
+		return DEFAULT_REASONING_EFFORTS;
+	}
+	// OpenAI Responses APIs encode discrete effort levels, including xhigh.
+	if (model.api === "openai-responses" || model.api === "openai-codex-responses") {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	return DEFAULT_REASONING_EFFORTS;
 }
@@ -483,6 +520,14 @@ function inferThinkingControlMode<TApi extends Api>(
 			return "budget";
 
 		case "bedrock-converse-stream":
+			if (parsedModel.family === "anthropic") {
+				if (semverGte(parsedModel.version, "4.6") && parsedModel.kind === "opus") {
+					return "anthropic-adaptive";
+				}
+				if (semverGte(parsedModel.version, "4.5")) {
+					return "anthropic-budget-effort";
+				}
+			}
 			return "budget";
 
 		default:
@@ -516,7 +561,7 @@ function parseGeminiModel(modelId: string): GeminiModel | null {
 }
 
 function parseAnthropicModel(modelId: string): AnthropicModel | null {
-	const match = /claude-(opus|sonnet)-(\d+(?:[.-]\d+){0,2})\b/.exec(modelId);
+	const match = /claude-(opus|sonnet)-(\d{1,2}(?:[.-]\d{1,2}){0,2})\b/.exec(modelId);
 	if (!match) {
 		return null;
 	}
@@ -528,7 +573,7 @@ function parseAnthropicModel(modelId: string): AnthropicModel | null {
 }
 
 function parseOpenAIModel(modelId: string): OpenAIModel | null {
-	const match = /gpt-(\d+(?:\.\d+){0,2})(?:-(codex-spark|codex-mini|codex-max|codex|max|nano))?\b/.exec(modelId);
+	const match = /gpt-(\d+(?:\.\d+){0,2})(?:-(codex-spark|codex-mini|codex-max|codex|mini|max|nano))?\b/.exec(modelId);
 	if (!match) {
 		return null;
 	}

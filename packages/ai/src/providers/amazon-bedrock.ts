@@ -121,13 +121,25 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
 
+			const toolConfig = convertToolConfig(context.tools, options.toolChoice);
+			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
+
+			// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
+			// When tool_choice forces tool use, disable thinking to avoid API errors.
+			if (toolConfig?.toolChoice && additionalModelRequestFields) {
+				const tc = toolConfig.toolChoice;
+				if ("any" in tc || "tool" in tc) {
+					additionalModelRequestFields = undefined;
+				}
+			}
+
 			const commandInput = {
 				modelId: model.id,
 				messages: convertMessages(context, model, cacheRetention),
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: { maxTokens: options.maxTokens, temperature: options.temperature, topP: options.topP },
-				toolConfig: convertToolConfig(context.tools, options.toolChoice),
-				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+				toolConfig,
+				additionalModelRequestFields,
 			};
 			options?.onPayload?.(commandInput);
 			rawRequestDump = {
@@ -191,11 +203,28 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				delete (block as Block).partialJson;
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = await appendRawHttpRequestDumpFor400(
-				error instanceof Error ? error.message : JSON.stringify(error),
-				error,
-				rawRequestDump,
-			);
+			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			// Enrich error with thinking block diagnostics for signature-related failures
+			let diagnostics = "";
+			if (baseMessage.includes("signature") || baseMessage.includes("thinking")) {
+				const thinkingBlocks = context.messages
+					.filter((m): m is AssistantMessage => m.role === "assistant")
+					.flatMap((m, mi) =>
+						m.content
+							.filter(b => b.type === "thinking")
+							.map((b, bi) => ({
+								msg: mi,
+								block: bi,
+								stop: m.stopReason,
+								sigLen: b.thinkingSignature?.length ?? -1,
+								thinkLen: b.thinking.length,
+							})),
+					);
+				if (thinkingBlocks.length > 0) {
+					diagnostics = `\n[thinking-diag] ${JSON.stringify(thinkingBlocks)}`;
+				}
+			}
+			output.errorMessage = await appendRawHttpRequestDumpFor400(baseMessage + diagnostics, error, rawRequestDump);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -331,6 +360,13 @@ function handleContentBlockStop(
 /**
  * Check if the model supports prompt caching.
  * Supported: Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4.x+ models, Haiku 4.5+
+ *
+ * For base models and system-defined inference profiles the model ID / ARN
+ * contains the model name, so we can decide locally.
+ *
+ * For application inference profiles (whose ARNs don't contain the model name),
+ * set AWS_BEDROCK_FORCE_CACHE=1 to enable cache points.  Amazon Nova models
+ * have automatic caching and don't need explicit cache points.
  */
 function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean {
 	if (model.cost.cacheRead || model.cost.cacheWrite) return true;
@@ -341,6 +377,9 @@ function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean
 	if (id.includes("claude-3-7-sonnet") || id.includes("claude-3-5-haiku")) return true;
 	// Claude Haiku 4.5+ (new naming)
 	if (id.includes("claude-haiku")) return true;
+	// Application inference profiles don't contain the model name in the ARN.
+	// Allow users to force cache points via environment variable.
+	if (typeof process !== "undefined" && process.env.AWS_BEDROCK_FORCE_CACHE === "1") return true;
 	return false;
 }
 
@@ -448,21 +487,25 @@ function convertMessages(
 						case "thinking":
 							// Skip empty thinking blocks
 							if (c.thinking.trim().length === 0) continue;
-							// Only Anthropic models support the signature field in reasoningText.
-							// For other models, we omit the signature to avoid errors like:
-							// "This model doesn't support the reasoningContent.reasoningText.signature field"
-							if (supportsThinkingSignature(model)) {
+							// Thinking blocks require a valid signature when sent as reasoningContent.
+							// If the signature is missing (e.g., from an aborted stream), or the model
+							// doesn't support signatures, convert to plain text instead.
+							if (supportsThinkingSignature(model) && c.thinkingSignature) {
 								contentBlocks.push({
 									reasoningContent: {
 										reasoningText: { text: c.thinking.toWellFormed(), signature: c.thinkingSignature },
 									},
 								});
-							} else {
+							} else if (!supportsThinkingSignature(model)) {
+								// Model doesn't support signatures at all — send as unsigned reasoning
 								contentBlocks.push({
 									reasoningContent: {
 										reasoningText: { text: c.thinking.toWellFormed() },
 									},
 								});
+							} else {
+								// Model requires signature but we don't have one — demote to text
+								contentBlocks.push({ text: `[Thinking]: ${c.thinking.toWellFormed()}` });
 							}
 							break;
 						default:

@@ -11,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-ai/model-thinking";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import type { Api, Model, Provider } from "@oh-my-pi/pi-ai/types";
+import MODELS from "../src/models.json" with { type: "json" };
 
 function createModel<TApi extends Api>(overrides: {
 	id: string;
@@ -145,6 +146,52 @@ describe("model thinking metadata", () => {
 	});
 });
 
+describe("bundled GPT-5.4 model metadata", () => {
+	it("stores raw GPT-5.4 mini/nano catalog metadata for OpenAI, OpenAI Codex, and Copilot", () => {
+		const openAiMini = MODELS.openai["gpt-5.4-mini"];
+		const openAiNano = MODELS.openai["gpt-5.4-nano"];
+		const openAiCodexMini = MODELS["openai-codex"]["gpt-5.4-mini"];
+		const openAiCodexNano = MODELS["openai-codex"]["gpt-5.4-nano"];
+		const copilotMini = MODELS["github-copilot"]["gpt-5.4-mini"];
+
+		expect(openAiMini?.thinking).toEqual({ mode: "effort", minLevel: "low", maxLevel: "xhigh" });
+		expect(openAiNano?.thinking).toEqual({ mode: "effort", minLevel: "low", maxLevel: "xhigh" });
+		expect(openAiCodexMini?.thinking).toEqual({ mode: "effort", minLevel: "low", maxLevel: "xhigh" });
+		expect(openAiCodexNano?.thinking).toEqual({ mode: "effort", minLevel: "low", maxLevel: "xhigh" });
+		expect(copilotMini?.thinking).toEqual({ mode: "effort", minLevel: "low", maxLevel: "xhigh" });
+		expect(openAiCodexMini?.api).toBe("openai-codex-responses");
+		expect(openAiCodexNano?.api).toBe("openai-codex-responses");
+		expect(openAiCodexMini?.contextWindow).toBe(272000);
+		expect(openAiCodexNano?.contextWindow).toBe(272000);
+		expect(openAiCodexMini?.preferWebsockets).toBe(true);
+		expect(openAiCodexNano?.preferWebsockets).toBe(true);
+		expect(openAiCodexMini?.priority).toBe(1);
+		expect(openAiCodexNano?.priority).toBe(2);
+	});
+
+	it("exposes xhigh support for bundled GPT-5.4 mini/nano runtime models across supported providers", () => {
+		const openAiMini = getBundledModel("openai", "gpt-5.4-mini");
+		const openAiNano = getBundledModel("openai", "gpt-5.4-nano");
+		const openAiCodexMini = getBundledModel("openai-codex", "gpt-5.4-mini");
+		const openAiCodexNano = getBundledModel("openai-codex", "gpt-5.4-nano");
+		const copilotMini = getBundledModel("github-copilot", "gpt-5.4-mini");
+
+		expect(openAiCodexMini.contextWindow).toBe(272000);
+		expect(openAiCodexNano.contextWindow).toBe(272000);
+		expect(requireSupportedEffort(openAiMini, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(openAiNano, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(openAiCodexMini, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(openAiCodexNano, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(copilotMini, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
+	it("does not bundle GitHub Copilot GPT-5.4 nano", () => {
+		const copilotModels = MODELS["github-copilot"] as Record<string, unknown>;
+		expect(copilotModels["gpt-5.4-nano"]).toBeUndefined();
+		expect(getBundledModel("github-copilot", "gpt-5.4-nano")).toBeUndefined();
+	});
+});
+
 describe("generated model policies", () => {
 	it("refreshes thinking metadata and applies parsed catalog corrections", () => {
 		const models: Model<Api>[] = [
@@ -213,6 +260,19 @@ describe("generated model policies", () => {
 				contextWindow: 1000000,
 				maxTokens: 128000,
 			},
+			{
+				id: "gpt-5.4-mini",
+				name: "GPT-5.4 mini",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 400000,
+				maxTokens: 32000,
+				priority: 2,
+			},
 		];
 
 		applyGeneratedModelPolicies(models);
@@ -225,16 +285,18 @@ describe("generated model policies", () => {
 		expect(models[0]?.cost.cacheRead).toBe(0.5);
 		expect(models[0]?.cost.cacheWrite).toBe(6.25);
 		expect(models[1]?.thinking).toEqual({
-			mode: "budget",
+			mode: "anthropic-adaptive",
 			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			maxLevel: Effort.XHigh,
 		});
 		expect(models[1]?.cost.cacheRead).toBe(0.5);
 		expect(models[1]?.cost.cacheWrite).toBe(6.25);
-		expect(models[1]?.contextWindow).toBe(200000);
+		expect(models[1]?.contextWindow).toBe(1000000);
 		expect(models[2]?.contextWindow).toBe(272000);
 		expect(models[3]?.contextWindow).toBe(256000);
 		expect(models[4]?.contextWindow).toBe(1000000);
+		expect(models[5]?.contextWindow).toBe(272000);
+		expect(models[5]?.priority).toBe(1);
 	});
 
 	it("normalizes bundled GPT-5.4 Codex to the 256K standard window", () => {
@@ -353,6 +415,93 @@ describe("model thinking runtime helpers", () => {
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
 
+	it("enables xhigh for openai-completions API (custom models)", () => {
+		const model = createModel({
+			id: "custom-model",
+			api: "openai-completions",
+			provider: "custom",
+		});
+
+		// openai-completions should support xhigh by default
+		expect(model.thinking?.maxLevel).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
+	it("does not expose xhigh for binary-thinking openai-compat transports", () => {
+		const model = enrichModelThinking({
+			id: "glm-4.7",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "zai",
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 32000,
+		} satisfies Model<"openai-completions">);
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		});
+		expect(requireSupportedEffort(model, Effort.High)).toBe(Effort.High);
+		expect(() => requireSupportedEffort(model, Effort.XHigh)).toThrow(
+			/Supported efforts: minimal, low, medium, high/,
+		);
+	});
+
+	it("derives binary-thinking fallback from resolved compat when catalog compat is partial", () => {
+		const model = enrichModelThinking({
+			id: "qwen/qwen3-32b",
+			name: "Qwen 3 32B",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			compat: {
+				supportsToolChoice: true,
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 32000,
+		} satisfies Model<"openai-completions">);
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.High,
+		});
+		expect(requireSupportedEffort(model, Effort.High)).toBe(Effort.High);
+		expect(() => requireSupportedEffort(model, Effort.XHigh)).toThrow(
+			/Supported efforts: minimal, low, medium, high/,
+		);
+	});
+
+	it("enables xhigh for openai-responses and openai-codex-responses APIs", () => {
+		const responsesModel = createModel({
+			id: "custom-responses",
+			api: "openai-responses",
+			provider: "custom",
+		});
+
+		const codexModel = createModel({
+			id: "custom-codex",
+			api: "openai-codex-responses",
+			provider: "custom",
+		});
+
+		// Both should support xhigh
+		expect(responsesModel.thinking?.maxLevel).toBe(Effort.XHigh);
+		expect(codexModel.thinking?.maxLevel).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(responsesModel, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(requireSupportedEffort(codexModel, Effort.XHigh)).toBe(Effort.XHigh);
+	});
 	it("rejects reasoning models that are missing thinking metadata at runtime", () => {
 		const model = {
 			id: "broken-reasoner",

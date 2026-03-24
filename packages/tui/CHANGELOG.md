@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [13.15.0] - 2026-03-23
+
+### Added
+
+- Added `renderInlineMarkdown()` function to render inline markdown (bold, italic, code, links, strikethrough) to styled strings
+
+### Fixed
+
+- Fixed editor consuming user-rebound copy keys, preventing custom keybindings from working in the editor
+
+## [13.14.1] - 2026-03-21
+### Added
+
+- Added Ctrl+_ as an additional default shortcut for undo
+
+### Fixed
+
+- Ensured undo functionality respects user-configured keybindings
+
+## [13.12.0] - 2026-03-14
+
+### Added
+
+- Added `moveToMessageStart()` and `moveToMessageEnd()` methods to move cursor to the beginning and end of the entire message
+
+### Fixed
+
+- Fixed autocomplete to preserve `./` prefix when completing relative file and directory paths
+- Fixed paste marker expansion to handle special regex replacement tokens ($1, $2, $&, $$, $`, $') literally in pasted content
+
+## [13.11.0] - 2026-03-12
+### Fixed
+
+- Fixed OSC 11 background color detection to correctly handle partial escape sequences that arrive mid-buffer, preventing user input from being swallowed
+- Fixed race condition where overlapping OSC 11 queries would be incorrectly cancelled by DA1 sentinels from previous queries
+
 ## [13.7.5] - 2026-03-04
 ### Changed
 

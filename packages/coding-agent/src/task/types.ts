@@ -40,6 +40,28 @@ export const TASK_SUBAGENT_STOP_REQUEST_CHANNEL = "task:subagent:stop-request";
 /** EventBus channel for targeted subagent resume requests from the UI */
 export const TASK_SUBAGENT_RESUME_REQUEST_CHANNEL = "task:subagent:resume-request";
 
+/** EventBus channel for subagent sudo PTY escalation requests */
+export const TASK_SUDO_PTY_REQUEST_CHANNEL = "task:sudo:pty-request";
+
+/** EventBus channel for sudo PTY escalation responses */
+export const TASK_SUDO_PTY_RESPONSE_CHANNEL = "task:sudo:pty-response";
+
+/** Request payload emitted by subagents needing a sudo PTY overlay on the parent session */
+export interface SudoPtyRequest {
+	requestId: string;
+	command: string;
+	cwd: string;
+	timeoutMs: number;
+	env?: Record<string, string>;
+}
+
+/** Response payload emitted by the parent session after completing the PTY overlay */
+export interface SudoPtyResponse {
+	requestId: string;
+	result?: BashInteractiveResult;
+	error?: string;
+}
+
 /** Single task item for parallel execution */
 export const taskItemSchema = Type.Object({
 	id: Type.String({
@@ -153,6 +175,7 @@ export interface AgentProgress {
 	agentSource: AgentSource;
 	status: "pending" | "running" | "completed" | "failed" | "aborted";
 	task: string;
+	assignment?: string;
 	description?: string;
 	lastIntent?: string;
 	currentTool?: string;
@@ -188,6 +211,7 @@ export interface SingleResult {
 	agent: string;
 	agentSource: AgentSource;
 	task: string;
+	assignment?: string;
 	description?: string;
 	lastIntent?: string;
 	exitCode: number;

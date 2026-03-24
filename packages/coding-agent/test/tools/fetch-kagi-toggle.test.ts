@@ -7,13 +7,12 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { FetchTool } from "@oh-my-pi/pi-coding-agent/tools/fetch";
 import * as imageResize from "@oh-my-pi/pi-coding-agent/utils/image-resize";
 import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
-import * as kagi from "@oh-my-pi/pi-coding-agent/web/kagi";
-import type { LoadPageResult } from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import * as scraperUtils from "@oh-my-pi/pi-coding-agent/web/scrapers/utils";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import * as natives from "@oh-my-pi/pi-natives";
+import { hookFetch, ptree, Snowflake } from "@oh-my-pi/pi-utils";
 
-describe("fetch tool Kagi summarization toggle", () => {
+describe("fetch tool", () => {
 	let testDir: string;
 
 	beforeEach(() => {
@@ -23,6 +22,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		delete process.env.PARALLEL_API_KEY;
 		fs.rmSync(testDir, { recursive: true, force: true });
 	});
 
@@ -40,64 +40,8 @@ describe("fetch tool Kagi summarization toggle", () => {
 		};
 	};
 
-	const mockLoadPage = () => {
-		const pageResponse = (url: string): LoadPageResult => {
-			if (url === "https://example.com") {
-				return {
-					ok: true,
-					status: 200,
-					contentType: "text/html",
-					finalUrl: "https://example.com",
-					content: "<html><body><h1>Example Domain</h1><p>Short sample content.</p></body></html>",
-				};
-			}
-
-			return {
-				ok: false,
-				status: 404,
-				contentType: "",
-				finalUrl: url,
-				content: "",
-			};
-		};
-
-		return vi
-			.spyOn(scrapers, "loadPage")
-			.mockImplementation(async (url: string, _options?: unknown) => pageResponse(url));
-	};
-
-	it("uses Kagi summarizer when enabled", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": true });
-		const tool = new FetchTool(session);
-		const loadPageSpy = mockLoadPage();
-		const summarizeSpy = vi.spyOn(kagi, "summarizeUrlWithKagi").mockResolvedValue("x".repeat(150));
-		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("blocked", { status: 500, statusText: "Blocked" }));
-
-		const result = await tool.execute("fetch-1", { url: "https://example.com" });
-
-		expect(loadPageSpy).toHaveBeenCalled();
-		expect(summarizeSpy).toHaveBeenCalledTimes(1);
-		expect(result.details?.method).toBe("kagi");
-	});
-
-	it("skips Kagi summarizer when disabled", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
-		const tool = new FetchTool(session);
-		const loadPageSpy = mockLoadPage();
-		const summarizeSpy = vi.spyOn(kagi, "summarizeUrlWithKagi").mockResolvedValue("x".repeat(150));
-		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("blocked", { status: 500, statusText: "Blocked" }));
-
-		const result = await tool.execute("fetch-2", { url: "https://example.com" });
-
-		expect(loadPageSpy).toHaveBeenCalled();
-		expect(summarizeSpy).not.toHaveBeenCalled();
-		expect(result.details?.method).not.toBe("kagi");
-	});
-
 	it("returns an image content block when fetching image URLs", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const imageBytes = new Uint8Array([137, 80, 78, 71]);
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
@@ -141,7 +85,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 	});
 
 	it("resizes fetched images before emitting image content blocks", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const resizeSpy = vi.spyOn(imageResize, "resizeImage").mockResolvedValue({
 			buffer: new Uint8Array([1, 2, 3]),
@@ -187,7 +131,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 	});
 
 	it("keeps markitdown extracted text for image responses", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const extractedText = "Converted image text content that is definitely longer than fifty characters.";
 		vi.spyOn(imageResize, "resizeImage").mockResolvedValue({
@@ -231,7 +175,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 		expect(imageBlock?.data).toBe("aW1hZ2U=");
 	});
 	it("falls back to text-only output for unsupported image MIME types", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const fetchBinarySpy = vi.spyOn(scraperUtils, "fetchBinary");
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
@@ -254,7 +198,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 	});
 
 	it("uses binary conversion fallback for unsupported image MIME when extension is convertible", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const convertedText = "Converted image text from markitdown fallback with sufficient length to pass threshold.";
 		const fetchBinarySpy = vi.spyOn(scraperUtils, "fetchBinary").mockResolvedValue({
@@ -287,7 +231,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 	});
 
 	it("does not treat text/html at .png paths as inline images", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		vi.spyOn(scraperUtils, "fetchBinary").mockResolvedValue({ ok: false, error: "not an image" });
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
@@ -309,7 +253,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 	});
 
 	it("falls back to textual output when inline image refetch fails", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		const convertSpy = vi.spyOn(scraperUtils, "convertWithMarkitdown");
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
@@ -335,7 +279,7 @@ describe("fetch tool Kagi summarization toggle", () => {
 		expect(fetchBinarySpy).toHaveBeenCalledTimes(1);
 	});
 	it("falls back to text-only output when image payload bytes are invalid", async () => {
-		const session = createSession({ "fetch.useKagiSummarizer": false });
+		const session = createSession();
 		const tool = new FetchTool(session);
 		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
@@ -374,5 +318,235 @@ describe("fetch tool Kagi summarization toggle", () => {
 		expect(imageBlock).toBeUndefined();
 		expect(textBlock?.type).toBe("text");
 		expect(textBlock?.text).toContain("<html><body>gateway error</body></html>");
+	});
+	it("prefers rendered page content over site-wide llms.txt for deep pages", async () => {
+		const session = createSession();
+		const tool = new FetchTool(session);
+		const pageUrl = "https://bun.com/reference/bun/UnixSocketOptions";
+		const pageHtml = "<html><body><main><h1>UnixSocketOptions</h1><p>Page-specific docs.</p></main></body></html>";
+		const renderedMarkdown = `# UnixSocketOptions\n\n${"Page-specific API docs. ".repeat(8)}`;
+		const originalWhich = Bun.which;
+
+		Bun.which = (() => null) as typeof Bun.which;
+		try {
+			const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async (requestedUrl: string) => {
+				if (requestedUrl === pageUrl) {
+					return {
+						ok: true,
+						status: 200,
+						contentType: "text/html",
+						finalUrl: pageUrl,
+						content: pageHtml,
+					};
+				}
+
+				if (requestedUrl === `${pageUrl}.md`) {
+					return {
+						ok: false,
+						status: 404,
+						contentType: "text/plain",
+						finalUrl: requestedUrl,
+						content: "",
+					};
+				}
+
+				if (requestedUrl === "https://bun.com/llms.txt") {
+					return {
+						ok: true,
+						status: 200,
+						contentType: "text/plain",
+						finalUrl: requestedUrl,
+						content: `# Bun\n\n${"Site-wide overview. ".repeat(12)}`,
+					};
+				}
+
+				return {
+					ok: false,
+					status: 404,
+					contentType: "text/plain",
+					finalUrl: requestedUrl,
+					content: "",
+				};
+			});
+			using _hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
+			vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
+			vi.spyOn(natives, "htmlToMarkdown").mockResolvedValue(renderedMarkdown);
+
+			const result = await tool.execute("fetch-deep-page", { url: pageUrl });
+			const requestedUrls = loadPageSpy.mock.calls.map(([requestedUrl]) => requestedUrl);
+			const textBlock = result.content.find(content => content.type === "text");
+
+			expect(result.details?.method).toBe("native");
+			expect(textBlock?.type).toBe("text");
+			expect(textBlock?.text).toContain("UnixSocketOptions");
+			expect(requestedUrls).not.toContain("https://bun.com/.well-known/llms.txt");
+			expect(requestedUrls).not.toContain("https://bun.com/llms.txt");
+			expect(requestedUrls).not.toContain("https://bun.com/llms.md");
+		} finally {
+			Bun.which = originalWhich;
+		}
+	});
+
+	it("uses section-scoped llms.txt fallback without requesting the site-wide file", async () => {
+		const session = createSession();
+		const tool = new FetchTool(session);
+		const pageUrl = "https://example.com/docs/reference/widget";
+		const pageHtml = "<html><body><nav>Docs</nav><main><h1>Widget</h1></main></body></html>";
+		const lowQualityRender = `${"Please enable JavaScript to view this page.\n".repeat(6)}${"navigation\n".repeat(4)}`;
+		const originalWhich = Bun.which;
+		const execSpy = vi.spyOn(ptree, "exec").mockResolvedValue({ ok: true, stdout: lowQualityRender } as never);
+
+		Bun.which = (() => null) as typeof Bun.which;
+		try {
+			const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockImplementation(async (requestedUrl: string) => {
+				if (requestedUrl === pageUrl) {
+					return {
+						ok: true,
+						status: 200,
+						contentType: "text/html",
+						finalUrl: pageUrl,
+						content: pageHtml,
+					};
+				}
+
+				if (
+					[
+						`${pageUrl}.md`,
+						"https://example.com/docs/reference/llms.txt",
+						"https://example.com/docs/reference/llms.md",
+						"https://example.com/docs/llms.md",
+					].includes(requestedUrl)
+				) {
+					return {
+						ok: false,
+						status: 404,
+						contentType: "text/plain",
+						finalUrl: requestedUrl,
+						content: "",
+					};
+				}
+
+				if (requestedUrl === "https://example.com/docs/llms.txt") {
+					return {
+						ok: true,
+						status: 200,
+						contentType: "text/plain",
+						finalUrl: requestedUrl,
+						content: `# Example Docs\n\n${"Section-scoped fallback. ".repeat(10)}`,
+					};
+				}
+
+				if (requestedUrl === "https://example.com/llms.txt") {
+					return {
+						ok: true,
+						status: 200,
+						contentType: "text/plain",
+						finalUrl: requestedUrl,
+						content: `# Example\n\n${"Site-wide fallback. ".repeat(10)}`,
+					};
+				}
+
+				return {
+					ok: false,
+					status: 404,
+					contentType: "text/plain",
+					finalUrl: requestedUrl,
+					content: "",
+				};
+			});
+			using _hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
+			vi.spyOn(toolsManager, "ensureTool").mockResolvedValue("/usr/bin/trafilatura");
+
+			const result = await tool.execute("fetch-section-llms", { url: pageUrl });
+			const requestedUrls = loadPageSpy.mock.calls.map(([requestedUrl]) => requestedUrl);
+			const textBlock = result.content.find(content => content.type === "text");
+
+			expect(result.details?.method).toBe("llms.txt");
+			expect(result.details?.notes).toContain("Used llms.txt fallback: https://example.com/docs/llms.txt");
+			expect(textBlock?.type).toBe("text");
+			expect(textBlock?.text).toContain("Section-scoped fallback");
+			expect(requestedUrls).toContain("https://example.com/docs/llms.txt");
+			expect(requestedUrls).not.toContain("https://example.com/.well-known/llms.txt");
+			expect(requestedUrls).not.toContain("https://example.com/llms.txt");
+			expect(requestedUrls).not.toContain("https://example.com/llms.md");
+		} finally {
+			Bun.which = originalWhich;
+			execSpy.mockRestore();
+		}
+	});
+	it("prefers Parallel extract before other HTML renderers when configured", async () => {
+		process.env.PARALLEL_API_KEY = "test-parallel-key";
+		const session = createSession();
+		const tool = new FetchTool(session);
+		const pageUrl = "https://example.com/parallel-page";
+		const pageHtml = "<html><body><main><h1>Parallel Page</h1></main></body></html>";
+		const ensureToolSpy = vi.spyOn(toolsManager, "ensureTool");
+		const htmlToMarkdownSpy = vi.spyOn(natives, "htmlToMarkdown");
+		vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => {
+			if (requestedUrl === pageUrl) {
+				return {
+					ok: true,
+					status: 200,
+					contentType: "text/html",
+					finalUrl: pageUrl,
+					content: pageHtml,
+				};
+			}
+
+			if (requestedUrl === `${pageUrl}.md`) {
+				return {
+					ok: false,
+					status: 404,
+					contentType: "text/plain",
+					finalUrl: requestedUrl,
+					content: "",
+				};
+			}
+
+			return {
+				ok: false,
+				status: 404,
+				contentType: "text/plain",
+				finalUrl: requestedUrl,
+				content: "",
+			};
+		});
+		using _hook = hookFetch(input => {
+			const requestedUrl = String(input);
+			if (requestedUrl === "https://api.parallel.ai/v1beta/extract") {
+				return new Response(
+					JSON.stringify({
+						extract_id: "extract-fetch-1",
+						results: [
+							{
+								url: pageUrl,
+								title: "Parallel Page",
+								excerpts: [
+									"Parallel-rendered content that is comfortably longer than one hundred characters. ".repeat(
+										2,
+									),
+								],
+								full_content: null,
+							},
+						],
+						errors: [],
+						warnings: null,
+						usage: null,
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("blocked", { status: 500, statusText: "Blocked" });
+		});
+
+		const result = await tool.execute("fetch-parallel-html", { url: pageUrl });
+		const textBlock = result.content.find(content => content.type === "text");
+
+		expect(result.details?.method).toBe("parallel");
+		expect(textBlock?.type).toBe("text");
+		expect(textBlock?.text).toContain("Parallel-rendered content");
+		expect(ensureToolSpy).not.toHaveBeenCalled();
+		expect(htmlToMarkdownSpy).not.toHaveBeenCalled();
 	});
 });

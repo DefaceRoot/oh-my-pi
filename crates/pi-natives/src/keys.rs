@@ -49,7 +49,6 @@ const CP_TAB: i32 = 9;
 const CP_ENTER: i32 = 13;
 const CP_SPACE: i32 = 32;
 const CP_BACKSPACE: i32 = 127;
-const CP_KP_ENTER: i32 = 57414;
 const CP_KP_0: i32 = 57399;
 const CP_KP_1: i32 = 57400;
 const CP_KP_2: i32 = 57401;
@@ -61,10 +60,17 @@ const CP_KP_7: i32 = 57406;
 const CP_KP_8: i32 = 57407;
 const CP_KP_9: i32 = 57408;
 const CP_KP_DECIMAL: i32 = 57409;
+const CP_KP_DIVIDE: i32 = 57410;
+const CP_KP_MULTIPLY: i32 = 57411;
+const CP_KP_SUBTRACT: i32 = 57412;
+const CP_KP_ADD: i32 = 57413;
+const CP_KP_ENTER: i32 = 57414;
+const CP_KP_EQUALS: i32 = 57415;
 
 const MOD_SHIFT: u32 = 1;
 const MOD_ALT: u32 = 2;
 const MOD_CTRL: u32 = 4;
+const MOD_NUM_LOCK: u32 = 128;
 
 #[inline]
 const fn map_keypad_nav(codepoint: i32) -> Option<i32> {
@@ -80,6 +86,36 @@ const fn map_keypad_nav(codepoint: i32) -> Option<i32> {
 		CP_KP_8 => Some(ARROW_UP),
 		CP_KP_9 => Some(FUNC_PAGE_UP),
 		CP_KP_DECIMAL => Some(FUNC_DELETE),
+		_ => None,
+	}
+}
+
+#[inline]
+const fn keypad_num_lock_text_codepoint(codepoint: i32) -> Option<i32> {
+	match codepoint {
+		CP_KP_0 => Some(48),
+		CP_KP_1 => Some(49),
+		CP_KP_2 => Some(50),
+		CP_KP_3 => Some(51),
+		CP_KP_4 => Some(52),
+		CP_KP_5 => Some(53),
+		CP_KP_6 => Some(54),
+		CP_KP_7 => Some(55),
+		CP_KP_8 => Some(56),
+		CP_KP_9 => Some(57),
+		CP_KP_DECIMAL => Some(46),
+		_ => None,
+	}
+}
+
+#[inline]
+const fn keypad_operator_text_codepoint(codepoint: i32) -> Option<i32> {
+	match codepoint {
+		CP_KP_DIVIDE => Some(47),
+		CP_KP_MULTIPLY => Some(42),
+		CP_KP_SUBTRACT => Some(45),
+		CP_KP_ADD => Some(43),
+		CP_KP_EQUALS => Some(61),
 		_ => None,
 	}
 }
@@ -460,6 +496,9 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		let Some(p) = kitty_parsed.as_ref() else {
 			return false;
 		};
+		if p.event_type == Some(3) {
+			return false;
+		}
 		let actual_mod = p.modifier & !LOCK_MASK;
 		let expected_mod = m & !LOCK_MASK;
 		if actual_mod != expected_mod {
@@ -468,13 +507,34 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		let mut parsed_codepoint = p.codepoint;
 		let mut parsed_base = p.base_layout_key;
 		if p.text_codepoint.is_none() {
-			if let Some(mapped) = map_keypad_nav(parsed_codepoint) {
-				parsed_codepoint = mapped;
-			}
-			if let Some(base) = parsed_base
-				&& let Some(mapped) = map_keypad_nav(base)
-			{
-				parsed_base = Some(mapped);
+			if let Some(text_codepoint) = keypad_operator_text_codepoint(parsed_codepoint) {
+				parsed_codepoint = text_codepoint;
+				parsed_base = None;
+			} else if p.modifier & MOD_NUM_LOCK != 0 {
+				if actual_mod == 0
+					&& let Some(text_codepoint) = keypad_num_lock_text_codepoint(parsed_codepoint)
+				{
+					parsed_codepoint = text_codepoint;
+					parsed_base = None;
+				} else {
+					if let Some(mapped) = map_keypad_nav(parsed_codepoint) {
+						parsed_codepoint = mapped;
+					}
+					if let Some(base) = parsed_base
+						&& let Some(mapped) = map_keypad_nav(base)
+					{
+						parsed_base = Some(mapped);
+					}
+				}
+			} else {
+				if let Some(mapped) = map_keypad_nav(parsed_codepoint) {
+					parsed_codepoint = mapped;
+				}
+				if let Some(base) = parsed_base
+					&& let Some(mapped) = map_keypad_nav(base)
+				{
+					parsed_base = Some(mapped);
+				}
 			}
 		}
 		if parsed_codepoint == codepoint {
@@ -871,6 +931,9 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 	// Try Kitty protocol sequences (including enhanced CSI-u with optional text
 	// field)
 	if let Some(parsed) = parse_kitty_sequence(bytes) {
+		if parsed.event_type == Some(3) {
+			return None;
+		}
 		return format_kitty_key(&parsed);
 	}
 
@@ -1172,22 +1235,33 @@ fn parse_functional(bytes: &[u8]) -> Option<ParsedKittySequence> {
 
 fn format_kitty_key(parsed: &ParsedKittySequence) -> Option<Cow<'static, str>> {
 	let effective_mod = parsed.modifier & !LOCK_MASK;
-	let effective_codepoint = {
-		let cp = parsed.codepoint;
-		let is_ascii_letter = u8::try_from(cp)
-			.ok()
-			.is_some_and(|b| b.is_ascii_alphabetic());
-		let is_known_symbol = is_symbol_key(cp);
-		if is_ascii_letter || is_known_symbol {
-			cp
+	if effective_mod & !(MOD_SHIFT | MOD_CTRL | MOD_ALT) != 0 {
+		return None;
+	}
+	let effective_codepoint =
+		if let Some(text_codepoint) = keypad_operator_text_codepoint(parsed.codepoint) {
+			text_codepoint
 		} else {
-			parsed.base_layout_key.unwrap_or(cp)
-		}
-	};
+			let cp = parsed.codepoint;
+			let is_ascii_letter = u8::try_from(cp)
+				.ok()
+				.is_some_and(|b| b.is_ascii_alphabetic());
+			let is_known_symbol = is_symbol_key(cp);
+			if is_ascii_letter || is_known_symbol {
+				cp
+			} else {
+				parsed.base_layout_key.unwrap_or(cp)
+			}
+		};
 
-	// No modifiers - return static string
 	if effective_mod == 0 {
 		if let Some(text_codepoint) = parsed.text_codepoint
+			&& let Some(key_name) = format_key_name(text_codepoint)
+		{
+			return Some(Cow::Borrowed(key_name));
+		}
+		if parsed.modifier & MOD_NUM_LOCK != 0
+			&& let Some(text_codepoint) = keypad_num_lock_text_codepoint(parsed.codepoint)
 			&& let Some(key_name) = format_key_name(text_codepoint)
 		{
 			return Some(Cow::Borrowed(key_name));
@@ -1294,4 +1368,50 @@ fn parse_optional_digits(bytes: &[u8], idx: usize, end: usize) -> (Option<u32>, 
 		return (None, idx);
 	}
 	parse_digits(bytes, idx, end).map_or((None, idx), |(v, i)| (Some(v), i))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn matches_key_ignores_kitty_release_events() {
+		assert!(matches_key_inner(b"\x1b[127u", "backspace", true));
+		assert!(matches_key_inner(b"\x1b[127;1:2u", "backspace", true));
+		assert!(!matches_key_inner(b"\x1b[127;1:3u", "backspace", true));
+	}
+
+	#[test]
+	fn parse_key_ignores_kitty_sequences_with_unsupported_modifiers() {
+		assert_eq!(parse_key_inner(b"\x1b[99;9u", true).as_deref(), None);
+	}
+
+	#[test]
+	fn parse_key_ignores_kitty_release_events() {
+		assert_eq!(parse_key_inner(b"\x1b[127u", true).as_deref(), Some("backspace"));
+		assert_eq!(parse_key_inner(b"\x1b[127;1:2u", true).as_deref(), Some("backspace"));
+		assert_eq!(parse_key_inner(b"\x1b[127;1:3u", true).as_deref(), None);
+	}
+
+	#[test]
+	fn num_lock_keypad_digits_stay_text() {
+		assert_eq!(parse_key_inner(b"\x1b[57400;129u", true).as_deref(), Some("1"));
+		assert!(matches_key_inner(b"\x1b[57400;129u", "1", true));
+		assert!(!matches_key_inner(b"\x1b[57400;129u", "end", true));
+	}
+
+	#[test]
+	fn keypad_operators_stay_text() {
+		assert_eq!(parse_key_inner(b"\x1b[57410u", true).as_deref(), Some("/"));
+		assert!(matches_key_inner(b"\x1b[57410u", "/", true));
+		assert_eq!(parse_key_inner(b"\x1b[57413;5u", true).as_deref(), Some("ctrl++"));
+		assert!(matches_key_inner(b"\x1b[57413;5u", "ctrl++", true));
+	}
+
+	#[test]
+	fn modified_num_lock_keypad_keys_still_match_navigation() {
+		assert_eq!(parse_key_inner(b"\x1b[57400;133u", true).as_deref(), Some("ctrl+end"));
+		assert!(matches_key_inner(b"\x1b[57400;133u", "ctrl+end", true));
+		assert!(!matches_key_inner(b"\x1b[57400;133u", "1", true));
+	}
 }

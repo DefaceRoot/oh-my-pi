@@ -1,10 +1,16 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
 import { defaultEditorTheme } from "./test-themes";
 
 describe("Editor component", () => {
+	afterEach(() => {
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+	});
+
 	describe("Prompt history navigation", () => {
 		it("does nothing on Up arrow when history is empty", () => {
 			const editor = new Editor(defaultEditorTheme);
@@ -289,6 +295,17 @@ describe("Editor component", () => {
 			expect(editor.getCursor()).toEqual({ line: 0, col: 2 });
 		});
 
+		it("moves cursor to message boundaries", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("first line\nsecond line\nthird");
+
+			editor.moveToMessageStart();
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+
+			editor.moveToMessageEnd();
+			expect(editor.getCursor()).toEqual({ line: 2, col: 5 });
+		});
+
 		it("returns lines as a defensive copy", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.setText("a\nb");
@@ -298,6 +315,116 @@ describe("Editor component", () => {
 
 			lines[0] = "mutated";
 			expect(editor.getLines()).toEqual(["a", "b"]);
+		});
+	});
+
+	describe("autocomplete triggers", () => {
+		it("triggers slash-command autocomplete when typing slash", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			const { promise, resolve } = Promise.withResolvers<string>();
+
+			editor.setAutocompleteProvider({
+				async getSuggestions(lines, cursorLine, cursorCol) {
+					const currentLine = lines[cursorLine] ?? "";
+					resolve(currentLine.slice(0, cursorCol));
+					return { items: [{ label: "/help", value: "/help" }], prefix: "/" };
+				},
+				applyCompletion(lines, cursorLine, cursorCol) {
+					return { lines, cursorLine, cursorCol };
+				},
+			});
+
+			editor.handleInput("/");
+
+			await expect(promise).resolves.toBe("/");
+		});
+
+		it("triggers file-reference autocomplete when typing at-sign", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			const { promise, resolve } = Promise.withResolvers<string>();
+
+			editor.setAutocompleteProvider({
+				async getSuggestions(lines, cursorLine, cursorCol) {
+					const currentLine = lines[cursorLine] ?? "";
+					resolve(currentLine.slice(0, cursorCol));
+					return { items: [{ label: "src/", value: "src/" }], prefix: "@" };
+				},
+				applyCompletion(lines, cursorLine, cursorCol) {
+					return { lines, cursorLine, cursorCol };
+				},
+			});
+
+			editor.handleInput("@");
+
+			await expect(promise).resolves.toBe("@");
+		});
+
+		it("chains into argument completions after tab-completing slash command names", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider(
+					[
+						{
+							name: "model",
+							description: "Select a model",
+							getArgumentCompletions() {
+								return [{ label: "claude-opus", value: "claude-opus" }];
+							},
+						},
+						{ name: "help", description: "Show help" },
+					],
+					"/tmp",
+				),
+			);
+
+			editor.handleInput("/");
+			await Bun.sleep(0);
+			editor.handleInput("m");
+			editor.handleInput("o");
+			editor.handleInput("d");
+			await Bun.sleep(110);
+
+			editor.handleInput("	");
+			await Bun.sleep(0);
+
+			expect(editor.getText()).toBe("/model ");
+			expect(editor.isShowingAutocomplete()).toBe(true);
+
+			editor.handleInput("	");
+
+			expect(editor.getText()).toBe("/model claude-opus");
+			expect(editor.isShowingAutocomplete()).toBe(false);
+		});
+
+		it("does not show argument completions when command has no argument completer", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider(
+					[
+						{
+							name: "model",
+							description: "Select a model",
+							getArgumentCompletions() {
+								return [{ label: "claude-opus", value: "claude-opus" }];
+							},
+						},
+						{ name: "help", description: "Show help" },
+					],
+					"/tmp",
+				),
+			);
+
+			editor.handleInput("/");
+			await Bun.sleep(0);
+			editor.handleInput("h");
+			editor.handleInput("e");
+			await Bun.sleep(110);
+
+			editor.handleInput("	");
+			await Bun.sleep(0);
+
+			expect(editor.getText()).toBe("/help ");
+			expect(editor.isShowingAutocomplete()).toBe(false);
 		});
 	});
 
@@ -319,6 +446,15 @@ describe("Editor component", () => {
 
 			const text = editor.getText();
 			expect(text).toBe("Hello äöü 😀");
+		});
+
+		it("inserts NumLock keypad digits instead of treating them as navigation", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.handleInput("a");
+			editor.handleInput("\x1b[57400;129u");
+
+			expect(editor.getText()).toBe("a1");
 		});
 
 		it("deletes single-code-unit unicode characters (umlauts) with Backspace", () => {
@@ -1248,6 +1384,75 @@ describe("Editor component", () => {
 			expect(editor.getCursor()).toEqual({ line: 0, col: 8 });
 		});
 
+		it("uses the configured undo binding", () => {
+			setKeybindings(
+				new KeybindingsManager(TUI_KEYBINDINGS, {
+					"tui.editor.undo": "f8",
+				}),
+			);
+
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.handleInput("a");
+			expect(editor.getText()).toBe("a");
+
+			editor.handleInput("\x1b[19~"); // F8
+			expect(editor.getText()).toBe("");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+		});
+
+		it("does not swallow keys rebound to copy", () => {
+			setKeybindings(
+				new KeybindingsManager(TUI_KEYBINDINGS, {
+					"tui.input.copy": "left",
+				}),
+			);
+
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("ab");
+
+			editor.handleInput("\x1b[D"); // Left arrow
+			editor.handleInput("X");
+
+			expect(editor.getText()).toBe("aXb");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 2 });
+		});
+
+		it("undoes the last paste when a transient #undo trigger is executed", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.handleInput("\x1b[200~pasted text\x1b[201~");
+			expect(editor.getText()).toBe("pasted text");
+
+			editor.handleInput("#");
+			editor.handleInput("u");
+			editor.handleInput("n");
+			editor.handleInput("d");
+			editor.handleInput("o");
+			expect(editor.getText()).toBe("pasted text#undo");
+
+			editor.undoPastTransientText("#undo");
+
+			expect(editor.getText()).toBe("");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+		});
+
+		it("removes a transient undo trigger even when there is no earlier edit to restore", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.handleInput("#");
+			editor.handleInput("u");
+			editor.handleInput("n");
+			editor.handleInput("d");
+			editor.handleInput("o");
+			expect(editor.getText()).toBe("#undo");
+
+			editor.undoPastTransientText("#undo");
+
+			expect(editor.getText()).toBe("");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+		});
+
 		it("handles multiple consecutive up/down movements", () => {
 			const editor = new Editor(defaultEditorTheme);
 
@@ -1419,6 +1624,53 @@ describe("Editor component", () => {
 			// Move down - preferredVisualCol was kept at 15
 			editor.handleInput("\x1b[B"); // Down to line 1
 			expect(editor.getCursor()).toEqual({ line: 1, col: 15 });
+		});
+		it("expands large pasted content literally in getExpandedText", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const pastedText = [
+				"line 1",
+				"line 2",
+				"line 3",
+				"line 4",
+				"line 5",
+				"line 6",
+				"line 7",
+				"line 8",
+				"line 9",
+				"line 10",
+				"tokens $1 $2 $& $$ $` $' end",
+			].join("\n");
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+
+			expect(editor.getText()).toMatch(/\[paste #\d+ \+\d+ lines\]/);
+			expect(editor.getExpandedText()).toBe(pastedText);
+		});
+
+		it("submits large pasted content literally", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const pastedText = [
+				"line 1",
+				"line 2",
+				"line 3",
+				"line 4",
+				"line 5",
+				"line 6",
+				"line 7",
+				"line 8",
+				"line 9",
+				"line 10",
+				"tokens $1 $2 $& $$ $` $' end",
+			].join("\n");
+			let submitted = "";
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+			editor.handleInput("\r");
+
+			expect(submitted).toBe(pastedText);
 		});
 	});
 });

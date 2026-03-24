@@ -2,6 +2,7 @@ import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { type PtyRunResult, PtySession, sanitizeText } from "@oh-my-pi/pi-natives";
 import {
 	type Component,
+	extractPrintableText,
 	matchesKey,
 	padding,
 	parseKey,
@@ -32,11 +33,15 @@ const XtermTerminal = xterm.Terminal;
 
 function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean): string {
 	const kitty = parseKittySequence(data);
+	if (kitty?.eventType === 3) {
+		return "";
+	}
+	const printableText = extractPrintableText(data);
+	if (printableText) {
+		return printableText;
+	}
 	if (!kitty) {
 		return data;
-	}
-	if (kitty.eventType === 3) {
-		return "";
 	}
 	const keyId = parseKey(data);
 	if (!keyId) {
@@ -290,7 +295,6 @@ export async function runInteractiveBashPty(
 	},
 ): Promise<BashInteractiveResult> {
 	const sink = new OutputSink({ artifactPath: options.artifactPath, artifactId: options.artifactId });
-	let pendingChunks = Promise.resolve();
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
 			const session = new PtySession();
@@ -304,7 +308,6 @@ export async function runInteractiveBashPty(
 				tui.requestRender();
 				void (async () => {
 					await component.flushOutput();
-					await pendingChunks;
 					const summary = await sink.dump();
 					done({
 						exitCode: run.exitCode,
@@ -357,15 +360,13 @@ export async function runInteractiveBashPty(
 						if (finished || err || !chunk) return;
 						component.appendOutput(chunk);
 						const normalizedChunk = normalizeCaptureChunk(chunk);
-						pendingChunks = pendingChunks.then(() => sink.push(normalizedChunk)).catch(() => {});
+						sink.push(normalizedChunk);
 						tui.requestRender();
 					},
 				)
 				.then(finalize)
 				.catch(error => {
-					pendingChunks = pendingChunks
-						.then(() => sink.push(`PTY error: ${error instanceof Error ? error.message : String(error)}\n`))
-						.catch(() => {});
+					sink.push(`PTY error: ${error instanceof Error ? error.message : String(error)}\n`);
 					finalize({ exitCode: undefined, cancelled: false, timedOut: false });
 				});
 			return component;

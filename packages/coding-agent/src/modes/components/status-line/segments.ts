@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
@@ -86,6 +87,16 @@ function resolveAgentModeLabel(ctx: SegmentContext): "default" | "ask" | "orches
 	}
 
 	return "custom";
+function stripDisplayRoot(pwd: string): string {
+	for (const root of ["/work", path.join(os.homedir(), "Projects")]) {
+		const relative = relativePathWithinRoot(root, pwd);
+		if (relative) return relative;
+	}
+	return pwd;
+}
+
+function normalizePremiumRequests(value: number): number {
+	return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -169,12 +180,13 @@ const pathSegment: StatusLineSegment = {
 
 		let pwd = formatDisplayedPath(process.cwd());
 
+		if (opts.stripWorkPrefix !== false) {
+			pwd = stripDisplayRoot(pwd);
+		}
 		if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);
 		}
-		if (opts.stripWorkPrefix !== false && pwd.startsWith("/work/")) {
-			pwd = pwd.slice(6);
-		}
+
 
 		const maxLen = opts.maxLength ?? 40;
 		if (pwd.length > maxLen) {

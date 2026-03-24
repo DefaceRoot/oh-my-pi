@@ -127,10 +127,15 @@ function buildAnthropicReferenceMap(
 	modelsDevModels: readonly Model<"anthropic-messages">[],
 ): Map<string, Model<"anthropic-messages">> {
 	const merged = new Map<string, Model<"anthropic-messages">>();
-	for (const model of getBundledModels("anthropic") as Model<"anthropic-messages">[]) {
+	for (const model of modelsDevModels) {
 		merged.set(model.id, model);
 	}
-	for (const model of modelsDevModels) {
+	// Anthropic /v1/models does not carry token limits, so bundled metadata stays canonical
+	// for known models while models.dev only fills gaps for newly discovered ids.
+	const bundledModels = getBundledModels("anthropic").filter(
+		(model): model is Model<"anthropic-messages"> => model.api === "anthropic-messages",
+	);
+	for (const model of bundledModels) {
 		merged.set(model.id, model);
 	}
 	return merged;
@@ -168,13 +173,26 @@ function createBundledReferenceMap<TApi extends Api>(
 	return references;
 }
 
+function shouldReplaceGlobalReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
+	if (!existing) return true;
+	if (candidate.contextWindow !== existing.contextWindow) {
+		return candidate.contextWindow > existing.contextWindow;
+	}
+	if (candidate.maxTokens !== existing.maxTokens) {
+		return candidate.maxTokens > existing.maxTokens;
+	}
+	// When limits tie, prefer OpenAI as the canonical reference so generic OpenAI-family
+	// providers inherit OpenAI pricing/capabilities instead of Copilot-specific metadata.
+	return existing.provider !== "openai" && candidate.provider === "openai";
+}
+
 function createGlobalReferenceMap(): Map<string, Model<Api>> {
 	const references = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
 			const candidate = model as Model<Api>;
 			const existing = references.get(candidate.id);
-			if (!existing || candidate.contextWindow > existing.contextWindow) {
+			if (shouldReplaceGlobalReference(existing, candidate)) {
 				references.set(candidate.id, candidate);
 			}
 		}
@@ -816,6 +834,37 @@ export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelM
 				provider: "kilo",
 				baseUrl,
 				apiKey,
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Alibaba Coding Plan
+// ---------------------------------------------------------------------------
+
+export interface AlibabaCodingPlanModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function alibabaCodingPlanModelManagerOptions(
+	config?: AlibabaCodingPlanModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://coding-intl.dashscope.aliyuncs.com/v1";
+	const references = createBundledReferenceMap<"openai-completions">("alibaba-coding-plan");
+	return {
+		providerId: "alibaba-coding-plan",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "alibaba-coding-plan",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
 			}),
 	};
 }
@@ -1935,6 +1984,17 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 			reasoningContentField: "reasoning_content",
 		},
 	}),
+	// --- Alibaba Coding Plan ---
+	openAiCompletionsDescriptor(
+		"alibaba-coding-plan",
+		"alibaba-coding-plan",
+		"https://coding-intl.dashscope.aliyuncs.com/v1",
+		{
+			compat: {
+				supportsDeveloperRole: false,
+			},
+		},
+	),
 ];
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDescriptor[] = [

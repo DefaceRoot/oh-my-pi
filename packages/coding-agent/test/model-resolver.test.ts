@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import {
+	expandRoleAlias,
 	parseModelPattern,
 	parseModelString,
+	resolveAgentModelPatterns,
 	resolveCliModel,
 	resolveModelFromString,
 	resolveModelOverride,
 	resolveModelRoleValue,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [
@@ -393,6 +396,39 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 });
+describe("resolveAgentModelPatterns", () => {
+	test("falls back to the active session model when pi/task is unset", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+		});
+
+		const result = resolveAgentModelPatterns({
+			agentModel: "pi/task",
+			settings,
+			activeModelPattern: "openai/gpt-4o",
+		});
+
+		expect(result).toEqual(["openai/gpt-4o"]);
+	});
+
+	test("uses the configured task role before falling back to the session model", () => {
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "openai/gpt-4o",
+				task: "anthropic/claude-sonnet-4-5:high",
+			},
+		});
+
+		const result = resolveAgentModelPatterns({
+			agentModel: "pi/task",
+			settings,
+			activeModelPattern: "openai/gpt-4o",
+		});
+
+		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
+	});
+});
+
 describe("resolveModelFromString", () => {
 	test("falls back to pattern parsing for provider/model:thinking when strict provider+id miss", () => {
 		const resolved = resolveModelFromString("openrouter/qwen/qwen3-coder:exacto:high", allModels);
@@ -598,5 +634,21 @@ describe("parseModelString", () => {
 			// Empty string is not a valid thinking level, so colon stays as part of ID
 			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:" });
 		});
+	});
+});
+
+describe("expandRoleAlias", () => {
+	test("expands pi/vision to configured vision role", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("vision", "openai/gpt-4o");
+
+		expect(expandRoleAlias("pi/vision", settings)).toBe("openai/gpt-4o");
+	});
+
+	test("keeps pi/vision alias when vision role is unset", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+
+		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
 	});
 });

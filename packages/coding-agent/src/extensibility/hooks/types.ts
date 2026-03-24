@@ -407,6 +407,8 @@ export interface AutoCompactionEndEvent {
 	willRetry: boolean;
 	errorMessage?: string;
 	noOpReason?: "nothing_to_compact";
+	/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
+	skipped?: boolean;
 }
 
 /** Event data for auto_retry_start event. */

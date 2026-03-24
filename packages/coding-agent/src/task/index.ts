@@ -16,11 +16,12 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
+
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { RolesConfig } from "../config/roles-config";
 import type { Theme } from "../modes/theme/theme";
@@ -28,6 +29,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
+import { runInteractiveBashPty } from "../tools/bash-interactive";
 import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
@@ -50,6 +52,10 @@ import {
 	type SingleResult,
 	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
+	TASK_SUDO_PTY_REQUEST_CHANNEL,
+	TASK_SUDO_PTY_RESPONSE_CHANNEL,
+	type SudoPtyRequest,
+	type SudoPtyResponse,
 	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
@@ -401,6 +407,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		params: TaskParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
@@ -409,7 +416,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		// Force async when timeout is set (so the orchestrator gets control back on timeout).
 		// Otherwise, use sync execution when async is disabled or agent is blocking.
 		if (!hasTimeout && (!asyncEnabled || selectedAgent?.blocking === true)) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
 		if (this.#isBlockedByOrchestratorBoundary(params.agent)) {
@@ -423,7 +430,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		if (!manager) {
 			if (hasTimeout) {
 				// timeout requested but no async job manager \u2014 fall back to sync
-				return this.#executeSync(_toolCallId, params, signal, onUpdate);
+				return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 			}
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
@@ -433,7 +440,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const taskItems = params.tasks ?? [];
 		if (taskItems.length === 0) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
 		const outputManager =
@@ -455,6 +462,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				agentSource: fallbackAgentSource,
 				status: "pending",
 				task: renderedTask.task,
+				assignment: renderedTask.assignment,
 				description: renderedTask.description,
 				recentTools: [],
 				recentOutput: [],
@@ -561,15 +569,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
 						);
 						try {
-							const result = await this.#executeSync(
-								_toolCallId,
-								singleParams,
-								runSignal,
-								forwardProgressUpdate,
-								parentImages,
-								true,
-								[uniqueId],
-							);
+								const result = await this.#executeSync(
+									_toolCallId,
+									singleParams,
+									runSignal,
+									forwardProgressUpdate,
+									ctx,
+									parentImages,
+									true,
+									[uniqueId],
+								);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 							const singleResult = result.details?.results[0];
 							const finalStatus = singleResult?.aborted
@@ -799,6 +808,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		params: TaskParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		ctx?: AgentToolContext,
 		parentImagesSnapshot?: ImageContent[],
 		parentImagesSnapshotCaptured = false,
 		preAllocatedIds?: string[],
@@ -1033,6 +1043,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		};
 		let disposeStopListener: (() => void) | undefined;
 		let disposeResumeListener: (() => void) | undefined;
+		let disposeSudoPtyListener: (() => void) | undefined;
 
 		try {
 			// Check self-recursion prevention
@@ -1109,6 +1120,37 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				request.respond?.(handled);
 			});
 
+			// Register handler for subagent sudo PTY escalation requests.
+			// Subagents with hasUI:false emit TASK_SUDO_PTY_REQUEST_CHANNEL when a
+			// sudo command needs a password; this parent handler runs the PTY
+			// overlay on the main session and returns the result via response channel.
+			if (ctx?.ui) {
+				const parentUi = ctx.ui;
+				disposeSudoPtyListener = this.session.eventBus?.on(
+					TASK_SUDO_PTY_REQUEST_CHANNEL,
+					async (data: unknown) => {
+						const request = data as SudoPtyRequest;
+						try {
+							const result = await runInteractiveBashPty(parentUi, {
+								command: request.command,
+								cwd: request.cwd,
+								timeoutMs: request.timeoutMs,
+								env: request.env,
+							});
+							this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
+								requestId: request.requestId,
+								result,
+							} satisfies SudoPtyResponse);
+						} catch (err) {
+							this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
+								requestId: request.requestId,
+								error: err instanceof Error ? err.message : String(err),
+							} satisfies SudoPtyResponse);
+						}
+					},
+				);
+			}
+
 			// Write parent conversation context for subagents
 			await fs.mkdir(effectiveArtifactsDir, { recursive: true });
 			const compactContext = this.session.getCompactContext?.();
@@ -1150,6 +1192,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					agentSource: agent.source,
 					status: "pending",
 					task: t.task,
+					assignment: t.assignment,
 					recentTools: [],
 					recentOutput: [],
 					toolCount: 0,
@@ -1370,6 +1413,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					agent: agentName,
 					agentSource: agent.source,
 					task: task.task,
+					assignment: task.assignment,
 					description: task.description,
 					exitCode: 1,
 					output: "",
@@ -1545,11 +1589,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const commitMsg =
 							commitStyle === "ai" && this.session.modelRegistry
 								? async (diff: string) => {
-										const commitModel = this.session.settings.getModelRole("commit");
+
 										return generateCommitMessage(
 											diff,
 											this.session.modelRegistry!,
-											commitModel,
+											this.session.settings,
 											this.session.getSessionId?.() ?? undefined,
 										);
 									}
@@ -1645,6 +1689,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 			disposeStopListener?.();
 			disposeResumeListener?.();
+			disposeSudoPtyListener?.();
 
 			return {
 				content: [{ type: "text", text: summary }],
@@ -1660,6 +1705,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		} catch (err) {
 			disposeStopListener?.();
 			disposeResumeListener?.();
+			disposeSudoPtyListener?.();
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: {

@@ -1,3 +1,4 @@
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
@@ -11,6 +12,9 @@ import { StdinBuffer } from "./stdin-buffer";
 let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
+
+const STD_INPUT_HANDLE = -10;
+const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 
 /**
  * Emergency terminal restore - call this from signal/crash handlers
@@ -29,6 +33,7 @@ export function emergencyTerminalRestore(): void {
 				"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?1000l\x1b[?1003l\x1b[?1006l" + // Disable mouse tracking
 					"\x1b[<u" + // Pop kitty keyboard protocol
+					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?25h", // Show cursor
 			);
 			if (process.stdin.setRawMode) {
@@ -39,6 +44,8 @@ export function emergencyTerminalRestore(): void {
 		// Terminal may already be dead during crash cleanup - ignore errors
 	}
 }
+/** Terminal-reported appearance (dark/light mode). */
+export type TerminalAppearance = "dark" | "light";
 export interface Terminal {
 	// Start the terminal with input and resize handlers
 	start(onInput: (data: string) => void, onResize: () => void): void;
@@ -78,6 +85,16 @@ export interface Terminal {
 
 	// Title operations
 	setTitle(title: string): void; // Set terminal window title
+
+	/**
+	 * Register a callback for terminal appearance (dark/light) changes.
+	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
+	 * Fires when the detected appearance changes, including the initial detection.
+	 */
+	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
+
+	/** The last detected terminal appearance, or undefined if not yet known. */
+	get appearance(): TerminalAppearance | undefined;
 }
 
 /**
@@ -88,13 +105,33 @@ export class ProcessTerminal implements Terminal {
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
 	private _kittyProtocolActive = false;
+	#modifyOtherKeysActive = false;
+	#modifyOtherKeysTimeout?: ReturnType<typeof setTimeout>;
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private dead = false;
 	private writeLogPath = $env.PI_TUI_WRITE_LOG || "";
+	#windowsVTInputRestore?: () => void;
+	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
+	#appearance: TerminalAppearance | undefined;
+	#osc11Pending = false;
+	#osc11QueryQueued = false;
+	#osc11ResponseBuffer = "";
+	#pendingDa1Sentinels = 0;
+	#osc11PollTimer?: Timer;
+	#mode2031Active = false;
+	#mode2031DebounceTimer?: Timer;
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
+	}
+
+	get appearance(): TerminalAppearance | undefined {
+		return this.#appearance;
+	}
+
+	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
+		this.#appearanceCallbacks.push(callback);
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -127,10 +164,82 @@ export class ProcessTerminal implements Terminal {
 			process.kill(process.pid, "SIGWINCH");
 		}
 
+		// On Windows, enable ENABLE_VIRTUAL_TERMINAL_INPUT so the console sends
+		// VT escape sequences (e.g. \x1b[Z for Shift+Tab) instead of raw console
+		// events that lose modifier information. Must run after setRawMode(true)
+		// since that resets console mode flags.
+		this.#enableWindowsVTInput();
+
 		// Query and enable Kitty keyboard protocol
 		// The query handler intercepts input temporarily, then installs the user's handler
 		// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
 		this.queryAndEnableKittyProtocol();
+
+		// Query terminal background color via OSC 11 for dark/light detection.
+		// Uses DA1 (Primary Device Attributes) as a sentinel: terminals process
+		// sequences in order, so if DA1 arrives before OSC 11 response,
+		// the terminal does not support OSC 11. This avoids indefinite hangs.
+		// Technique used by Neovim, bat, fish, and terminal-colorsaurus.
+		this.#queryBackgroundColor();
+
+		// Subscribe to Mode 2031 appearance change notifications.
+		// When the terminal reports a change, we re-query OSC 11 to get the
+		// actual background color (following Neovim convention) with 100ms debounce.
+		this.safeWrite("\x1b[?2031h");
+
+		// Start periodic OSC 11 re-query for terminals without Mode 2031
+		// (Warp, Alacritty, WezTerm, iTerm2). Self-disables once Mode 2031 fires.
+		this.#startOsc11Poll();
+	}
+
+	/**
+	 * On Windows, add ENABLE_VIRTUAL_TERMINAL_INPUT to the stdin console mode
+	 * so modified keys (for example Shift+Tab) arrive as VT escape sequences.
+	 */
+	#enableWindowsVTInput(): void {
+		if (process.platform !== "win32") return;
+		this.#restoreWindowsVTInput();
+		try {
+			const kernel32 = dlopen("kernel32.dll", {
+				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
+				GetConsoleMode: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
+				SetConsoleMode: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.bool },
+			});
+			const handle = kernel32.symbols.GetStdHandle(STD_INPUT_HANDLE);
+			const mode = new Uint32Array(1);
+			const modePtr = ptr(mode);
+			if (!modePtr || !kernel32.symbols.GetConsoleMode(handle, modePtr)) {
+				kernel32.close();
+				return;
+			}
+			const originalMode = mode[0]!;
+			const vtMode = originalMode | ENABLE_VIRTUAL_TERMINAL_INPUT;
+			if (vtMode !== originalMode && !kernel32.symbols.SetConsoleMode(handle, vtMode)) {
+				kernel32.close();
+				return;
+			}
+			this.#windowsVTInputRestore = () => {
+				try {
+					kernel32.symbols.SetConsoleMode(handle, originalMode);
+				} finally {
+					kernel32.close();
+				}
+			};
+		} catch {
+			// bun:ffi unavailable or console API unsupported; keep startup non-fatal.
+		}
+	}
+
+	#restoreWindowsVTInput(): void {
+		if (process.platform !== "win32") return;
+		const restore = this.#windowsVTInputRestore;
+		this.#windowsVTInputRestore = undefined;
+		if (!restore) return;
+		try {
+			restore();
+		} catch {
+			// Ignore restore errors during terminal teardown.
+		}
 	}
 
 	/**
@@ -147,12 +256,26 @@ export class ProcessTerminal implements Terminal {
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
 
+		// Mode 2031 DSR response: \x1b[?997;{1=dark,2=light}n
+		const appearanceDsrPattern = /^\x1b\[\?997;([12])n$/;
+
+		// OSC 11 response: \x1b]11;rgb:RR/GG/BB or rgba:RR/GG/BB, terminated by BEL or ST.
+		const osc11ResponsePattern =
+			/^\x1b\]11;rgba?:([0-9a-fA-F]{1,4})\/([0-9a-fA-F]{1,4})\/([0-9a-fA-F]{1,4})(?:\x07|\x1b\\)$/;
+
+		// DA1 (Primary Device Attributes) response: \x1b[?...c
+		const da1ResponsePattern = /^\x1b\[\?[\d;]*c$/;
+
 		// Forward individual sequences to the input handler
 		this.stdinBuffer.on("data", (sequence: string) => {
 			// Check for Kitty protocol response (only if not already enabled)
 			if (!this._kittyProtocolActive) {
 				const match = sequence.match(kittyResponsePattern);
 				if (match) {
+					if (this.#modifyOtherKeysTimeout) {
+						clearTimeout(this.#modifyOtherKeysTimeout);
+						this.#modifyOtherKeysTimeout = undefined;
+					}
 					this._kittyProtocolActive = true;
 					setKittyProtocolActive(true);
 
@@ -165,6 +288,61 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
+			// DA1 response: swallow our sentinel reply regardless of whether OSC 11
+			// already succeeded. Other terminal probes should never see these replies.
+			if (da1ResponsePattern.test(sequence) && this.#pendingDa1Sentinels > 0) {
+				this.#pendingDa1Sentinels--;
+				if (this.#osc11Pending) {
+					// DA1 arrived before OSC 11 response: terminal does not support
+					// OSC 11. Clear the pending state without starting a queued query
+					// (queued query is started below, after sentinel is consumed).
+					this.#osc11Pending = false;
+					this.#osc11ResponseBuffer = "";
+				}
+				// Now that this DA1 cycle is complete, start any queued query.
+				if (this.#osc11QueryQueued && !this.dead) {
+					this.#osc11QueryQueued = false;
+					this.#startOsc11Query();
+				}
+				return;
+			}
+
+			// OSC 11 replies can be split if the stdin buffer flushes a partial sequence.
+			// Accumulate fragments until the BEL/ST terminator arrives, then parse once.
+			// If a new escape sequence arrives (not the ST terminator), abort buffering
+			// and forward it as normal input so user keystrokes are never swallowed.
+			if (this.#osc11Pending && (this.#osc11ResponseBuffer || sequence.startsWith("\x1b]11;"))) {
+				if (this.#osc11ResponseBuffer && sequence.startsWith("\x1b") && sequence !== "\x1b\\") {
+					// New escape sequence arrived mid-buffer — not an OSC 11 continuation.
+					this.#osc11ResponseBuffer = "";
+					// Fall through to normal input handling below.
+				} else {
+					this.#osc11ResponseBuffer += sequence;
+					const osc11Match = this.#osc11ResponseBuffer.match(osc11ResponsePattern);
+					if (!osc11Match) return;
+					const [, rHex, gHex, bHex] = osc11Match;
+					this.#osc11Pending = false;
+					this.#osc11ResponseBuffer = "";
+					this.#handleOsc11Response(rHex!, gHex!, bHex!);
+					return;
+				}
+			}
+
+			// Mode 2031 change notification: re-query OSC 11 with 100ms debounce
+			// (Neovim convention — coalesces rapid notifications during transitions)
+			const appearanceMatch = sequence.match(appearanceDsrPattern);
+			if (appearanceMatch) {
+				if (!this.#mode2031Active) {
+					this.#mode2031Active = true;
+					this.#stopOsc11Poll();
+				}
+				if (this.#mode2031DebounceTimer) clearTimeout(this.#mode2031DebounceTimer);
+				this.#mode2031DebounceTimer = setTimeout(() => {
+					this.#mode2031DebounceTimer = undefined;
+					this.#queryBackgroundColor();
+				}, 100);
+				return;
+			}
 			if (this.inputHandler) {
 				this.inputHandler(sequence);
 			}
@@ -184,6 +362,78 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	/**
+	 * Send OSC 11 background color query followed by DA1 sentinel.
+	 * DA1 avoids indefinite hangs: if DA1 response arrives before OSC 11,
+	 * the terminal does not support OSC 11.
+	 */
+	#queryBackgroundColor(): void {
+		if (this.#dead) return;
+		// Queue if an OSC 11 query is in flight or its DA1 sentinel hasn't been
+		// consumed yet. Starting a new query while a DA1 is outstanding would
+		// increment the sentinel counter, and the old DA1 arrival would then
+		// prematurely clear the new query's pending state.
+		if (this.#osc11Pending || this.#pendingDa1Sentinels > 0) {
+			this.#osc11QueryQueued = true;
+			return;
+		}
+		this.#startOsc11Query();
+	}
+
+	#startOsc11Query(): void {
+		this.#osc11Pending = true;
+		this.#osc11ResponseBuffer = "";
+		this.#pendingDa1Sentinels++;
+		this.safeWrite("\x1b]11;?\x07"); // OSC 11 query (BEL terminated)
+		this.safeWrite("\x1b[c"); // DA1 sentinel
+	}
+	/**
+	 * Parse an OSC 11 background color response and compute BT.601 luminance.
+	 * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
+	 */
+	#handleOsc11Response(rHex: string, gHex: string, bHex: string): void {
+		const normalize = (hex: string): number => {
+			const value = parseInt(hex, 16);
+			if (Number.isNaN(value)) return 0;
+			const max = 16 ** hex.length - 1;
+			return max > 0 ? value / max : 0;
+		};
+		const luminance = 0.299 * normalize(rHex) + 0.587 * normalize(gHex) + 0.114 * normalize(bHex);
+		const mode: TerminalAppearance = luminance < 0.5 ? "dark" : "light";
+		if (mode === this.#appearance) return;
+		this.#appearance = mode;
+		for (const cb of this.#appearanceCallbacks) {
+			try {
+				cb(mode);
+			} catch {
+				/* ignore callback errors */
+			}
+		}
+	}
+
+	/**
+	 * Start periodic OSC 11 re-queries for terminals without Mode 2031 (Warp, Alacritty, WezTerm).
+	 * Self-disables once Mode 2031 fires (push-based is better than polling).
+	 */
+	#startOsc11Poll(): void {
+		this.#stopOsc11Poll();
+		this.#osc11PollTimer = setInterval(() => {
+			if (this.#dead) {
+				this.#stopOsc11Poll();
+				return;
+			}
+			this.#queryBackgroundColor();
+		}, 2_000);
+		this.#osc11PollTimer.unref();
+	}
+
+	#stopOsc11Poll(): void {
+		if (this.#osc11PollTimer) {
+			clearInterval(this.#osc11PollTimer);
+			this.#osc11PollTimer = undefined;
+		}
+	}
+
+	/**
 	 * Query terminal for Kitty keyboard protocol support and enable if available.
 	 *
 	 * Sends CSI ? u to query current flags. If terminal responds with CSI ? <flags> u,
@@ -196,6 +446,14 @@ export class ProcessTerminal implements Terminal {
 		this.setupStdinBuffer();
 		process.stdin.on("data", this.stdinDataHandler!);
 		this.safeWrite("\x1b[?u");
+		this.#modifyOtherKeysTimeout = setTimeout(() => {
+			this.#modifyOtherKeysTimeout = undefined;
+			if (this._kittyProtocolActive || this.#modifyOtherKeysActive) {
+				return;
+			}
+			this.safeWrite("\x1b[>4;2m");
+			this.#modifyOtherKeysActive = true;
+		}, 150);
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
@@ -205,6 +463,14 @@ export class ProcessTerminal implements Terminal {
 			this.safeWrite("\x1b[<u");
 			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
+		}
+		if (this.#modifyOtherKeysTimeout) {
+			clearTimeout(this.#modifyOtherKeysTimeout);
+			this.#modifyOtherKeysTimeout = undefined;
+		}
+		if (this.#modifyOtherKeysActive) {
+			this.safeWrite("\x1b[>4;0m");
+			this.#modifyOtherKeysActive = false;
 		}
 
 		const previousHandler = this.inputHandler;
@@ -243,13 +509,36 @@ export class ProcessTerminal implements Terminal {
 		// Disable mouse reporting
 		this.safeWrite("\x1b[?1000l\x1b[?1003l\x1b[?1006l");
 
+		// Disable Mode 2031 appearance change notifications
+		this.safeWrite("\x1b[?2031l");
+		this.#stopOsc11Poll();
+		if (this.#mode2031DebounceTimer) {
+			clearTimeout(this.#mode2031DebounceTimer);
+			this.#mode2031DebounceTimer = undefined;
+		}
+		this.#appearanceCallbacks = [];
+		this.#osc11Pending = false;
+		this.#osc11QueryQueued = false;
+		this.#osc11ResponseBuffer = "";
+		this.#pendingDa1Sentinels = 0;
+		this.#mode2031Active = false;
+
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this._kittyProtocolActive) {
 			this.safeWrite("\x1b[<u");
 			this._kittyProtocolActive = false;
 			setKittyProtocolActive(false);
 		}
+		if (this.#modifyOtherKeysTimeout) {
+			clearTimeout(this.#modifyOtherKeysTimeout);
+			this.#modifyOtherKeysTimeout = undefined;
+		}
+		if (this.#modifyOtherKeysActive) {
+			this.safeWrite("\x1b[>4;0m");
+			this.#modifyOtherKeysActive = false;
+		}
 
+		this.#restoreWindowsVTInput();
 		// Clean up StdinBuffer
 		if (this.stdinBuffer) {
 			this.stdinBuffer.destroy();

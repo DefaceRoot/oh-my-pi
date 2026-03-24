@@ -62,6 +62,7 @@ function isFoundryEnabled(): boolean {
 }
 
 const serviceProviderMap: Record<string, KeyResolver> = {
+	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
 	openai: "OPENAI_API_KEY",
 	google: "GEMINI_API_KEY",
 	groq: "GROQ_API_KEY",
@@ -83,6 +84,8 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	jina: "JINA_API_KEY",
 	brave: "BRAVE_API_KEY",
 	perplexity: "PERPLEXITY_API_KEY",
+	tavily: "TAVILY_API_KEY",
+	parallel: "PARALLEL_API_KEY",
 	kagi: "KAGI_API_KEY",
 	// GitHub Copilot uses GitHub personal access token
 	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
@@ -92,9 +95,11 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 			? $pickenv("ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 			: $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
 	"gitlab-duo": "GITLAB_TOKEN",
-	// Vertex AI uses Application Default Credentials, not API keys.
-	// Auth is configured via `gcloud auth application-default login`.
+	// Vertex AI supports either GOOGLE_CLOUD_API_KEY or Application Default Credentials.
 	"google-vertex": () => {
+		if ($env.GOOGLE_CLOUD_API_KEY) {
+			return $env.GOOGLE_CLOUD_API_KEY;
+		}
 		const hasCredentials = hasVertexAdcCredentials();
 		const hasProject = !!($env.GOOGLE_CLOUD_PROJECT || $env.GCLOUD_PROJECT);
 		const hasLocation = !!$env.GOOGLE_CLOUD_LOCATION;
@@ -131,6 +136,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
 	ollama: "OLLAMA_API_KEY",
+	"llama.cpp": "LLAMA_CPP_API_KEY",
 	qianfan: "QIANFAN_API_KEY",
 	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
 	together: "TOGETHER_API_KEY",
@@ -411,6 +417,7 @@ function mapOptionsForApi<TApi extends Api>(
 		apiKey: apiKey || options?.apiKey,
 		cacheRetention: options?.cacheRetention,
 		headers: options?.headers,
+		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
 		sessionId: options?.sessionId,
@@ -495,6 +502,10 @@ function mapOptionsForApi<TApi extends Api>(
 				thinkingBudgets: options?.thinkingBudgets,
 				toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 			};
+			// Adaptive mode sends effort directly, no budget_tokens — skip budget inflation.
+			if (model.thinking?.mode === "anthropic-adaptive") {
+				return castApi<"bedrock-converse-stream">(bedrockBase);
+			}
 			const budgetInfo = resolveBedrockThinkingBudget(model as Model<"bedrock-converse-stream">, options);
 			if (!budgetInfo) return bedrockBase as OptionsForApi<TApi>;
 			let maxTokens = bedrockBase.maxTokens ?? model.maxTokens;
@@ -546,10 +557,10 @@ function mapOptionsForApi<TApi extends Api>(
 			});
 
 		case "google-generative-ai": {
-			// Explicitly disable thinking when reasoning is not specified
+			// Explicitly disable thinking when reasoning is not specified or model doesn't support it
 			// This is needed because Gemini has "dynamic thinking" enabled by default
 			const reasoning = options?.reasoning;
-			if (!reasoning) {
+			if (!reasoning || !model.reasoning) {
 				return castApi<"google-generative-ai">({
 					...base,
 					thinking: { enabled: false },
@@ -585,7 +596,7 @@ function mapOptionsForApi<TApi extends Api>(
 
 		case "google-gemini-cli": {
 			const reasoning = options?.reasoning;
-			if (!reasoning) {
+			if (!reasoning || !model.reasoning) {
 				return castApi<"google-gemini-cli">({
 					...base,
 					thinking: { enabled: false },
@@ -635,9 +646,9 @@ function mapOptionsForApi<TApi extends Api>(
 		}
 
 		case "google-vertex": {
-			// Explicitly disable thinking when reasoning is not specified
+			// Explicitly disable thinking when reasoning is not specified or model doesn't support it
 			const reasoning = options?.reasoning;
-			if (!reasoning) {
+			if (!reasoning || !model.reasoning) {
 				return castApi<"google-vertex">({
 					...base,
 					thinking: { enabled: false },

@@ -93,9 +93,10 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 		let rawRequestDump: RawHttpRequestDump | undefined;
 
 		try {
-			const project = resolveProject(options);
-			const location = resolveLocation(options);
-			const client = createClient(model, project, location);
+			const apiKey = resolveApiKey(options);
+			const project = apiKey ? undefined : resolveProject(options);
+			const location = apiKey ? undefined : resolveLocation(options);
+			const client = apiKey ? createClientWithApiKey(model, apiKey) : createClient(model, project!, location!);
 			const params = buildParams(model, context, options);
 			options?.onPayload?.(params);
 			rawRequestDump = {
@@ -103,7 +104,9 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent`,
+				url: apiKey
+					? `https://aiplatform.googleapis.com/${API_VERSION}/publishers/google/models/${model.id}:streamGenerateContent`
+					: `https://${location}-aiplatform.googleapis.com/${API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent`,
 				body: params,
 			};
 			const googleStream = await client.models.generateContentStream(params);
@@ -234,11 +237,17 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 				}
 
 				if (chunk.usageMetadata) {
+					// promptTokenCount includes cachedContentTokenCount when cached content is used.
+					// Subtract to get non-cached input, matching the OpenAI convention where
+					// input = uncached prompt tokens and cacheRead = cached tokens so that
+					// input + cacheRead = total prompt tokens (no double-counting).
+					// Ref: https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse.UsageMetadata
+					const cachedTokens = chunk.usageMetadata.cachedContentTokenCount || 0;
 					output.usage = {
-						input: chunk.usageMetadata.promptTokenCount || 0,
+						input: (chunk.usageMetadata.promptTokenCount || 0) - cachedTokens,
 						output:
 							(chunk.usageMetadata.candidatesTokenCount || 0) + (chunk.usageMetadata.thoughtsTokenCount || 0),
-						cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
+						cacheRead: cachedTokens,
 						cacheWrite: 0,
 						totalTokens: chunk.usageMetadata.totalTokenCount || 0,
 						cost: {
@@ -302,22 +311,38 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 	return stream;
 };
 
-function createClient(model: Model<"google-vertex">, project: string, location: string): GoogleGenAI {
-	const httpOptions: { headers?: Record<string, string> } = {};
-
-	if (model.headers) {
-		httpOptions.headers = { ...model.headers };
+function buildHttpOptions(model: Model<"google-vertex">): { headers?: Record<string, string> } | undefined {
+	if (!model.headers) {
+		return undefined;
 	}
+	return { headers: { ...model.headers } };
+}
 
-	const hasHttpOptions = Object.values(httpOptions).some(Boolean);
-
+function createClient(model: Model<"google-vertex">, project: string, location: string): GoogleGenAI {
 	return new GoogleGenAI({
 		vertexai: true,
 		project,
 		location,
 		apiVersion: API_VERSION,
-		httpOptions: hasHttpOptions ? httpOptions : undefined,
+		httpOptions: buildHttpOptions(model),
 	});
+}
+
+function createClientWithApiKey(model: Model<"google-vertex">, apiKey: string): GoogleGenAI {
+	return new GoogleGenAI({
+		vertexai: true,
+		apiKey,
+		apiVersion: API_VERSION,
+		httpOptions: buildHttpOptions(model),
+	});
+}
+
+function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
+	// options.apiKey may contain sentinel values like "<authenticated>" or "N/A"
+	// leaked from the agent loop — only use it if it looks like a real API key.
+	const optKey = options?.apiKey;
+	const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
+	return realKey || $env.GOOGLE_CLOUD_API_KEY;
 }
 
 function resolveProject(options?: GoogleVertexOptions): string {

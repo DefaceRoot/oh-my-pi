@@ -19,6 +19,7 @@ import { analyzeAuthError, discoverOAuthEndpoints } from "../../mcp/oauth-discov
 import type { MCPHttpServerConfig, MCPServerConfig, MCPSseServerConfig, MCPStdioServerConfig } from "../../mcp/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
+import { matchesAppInterrupt } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type TransportType = "stdio" | "http" | "sse";
@@ -452,7 +453,7 @@ export class MCPAddWizard extends Container {
 		}
 
 		// Handle Escape (always handled by wizard)
-		if (matchesKey(keyData, "escape")) {
+		if (matchesAppInterrupt(keyData)) {
 			if (this.#currentStep === "name") {
 				// Cancel wizard
 				this.#onCancelCallback();
@@ -1030,6 +1031,9 @@ export class MCPAddWizard extends Container {
 				config.auth = {
 					type: "oauth",
 					credentialId: this.#state.oauthCredentialId,
+					tokenUrl: this.#state.oauthTokenUrl || undefined,
+					clientId: this.#state.oauthClientId || undefined,
+					clientSecret: this.#state.oauthClientSecret || undefined,
 				};
 			}
 
@@ -1054,6 +1058,9 @@ export class MCPAddWizard extends Container {
 			config.auth = {
 				type: "oauth",
 				credentialId: this.#state.oauthCredentialId,
+				tokenUrl: this.#state.oauthTokenUrl || undefined,
+				clientId: this.#state.oauthClientId || undefined,
+				clientSecret: this.#state.oauthClientSecret || undefined,
 			};
 		}
 
@@ -1250,6 +1257,9 @@ export class MCPAddWizard extends Container {
 				config.auth = {
 					type: "oauth",
 					credentialId: this.#state.oauthCredentialId,
+					tokenUrl: this.#state.oauthTokenUrl || undefined,
+					clientId: this.#state.oauthClientId || undefined,
+					clientSecret: this.#state.oauthClientSecret || undefined,
 				};
 			}
 
@@ -1275,6 +1285,9 @@ export class MCPAddWizard extends Container {
 			config.auth = {
 				type: "oauth",
 				credentialId: this.#state.oauthCredentialId,
+				tokenUrl: this.#state.oauthTokenUrl || undefined,
+				clientId: this.#state.oauthClientId || undefined,
+				clientSecret: this.#state.oauthClientSecret || undefined,
 			};
 		}
 

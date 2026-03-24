@@ -246,15 +246,35 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	{
 		name: "copy",
 		description: "Copy last agent message to clipboard",
-		handle: async (_command, runtime) => {
-			await runtime.ctx.handleCopyCommand();
+		subcommands: [
+			{ name: "last", description: "Copy full last agent message" },
+			{ name: "code", description: "Copy last code block" },
+			{ name: "all", description: "Copy all code blocks from last message" },
+			{ name: "cmd", description: "Copy last bash/python command" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const sub = command.args.trim().toLowerCase() || undefined;
+			await runtime.ctx.handleCopyCommand(sub);
 			runtime.ctx.editor.setText("");
 		},
 	},
 	{
 		name: "session",
-		description: "Show session info and stats",
-		handle: async (_command, runtime) => {
+		description: "Session management commands",
+		subcommands: [
+			{ name: "info", description: "Show session info and stats" },
+			{ name: "delete", description: "Delete current session and return to selector" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const sub = command.args.trim().toLowerCase() || "info";
+			if (sub === "delete") {
+				runtime.ctx.editor.setText("");
+				await runtime.ctx.handleSessionDeleteCommand();
+				return;
+			}
+			// Default: show session info
 			await runtime.ctx.handleSessionCommand();
 			runtime.ctx.editor.setText("");
 		},
@@ -418,6 +438,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			},
 			{ name: "smithery-login", description: "Login to Smithery and cache API key" },
 			{ name: "smithery-logout", description: "Remove cached Smithery API key" },
+			{ name: "reconnect", description: "Reconnect to a specific MCP server", usage: "<name>" },
 			{ name: "reload", description: "Force reload MCP runtime tools" },
 			{ name: "resources", description: "List available resources from connected servers" },
 			{ name: "prompts", description: "List available prompts from connected servers" },
@@ -498,6 +519,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 
+	{
+		name: "btw",
+		description: "Ask an ephemeral side question using the current session context",
+		inlineHint: "<question>",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const question = command.text.slice(`/${command.name}`.length).trim();
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleBtwCommand(question);
+		},
+	},
 	{
 		name: "background",
 		aliases: ["bg"],

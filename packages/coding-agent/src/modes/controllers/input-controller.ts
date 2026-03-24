@@ -4,12 +4,14 @@ import * as path from "node:path";
 import * as readlinePromises from "node:readline/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { readImageFromClipboard } from "@oh-my-pi/pi-natives";
+import { copyToClipboard, readImageFromClipboard, sanitizeText } from "@oh-my-pi/pi-natives";
+import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { Container, matchesKey, Spacer, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils";
 import { getWorktreeBaseDir } from "@oh-my-pi/pi-utils/dirs";
 import type { SettingPath, SettingValue } from "../../config/settings";
 import { settings } from "../../config/settings";
+import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
@@ -26,7 +28,7 @@ import {
 } from "../../task/worktree";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
-import { generateSessionTitle, setTerminalTitle } from "../../utils/title-generator";
+import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
 import { type FlattenedWorkflowMenuAction, WORKFLOW_MENUS } from "../action-buttons";
 
@@ -236,6 +238,21 @@ export class InputController {
 	}
 
 	setupKeyHandlers(): void {
+		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
+		this.ctx.editor.shouldBypassAutocompleteOnEscape = () =>
+			Boolean(
+				this.ctx.loadingAnimation ||
+					this.ctx.hasActiveBtw() ||
+					this.ctx.session.isStreaming ||
+					this.ctx.session.isCompacting ||
+					this.ctx.session.isGeneratingHandoff ||
+					this.ctx.session.isBashRunning ||
+					this.ctx.session.isPythonRunning ||
+					this.ctx.autoCompactionLoader ||
+					this.ctx.retryLoader ||
+					this.ctx.autoCompactionEscapeHandler ||
+					this.ctx.retryEscapeHandler,
+			);
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
 				this.ctx.statusLine.closeMenu();
@@ -246,7 +263,13 @@ export class InputController {
 				this.ctx.exitSubagentView();
 				return;
 			}
+			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
+				return;
+			}
 			if (this.ctx.loadingAnimation) {
+				if (this.ctx.cancelPendingSubmission()) {
+					return;
+				}
 				this.restoreQueuedMessagesToEditor({ abort: true });
 				this.#cancelRunningBackgroundJobs();
 			} else if (this.ctx.session.isBashRunning) {
@@ -265,10 +288,12 @@ export class InputController {
 				this.ctx.updateEditorBorderColor();
 			} else if (this.#isAskModeActive()) {
 				void this.#restoreAskMode();
+			} else if (this.ctx.session.isStreaming) {
+				void this.ctx.session.abort();
 			} else if (this.#cancelRunningBackgroundJobs()) {
 				return;
 			} else if (!this.ctx.editor.getText().trim()) {
-				// Double-escape with empty editor triggers /tree, /branch, or nothing based on setting
+				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
 				if (action !== "none") {
 					const now = Date.now();
@@ -295,6 +320,19 @@ export class InputController {
 		this.ctx.editor.onCtrlP = () => this.cycleRoleModel();
 		this.ctx.editor.onShiftCtrlP = () => this.cycleRoleModel({ temporary: true });
 		this.ctx.editor.onAltP = () => this.ctx.showModelSelector({ temporaryOnly: true });
+		this.ctx.editor.setActionKeys("app.clear", this.ctx.keybindings.getKeys("app.clear"));
+		this.ctx.editor.onClear = () => this.handleCtrlC();
+		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
+		this.ctx.editor.onExit = () => this.handleCtrlD();
+		this.ctx.editor.setActionKeys("app.suspend", this.ctx.keybindings.getKeys("app.suspend"));
+		this.ctx.editor.onSuspend = () => this.handleCtrlZ();
+		this.ctx.editor.setActionKeys("app.thinking.cycle", this.ctx.keybindings.getKeys("app.thinking.cycle"));
+		this.ctx.editor.onCycleThinkingLevel = () => this.cycleThinkingLevel();
+		this.ctx.editor.setActionKeys("app.model.cycleForward", this.ctx.keybindings.getKeys("app.model.cycleForward"));
+		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel();
+		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
+		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel({ temporary: true });
+		this.ctx.editor.onQuickSelectModel = () => this.ctx.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
@@ -312,7 +350,31 @@ export class InputController {
 		}
 		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
+		this.ctx.editor.setActionKeys("app.model.select", this.ctx.keybindings.getKeys("app.model.select"));
+		this.ctx.editor.onSelectModel = () => this.ctx.showModelSelector();
+		this.ctx.editor.setActionKeys("app.history.search", this.ctx.keybindings.getKeys("app.history.search"));
+		this.ctx.editor.onHistorySearch = () => this.ctx.showHistorySearch();
+		this.ctx.editor.setActionKeys("app.thinking.toggle", this.ctx.keybindings.getKeys("app.thinking.toggle"));
+		this.ctx.editor.onToggleThinking = () => this.ctx.toggleThinkingBlockVisibility();
+		this.ctx.editor.setActionKeys("app.editor.external", this.ctx.keybindings.getKeys("app.editor.external"));
+		this.ctx.editor.onExternalEditor = () => void this.openExternalEditor();
+		this.ctx.editor.onShowHotkeys = () => this.ctx.handleHotkeysCommand();
+		this.ctx.editor.setActionKeys(
+			"app.clipboard.pasteImage",
+			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
+		);
+		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
+		this.ctx.editor.setActionKeys(
+			"app.clipboard.copyPrompt",
+			this.ctx.keybindings.getKeys("app.clipboard.copyPrompt"),
+		);
+		this.ctx.editor.onCopyPrompt = () => this.handleCopyPrompt();
+		this.ctx.editor.setActionKeys("app.tools.expand", this.ctx.keybindings.getKeys("app.tools.expand"));
+		this.ctx.editor.onExpandTools = () => this.toggleToolOutputExpansion();
+		this.ctx.editor.setActionKeys("app.message.dequeue", this.ctx.keybindings.getKeys("app.message.dequeue"));
+		this.ctx.editor.onDequeue = () => this.handleDequeue();
 
+		this.ctx.editor.clearCustomKeyHandlers();
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
 
@@ -362,7 +424,7 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("resume")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => { void this.ctx.openResumeModal(); return undefined; });
 		}
-		for (const key of this.ctx.keybindings.getKeys("followUp")) {
+		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
 		for (const key of this.ctx.keybindings.getKeys("cycleAgentMode")) {
@@ -405,6 +467,9 @@ export class InputController {
 		this.#unsubscribeChord = this.ctx.ui.addInputListener((data: string) => {
 			return this.#handleChordInput(data);
 		});
+		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
+		}
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
@@ -451,7 +516,7 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
-					this.ctx.onInputCallback({ text: "" });
+					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
 				}
 				return;
 			}
@@ -803,7 +868,7 @@ export class InputController {
 						await this.ctx.sessionManager.setSessionName(title);
 						if (this.ctx.session.sessionId !== titleSessionId) return;
 						if (this.ctx.sessionManager.getSessionName() !== title) return;
-						setTerminalTitle(`π: ${title}`);
+						setSessionTerminalTitle(title, this.ctx.sessionManager.getCwd());
 					})
 					.catch(() => {});
 			}
@@ -812,7 +877,11 @@ export class InputController {
 				// Include any pending images from clipboard paste
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
-				this.ctx.onInputCallback({ text, images });
+
+				// Render user message immediately, then let session events catch up
+				const submission = this.ctx.startPendingSubmission({ text, images });
+
+				this.ctx.onInputCallback(submission);
 			}
 			this.ctx.editor.addToHistory(text);
 		};
@@ -1044,6 +1113,9 @@ export class InputController {
 			this.ctx.showWarning("Agent is idle; nothing to background");
 			return;
 		}
+		if (this.ctx.hasActiveBtw()) {
+			this.ctx.handleBtwEscape();
+		}
 
 		this.ctx.isBackgrounded = true;
 		const backgroundUiContext = this.ctx.createBackgroundUiContext();
@@ -1127,6 +1199,56 @@ export class InputController {
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
+		}
+	}
+
+	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
+		return createPromptActionAutocompleteProvider({
+			commands,
+			basePath,
+			keybindings: this.ctx.keybindings,
+			copyCurrentLine: () => this.handleCopyCurrentLine(),
+			copyPrompt: () => this.handleCopyPrompt(),
+			undo: prefix => this.ctx.editor.undoPastTransientText(prefix),
+			moveCursorToMessageEnd: () => this.ctx.editor.moveToMessageEnd(),
+			moveCursorToMessageStart: () => this.ctx.editor.moveToMessageStart(),
+			moveCursorToLineStart: () => this.ctx.editor.moveToLineStart(),
+			moveCursorToLineEnd: () => this.ctx.editor.moveToLineEnd(),
+		});
+	}
+
+	/** Copy the current editor line to the system clipboard. */
+	handleCopyCurrentLine(): void {
+		const { line } = this.ctx.editor.getCursor();
+		const text = this.ctx.editor.getLines()[line] || "";
+		if (!text) {
+			this.ctx.showStatus("Nothing to copy");
+			return;
+		}
+		try {
+			copyToClipboard(text);
+			const sanitized = sanitizeText(text);
+			const preview = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
+			this.ctx.showStatus(`Copied line: ${preview}`);
+		} catch {
+			this.ctx.showWarning("Failed to copy to clipboard");
+		}
+	}
+
+	/** Copy current prompt text to system clipboard. */
+	handleCopyPrompt(): void {
+		const text = this.ctx.editor.getText();
+		if (!text) {
+			this.ctx.showStatus("Nothing to copy");
+			return;
+		}
+		try {
+			copyToClipboard(text);
+			const sanitized = sanitizeText(text);
+			const preview = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
+			this.ctx.showStatus(`Copied: ${preview}`);
+		} catch {
+			this.ctx.showWarning("Failed to copy to clipboard");
 		}
 	}
 

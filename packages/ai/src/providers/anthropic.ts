@@ -94,56 +94,57 @@ function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
 		return false;
 	}
 }
+
+const sharedHeaders = {
+	"Accept-Encoding": "gzip, deflate, br, zstd",
+	Connection: "keep-alive",
+	"Content-Type": "application/json",
+	"Anthropic-Version": "2023-06-01",
+	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+	"X-App": "cli",
+};
+
 export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<string, string> {
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
 	const betaHeader = buildBetaHeader(claudeCodeBetaDefaults, extraBetas);
 	const acceptHeader = stream ? "text/event-stream" : "application/json";
-	const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
-	const userAgent = isClaudeCodeClientUserAgent(incomingUserAgent)
-		? incomingUserAgent
-		: `claude-cli/${claudeCodeVersion} (external, cli)`;
-	const enforcedHeaderKeys = new Set(
-		[
-			...Object.keys(claudeCodeHeaders),
-			"Accept",
-			"Accept-Encoding",
-			"Connection",
-			"Content-Type",
-			"Anthropic-Version",
-			"Anthropic-Dangerous-Direct-Browser-Access",
-			"Anthropic-Beta",
-			"User-Agent",
-			"X-App",
-			"Authorization",
-			"X-Api-Key",
-		].map(key => key.toLowerCase()),
-	);
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
 	);
-	const headers: Record<string, string> = {
-		...modelHeaders,
-		...claudeCodeHeaders,
-		Accept: acceptHeader,
-		"Accept-Encoding": "gzip, deflate, br, zstd",
-		Connection: "keep-alive",
-		"Content-Type": "application/json",
-		"Anthropic-Version": "2023-06-01",
-		"Anthropic-Dangerous-Direct-Browser-Access": "true",
-		"Anthropic-Beta": betaHeader,
-		"User-Agent": userAgent,
-		"X-App": "cli",
-	};
 
-	if (oauthToken || !isAnthropicApiBaseUrl(options.baseUrl)) {
-		headers.Authorization = `Bearer ${options.apiKey}`;
+	if (oauthToken) {
+		const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
+		const userAgent = isClaudeCodeClientUserAgent(incomingUserAgent)
+			? incomingUserAgent
+			: `claude-cli/${claudeCodeVersion} (external, cli)`;
+		return {
+			...modelHeaders,
+			...claudeCodeHeaders,
+			Accept: acceptHeader,
+			Authorization: `Bearer ${options.apiKey}`,
+			...sharedHeaders,
+			"Anthropic-Beta": betaHeader,
+			"User-Agent": userAgent,
+		};
+	} else if (!isAnthropicApiBaseUrl(options.baseUrl)) {
+		return {
+			...modelHeaders,
+			Accept: acceptHeader,
+			Authorization: `Bearer ${options.apiKey}`,
+			...sharedHeaders,
+			"Anthropic-Beta": betaHeader,
+		};
 	} else {
-		headers["X-Api-Key"] = options.apiKey;
+		return {
+			...modelHeaders,
+			Accept: acceptHeader,
+			...sharedHeaders,
+			"Anthropic-Beta": betaHeader,
+			"X-Api-Key": options.apiKey,
+		};
 	}
-
-	return headers;
 }
 
 type AnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
@@ -215,6 +216,23 @@ export const claudeCodeHeaders = {
 	"X-Stainless-Os": mapStainlessOs(process.platform),
 	"X-Stainless-Timeout": "600",
 } as const;
+
+const enforcedHeaderKeys = new Set(
+	[
+		...Object.keys(claudeCodeHeaders),
+		"Accept",
+		"Accept-Encoding",
+		"Connection",
+		"Content-Type",
+		"Anthropic-Version",
+		"Anthropic-Dangerous-Direct-Browser-Access",
+		"Anthropic-Beta",
+		"User-Agent",
+		"X-App",
+		"Authorization",
+		"X-Api-Key",
+	].map(key => key.toLowerCase()),
+);
 
 const CLAUDE_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 
@@ -358,6 +376,12 @@ export interface AnthropicOptions extends StreamOptions {
 	betas?: string[] | string;
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
+	/**
+	 * Pre-built Anthropic client instance. When provided, skips internal client
+	 * construction entirely. Use this to inject alternative SDK clients such as
+	 * `AnthropicVertex` that shares the same messaging API.
+	 */
+	client?: Anthropic;
 }
 
 export type AnthropicClientOptionsArgs = {
@@ -546,8 +570,9 @@ export function isProviderRetryableError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message;
 	return (
-		/rate.?limit|too many requests|overloaded|service.?unavailable|1302/i.test(msg) ||
-		isTransientStreamParseError(error)
+		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302/i.test(
+			msg,
+		) || isTransientStreamParseError(error)
 	);
 }
 
@@ -569,6 +594,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						hasImages: hasCopilotVisionInput(context.messages),
 						premiumMultiplier: model.premiumMultiplier,
 						headers: { ...(model.headers ?? {}), ...(options?.headers ?? {}) },
+						initiatorOverride: options?.initiatorOverride,
 					})
 				: undefined;
 		const output: AssistantMessage = {
@@ -591,21 +617,36 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 		let rawRequestDump: RawHttpRequestDump | undefined;
 
 		try {
-			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
-			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
+			let client: Anthropic;
+			let isOAuthToken: boolean;
 
-			const { client, isOAuthToken } = createClient(model, {
-				model,
-				apiKey,
-				extraBetas: normalizeExtraBetas(options?.betas),
-				stream: true,
-				interleavedThinking: options?.interleavedThinking ?? true,
-				headers: options?.headers,
-				dynamicHeaders: copilotDynamicHeaders?.headers,
-				isOAuth: options?.isOAuth,
-			});
-			const params = buildParams(model, baseUrl, context, isOAuthToken, options);
-			options?.onPayload?.(params);
+			if (options?.client) {
+				client = options.client;
+				isOAuthToken = false;
+			} else {
+				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+
+				const created = createClient(model, {
+					model,
+					apiKey,
+					extraBetas: normalizeExtraBetas(options?.betas),
+					stream: true,
+					interleavedThinking: options?.interleavedThinking ?? true,
+					headers: options?.headers,
+					dynamicHeaders: copilotDynamicHeaders?.headers,
+					isOAuth: options?.isOAuth,
+				});
+				client = created.client;
+				isOAuthToken = created.isOAuthToken;
+			}
+			const baseUrl =
+				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
+				"https://api.anthropic.com";
+			let params = buildParams(model, baseUrl, context, isOAuthToken, options);
+			const replacementPayload = await options?.onPayload?.(params, model);
+			if (replacementPayload !== undefined) {
+				params = replacementPayload as typeof params;
+			}
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -638,6 +679,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					for await (const event of anthropicStream) {
 						started = true;
 						if (event.type === "message_start") {
+							output.responseId = event.message.id;
 							// Capture initial token usage from message_start event
 							// This ensures we have input token counts even if the stream is aborted early
 							output.usage.input = event.message.usage.input_tokens || 0;

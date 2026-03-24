@@ -3,7 +3,8 @@
  *
  * Uses brush-core via native bindings for shell execution.
  */
-import { Shell } from "@oh-my-pi/pi-natives";
+import * as fs from "node:fs/promises";
+import { executeShell, Shell } from "@oh-my-pi/pi-natives";
 import { Settings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
@@ -38,11 +39,26 @@ export interface BashResult {
 const HARD_TIMEOUT_GRACE_MS = 5_000;
 
 const shellSessions = new Map<string, Shell>();
+const brokenShellSessions = new Set<string>();
+
+async function resolveShellCwd(cwd: string | undefined): Promise<string | undefined> {
+	if (!cwd) return undefined;
+
+	try {
+		// Brush preserves the working directory string verbatim, so resolve symlinks
+		// up front to keep `pwd` aligned with tools like `git worktree list`.
+		return await fs.realpath(cwd);
+	} catch {
+		return cwd;
+	}
+}
 
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
 	const settings = await Settings.init();
 	const { shell, env: shellEnv, prefix } = settings.getShellConfig();
 	const snapshotPath = shell.includes("bash") ? await getOrCreateSnapshot(shell, shellEnv) : null;
+	const commandCwd = await resolveShellCwd(options?.cwd);
+	const commandEnv = options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV;
 
 	// Apply command prefix if configured
 	const prefixedCommand = prefix ? `${prefix} ${command}` : command;
@@ -53,11 +69,16 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		// Throttle the streaming preview callback to avoid saturating the
+		// event loop when commands produce massive output (e.g. seq 1 50M).
+		chunkThrottleMs: options?.onChunk ? 50 : 0,
 	});
 
-	let pendingChunks = Promise.resolve();
+	// sink.push() is synchronous — buffer management, counters, and onChunk
+	// all run inline. File writes (artifact path) are handled asynchronously
+	// inside the sink. No promise chain needed.
 	const enqueueChunk = (chunk: string) => {
-		pendingChunks = pendingChunks.then(() => sink.push(chunk)).catch(() => {});
+		sink.push(chunk);
 	};
 
 	if (options?.signal?.aborted) {
@@ -69,17 +90,32 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	}
 
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey);
-	let shellSession = shellSessions.get(sessionKey);
-	if (!shellSession) {
+	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
+	if (persistentSessionBroken) {
+		shellSessions.delete(sessionKey);
+	}
+
+	let shellSession = persistentSessionBroken ? undefined : shellSessions.get(sessionKey);
+	if (!shellSession && !persistentSessionBroken) {
 		shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
 		shellSessions.set(sessionKey, shellSession);
 	}
-	const signal = options?.signal;
-	const abortHandler = () => {
-		shellSession.abort(signal?.reason instanceof Error ? signal.reason.message : undefined);
+	const userSignal = options?.signal;
+	const runAbortController = new AbortController();
+	const abortCurrentExecution = () => {
+		if (!runAbortController.signal.aborted) {
+			runAbortController.abort();
+		}
+		if (shellSession) {
+			// Native abort is async; fire-and-forget because the caller races the command separately.
+			void shellSession.abort();
+		}
 	};
-	if (signal) {
-		signal.addEventListener("abort", abortHandler, { once: true });
+	const abortHandler = () => {
+		abortCurrentExecution();
+	};
+	if (userSignal) {
+		userSignal.addEventListener("abort", abortHandler, { once: true });
 	}
 
 	let hardTimeoutTimer: NodeJS.Timeout | undefined;
@@ -87,37 +123,55 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const baseTimeoutMs = Math.max(1_000, options?.timeout ?? 300_000);
 	const hardTimeoutMs = baseTimeoutMs + HARD_TIMEOUT_GRACE_MS;
 	hardTimeoutTimer = setTimeout(() => {
-		shellSession.abort(`Hard timeout after ${Math.round(hardTimeoutMs / 1000)}s`);
+		abortCurrentExecution();
 		hardTimeoutDeferred.resolve("hard-timeout");
 	}, hardTimeoutMs);
 
 	let resetSession = false;
 
 	try {
-		const runPromise = shellSession.run(
-			{
-				command: finalCommand,
-				cwd: options?.cwd,
-				env: options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV,
-				timeoutMs: options?.timeout,
-				signal,
-			},
-			(err, chunk) => {
-				if (!err) {
-					enqueueChunk(chunk);
-				}
-			},
-		);
+		const runPromise = shellSession
+			? shellSession.run(
+					{
+						command: finalCommand,
+						cwd: commandCwd,
+						env: commandEnv,
+						timeoutMs: options?.timeout,
+						signal: runAbortController.signal,
+					},
+					(err, chunk) => {
+						if (!err) {
+							enqueueChunk(chunk);
+						}
+					},
+				)
+			: executeShell(
+					{
+						command: finalCommand,
+						cwd: commandCwd,
+						env: commandEnv,
+						sessionEnv: shellEnv,
+						snapshotPath: snapshotPath ?? undefined,
+						timeoutMs: options?.timeout,
+						signal: runAbortController.signal,
+					},
+					chunk => {
+						enqueueChunk(chunk);
+					},
+				);
 
 		const winner = await Promise.race([
 			runPromise.then(result => ({ kind: "result" as const, result })),
 			hardTimeoutDeferred.promise.then(() => ({ kind: "hard-timeout" as const })),
 		]);
 
-		await pendingChunks;
-
 		if (winner.kind === "hard-timeout") {
-			resetSession = true;
+			if (shellSession) {
+				resetSession = true;
+				// Fall back to one-shot execution for the rest of the process once
+				// a persistent session has stopped responding to cancellation.
+				brokenShellSessions.add(sessionKey);
+			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
@@ -161,10 +215,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		if (hardTimeoutTimer) {
 			clearTimeout(hardTimeoutTimer);
 		}
-		if (signal) {
-			signal.removeEventListener("abort", abortHandler);
+		if (userSignal) {
+			userSignal.removeEventListener("abort", abortHandler);
 		}
-		await pendingChunks;
 		if (resetSession) {
 			shellSessions.delete(sessionKey);
 		}

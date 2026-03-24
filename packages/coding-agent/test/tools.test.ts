@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { DEFAULT_BASH_INTERCEPTOR_RULES, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/patch";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
@@ -24,7 +26,7 @@ function getTextOutput(result: any): string {
 }
 
 let artifactCounter = 0;
-function createTestToolSession(cwd: string): ToolSession {
+function createTestToolSession(cwd: string, settings: Settings = Settings.isolated()): ToolSession {
 	const sessionFile = path.join(cwd, "session.jsonl");
 	const sessionDir = path.join(cwd, "session");
 	return {
@@ -38,8 +40,24 @@ function createTestToolSession(cwd: string): ToolSession {
 			const id = `artifact-${++artifactCounter}`;
 			return { id, path: path.join(sessionDir, `${id}.${toolType}.log`) };
 		},
-		settings: Settings.isolated(),
+		settings,
 	};
+}
+
+function createTestToolContext(toolNames: string[]): AgentToolContext {
+	return {
+		sessionManager: SessionManager.inMemory(),
+		modelRegistry: {
+			find: () => undefined,
+			getAll: () => [],
+			getApiKey: async () => undefined,
+		} as unknown as AgentToolContext["modelRegistry"],
+		model: undefined,
+		isIdle: () => true,
+		hasQueuedMessages: () => false,
+		abort: () => {},
+		toolNames,
+	} as AgentToolContext;
 }
 
 describe("Coding Agent Tools", () => {
@@ -223,7 +241,10 @@ describe("Coding Agent Tools", () => {
 			const testFile = path.join(testDir, "image.txt");
 			fs.writeFileSync(testFile, pngBuffer);
 
-			const result = await readTool.execute("test-call-img-1", { path: testFile });
+			const legacyReadTool = wrapToolWithMetaNotice(
+				new ReadTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false }))),
+			);
+			const result = await legacyReadTool.execute("test-call-img-1", { path: testFile });
 
 			expect(result.content[0]?.type).toBe("text");
 			expect(getTextOutput(result)).toContain("Read image file [image/png]");
@@ -235,6 +256,30 @@ describe("Coding Agent Tools", () => {
 			expect(imageBlock?.mimeType).toBe("image/png");
 			expect(typeof imageBlock?.data).toBe("string");
 			expect((imageBlock?.data ?? "").length).toBeGreaterThan(0);
+		});
+
+		it("returns metadata guidance (no image blocks) when inspect_image is enabled", async () => {
+			const png1x1Base64 =
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII=";
+			const pngBuffer = Buffer.from(png1x1Base64, "base64");
+			const testFile = path.join(testDir, "image-guidance.png");
+			fs.writeFileSync(testFile, pngBuffer);
+
+			const inspectModeReadTool = wrapToolWithMetaNotice(
+				new ReadTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": true }))),
+			);
+			const result = await inspectModeReadTool.execute("test-call-img-guidance", { path: testFile });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Image metadata:");
+			expect(output).toContain("MIME: image/png");
+			expect(output).toContain("Bytes:");
+			expect(output).toContain("Dimensions:");
+			expect(output).toContain("inspect_image");
+			expect(output).toContain(`path="${testFile}"`);
+			expect(output).toContain("question");
+			expect(output).not.toContain("optional context");
+			expect(result.content.some(c => c.type === "image")).toBe(false);
 		});
 
 		it("should treat files with image extension but non-image content as text", async () => {
@@ -428,6 +473,118 @@ function b() {
 			expect(result.details).toBeUndefined();
 		});
 
+		it("should expose built-in interceptor defaults truthfully", () => {
+			const defaultSettings = Settings.isolated({ "bashInterceptor.enabled": true });
+			const explicitEmptySettings = Settings.isolated({
+				"bashInterceptor.enabled": true,
+				"bashInterceptor.patterns": [],
+			});
+
+			expect(defaultSettings.get("bashInterceptor.patterns")).toEqual(DEFAULT_BASH_INTERCEPTOR_RULES);
+			expect(defaultSettings.getBashInterceptorRules()).toEqual(DEFAULT_BASH_INTERCEPTOR_RULES);
+			expect(explicitEmptySettings.get("bashInterceptor.patterns")).toEqual([]);
+			expect(explicitEmptySettings.getBashInterceptorRules()).toEqual([]);
+		});
+
+		it("should block built-in interceptor commands when enabled with default patterns", async () => {
+			const interceptedBashTool = wrapToolWithMetaNotice(
+				new BashTool(createTestToolSession(testDir, Settings.isolated({ "bashInterceptor.enabled": true }))),
+			);
+
+			await expect(
+				interceptedBashTool.execute(
+					"test-call-8-intercept-default",
+					{ command: "cat test.txt" },
+					undefined,
+					undefined,
+					createTestToolContext(["read"]),
+				),
+			).rejects.toThrow(/Use the `read` tool instead of cat\/head\/tail/);
+		});
+
+		it("should allow an explicit empty interceptor pattern list", async () => {
+			const allowedFile = path.join(testDir, "allow-empty.txt");
+			fs.writeFileSync(allowedFile, "empty means empty\n");
+
+			const interceptedBashTool = wrapToolWithMetaNotice(
+				new BashTool(
+					createTestToolSession(
+						testDir,
+						Settings.isolated({
+							"bashInterceptor.enabled": true,
+							"bashInterceptor.patterns": [],
+						}),
+					),
+				),
+			);
+
+			const result = await interceptedBashTool.execute(
+				"test-call-8-intercept-empty",
+				{ command: `cat ${allowedFile}` },
+				undefined,
+				undefined,
+				createTestToolContext(["read"]),
+			);
+
+			expect(getTextOutput(result)).toContain("empty means empty");
+		});
+
+		it("should honor custom bash interceptor patterns", async () => {
+			const interceptedBashTool = wrapToolWithMetaNotice(
+				new BashTool(
+					createTestToolSession(
+						testDir,
+						Settings.isolated({
+							"bashInterceptor.enabled": true,
+							"bashInterceptor.patterns": [
+								{
+									pattern: "^\\s*customcmd\\s+",
+									tool: "grep",
+									message: "Use the `grep` tool for customcmd.",
+								},
+							],
+						}),
+					),
+				),
+			);
+			await expect(
+				interceptedBashTool.execute(
+					"test-call-8-intercept-custom",
+					{ command: "customcmd foo" },
+					undefined,
+					undefined,
+					createTestToolContext(["grep"]),
+				),
+			).rejects.toThrow(/Use the `grep` tool for customcmd\./);
+		});
+
+		it("should expose env values without shell re-parsing", async () => {
+			const mermaid = [
+				"flowchart TD",
+				'N0["attack"]',
+				'N1["[target] cluster"]',
+				'N2["diff-review"]',
+				'N3["extract"]',
+				'N4["report"]',
+				'N5["setup"]',
+				"N3 --> N0",
+				"N0 --> N1",
+				"N2 --> N1",
+				"N3 --> N2",
+				"N5 --> N3",
+				"N1 --> N4",
+			].join("\n");
+			const result = await bashTool.execute("test-call-8-env", {
+				command: "printf '%s' \"$MERMAID\"",
+				env: { MERMAID: mermaid },
+			});
+			const output = getTextOutput(result);
+			expect(output).toContain('N0["attack"]');
+			expect(output).toContain("N1 --> N4");
+			expect(fs.existsSync(path.join(testDir, "N0"))).toBe(false);
+			expect(fs.existsSync(path.join(testDir, "N4"))).toBe(false);
+		});
+
 		it("should resolve local:// destination paths for mv commands", async () => {
 			const sourcePath = path.join(testDir, "move-source.json");
 			const targetPath = path.join(testDir, "session", "local", "moved-via-bash.json");
@@ -545,6 +702,31 @@ function b() {
 			expect(output).not.toContain("schema-other.test.ts");
 			expect(result.details?.fileCount).toBe(2);
 		});
+		it("should combine globbing from path and glob parameters", async () => {
+			const packageDir = path.join(testDir, "node_modules", ".bun");
+			const aiDir = path.join(packageDir, "ai@6.0.119+build123", "node_modules", "ai");
+			const nestedDir = path.join(aiDir, "nested");
+			fs.mkdirSync(nestedDir, { recursive: true });
+			fs.writeFileSync(path.join(aiDir, "root.ts"), "providerOptions\n");
+			fs.writeFileSync(path.join(nestedDir, "child.d.ts"), "providerOptions\n");
+			fs.writeFileSync(path.join(aiDir, "ignore.js"), "providerOptions\n");
+			fs.writeFileSync(path.join(testDir, "outside.ts"), "providerOptions\n");
+
+			const result = await grepTool.execute("test-call-11-path-and-glob", {
+				pattern: "providerOptions",
+				path: `${packageDir}/ai@6.0.119+*/node_modules/ai`,
+				glob: "**/*.{d.ts,ts}",
+				gitignore: false,
+			});
+
+			const output = getTextOutput(result);
+			expect(output).toContain("## └─ root.ts");
+			expect(output).toContain("## └─ child.d.ts");
+			expect(output).not.toContain("ignore.js");
+			expect(output).not.toContain("outside.ts");
+			expect(result.details?.fileCount).toBe(2);
+		});
+
 		it("should respect global limit and include context lines", async () => {
 			const testFile = path.join(testDir, "context.txt");
 			const content = ["before", "match one", "after", "middle", "match two", "after two"].join("\n");
@@ -870,6 +1052,37 @@ describe("edit tool CRLF handling", () => {
 			expect(fs.existsSync(sourceFile)).toBe(false);
 			expect(fs.existsSync(targetFile)).toBe(true);
 			expect(await Bun.file(targetFile).text()).toBe("unchanged content\n");
+		} finally {
+			fs.rmSync(hashDir, { recursive: true, force: true });
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
+	it("should preserve binary bytes when moving in hashline mode", async () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+
+		const hashDir = path.join(os.tmpdir(), `coding-agent-hashline-binary-move-${Snowflake.next()}`);
+		fs.mkdirSync(hashDir, { recursive: true });
+		const sourceFile = path.join(hashDir, "image.bin");
+		const targetFile = path.join(hashDir, "moved", "image.bin");
+		const originalBytes = Buffer.from([0, 255, 13, 10, 137, 80, 78, 71, 0, 1, 2, 3, 127]);
+		fs.writeFileSync(sourceFile, originalBytes);
+
+		try {
+			const session = createTestToolSession(hashDir);
+			const hashlineEditTool = new EditTool(session);
+			const result = await hashlineEditTool.execute("hashline-rename-binary", {
+				path: sourceFile,
+				edits: [],
+				move: targetFile,
+			});
+
+			expect(getTextOutput(result)).toContain("Moved");
+			expect(fs.existsSync(sourceFile)).toBe(false);
+			expect(fs.existsSync(targetFile)).toBe(true);
+			expect(Array.from(fs.readFileSync(targetFile))).toEqual(Array.from(originalBytes));
 		} finally {
 			fs.rmSync(hashDir, { recursive: true, force: true });
 			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;

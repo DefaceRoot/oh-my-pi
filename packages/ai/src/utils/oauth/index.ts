@@ -38,7 +38,10 @@ import type {
  * - Venice
  * - vLLM
  * - ZenMux
+ * - Alibaba Coding Plan
  */
+// Alibaba Coding Plan
+export { loginAlibabaCodingPlan } from "./alibaba-coding-plan";
 // Anthropic
 export { loginAnthropic, refreshAnthropicToken } from "./anthropic";
 // Cerebras (API key)
@@ -93,6 +96,8 @@ export type { OpenAICodexLoginOptions } from "./openai-codex";
 export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
 // OpenCode Zen / OpenCode Go (API key)
 export { loginOpenCode } from "./opencode";
+// Parallel (API key)
+export { loginParallel } from "./parallel";
 // Perplexity
 export { loginPerplexity } from "./perplexity";
 // Qianfan (API key)
@@ -101,6 +106,8 @@ export { loginQianfan } from "./qianfan";
 export { loginQwenPortal } from "./qwen-portal";
 // Synthetic (API key)
 export { loginSynthetic } from "./synthetic";
+// Tavily (API key)
+export { loginTavily } from "./tavily";
 // Together (API key)
 export { loginTogether } from "./together";
 export * from "./types";
@@ -119,6 +126,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "anthropic",
 		name: "Anthropic (Claude Pro/Max)",
+		available: true,
+	},
+	{
+		id: "alibaba-coding-plan",
+		name: "Alibaba Coding Plan",
 		available: true,
 	},
 	{
@@ -197,6 +209,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "tavily",
+		name: "Tavily",
+		available: true,
+	},
+	{
 		id: "together",
 		name: "Together",
 		available: true,
@@ -239,6 +256,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "nanogpt",
 		name: "NanoGPT",
+		available: true,
+	},
+	{
+		id: "parallel",
+		name: "Parallel",
 		available: true,
 	},
 	{

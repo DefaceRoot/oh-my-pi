@@ -1,17 +1,7 @@
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { findCredential } from "./search/providers/utils";
 
-const KAGI_SUMMARIZE_URL = "https://kagi.com/api/v0/summarize";
 const KAGI_SEARCH_URL = "https://kagi.com/api/v0/search";
-
-interface KagiSummarizeResponse {
-	data?: {
-		output?: string;
-	};
-	error?: Array<{
-		msg?: string;
-	}>;
-}
 
 interface KagiSearchResultObject {
 	t: 0;
@@ -28,15 +18,23 @@ interface KagiRelatedSearchesObject {
 
 type KagiSearchObject = KagiSearchResultObject | KagiRelatedSearchesObject;
 
+interface KagiErrorEntry {
+	code?: number;
+	msg?: string;
+}
+
 interface KagiSearchResponse {
 	meta: {
 		id: string;
 	};
 	data: KagiSearchObject[];
-	error?: Array<{
-		code: number;
-		msg: string;
-	}>;
+	error?: KagiErrorEntry[];
+}
+
+interface KagiErrorResponse {
+	error?: string | KagiErrorEntry[];
+	message?: string;
+	detail?: string;
 }
 
 export class KagiApiError extends Error {
@@ -49,12 +47,52 @@ export class KagiApiError extends Error {
 	}
 }
 
-export interface KagiSummarizeOptions {
-	engine?: string;
-	summaryType?: string;
-	targetLanguage?: string;
-	cache?: boolean;
-	signal?: AbortSignal;
+function extractKagiErrorMessage(payload: unknown): string | null {
+	if (!payload || typeof payload !== "object") return null;
+	const record = payload as Record<string, unknown>;
+
+	for (const value of [record.message, record.detail]) {
+		if (typeof value === "string" && value.trim().length > 0) {
+			return value.trim();
+		}
+	}
+
+	if (typeof record.error === "string" && record.error.trim().length > 0) {
+		return record.error.trim();
+	}
+
+	if (Array.isArray(record.error)) {
+		for (const entry of record.error) {
+			if (!entry || typeof entry !== "object") continue;
+			const message = (entry as Record<string, unknown>).msg;
+			if (typeof message === "string" && message.trim().length > 0) {
+				return message.trim();
+			}
+		}
+	}
+
+	return null;
+}
+
+function createKagiApiError(statusCode: number, detail?: string): KagiApiError {
+	return new KagiApiError(
+		detail ? `Kagi API error (${statusCode}): ${detail}` : `Kagi API error (${statusCode})`,
+		statusCode,
+	);
+}
+
+function parseKagiErrorResponse(statusCode: number, responseText: string): KagiApiError {
+	const trimmedResponseText = responseText.trim();
+	if (trimmedResponseText.length === 0) {
+		return createKagiApiError(statusCode);
+	}
+
+	try {
+		const payload = JSON.parse(trimmedResponseText) as KagiErrorResponse;
+		return createKagiApiError(statusCode, extractKagiErrorMessage(payload) ?? trimmedResponseText);
+	} catch {
+		return createKagiApiError(statusCode, trimmedResponseText);
+	}
 }
 
 export interface KagiSearchOptions {
@@ -86,30 +124,6 @@ function getAuthHeaders(apiKey: string): Record<string, string> {
 	};
 }
 
-export async function summarizeUrlWithKagi(url: string, options: KagiSummarizeOptions = {}): Promise<string | null> {
-	const apiKey = await findKagiApiKey();
-	if (!apiKey) return null;
-
-	const requestUrl = new URL(KAGI_SUMMARIZE_URL);
-	requestUrl.searchParams.set("url", url);
-	requestUrl.searchParams.set("summary_type", options.summaryType ?? "summary");
-	if (options.engine) requestUrl.searchParams.set("engine", options.engine);
-	if (options.targetLanguage) requestUrl.searchParams.set("target_language", options.targetLanguage);
-	if (options.cache !== undefined) requestUrl.searchParams.set("cache", String(options.cache));
-
-	const response = await fetch(requestUrl, {
-		headers: getAuthHeaders(apiKey),
-		signal: options.signal,
-	});
-	if (!response.ok) return null;
-
-	const payload = (await response.json()) as KagiSummarizeResponse;
-	if (payload.error && payload.error.length > 0) return null;
-
-	const output = payload.data?.output?.trim();
-	return output && output.length > 0 ? output : null;
-}
-
 export async function searchWithKagi(query: string, options: KagiSearchOptions = {}): Promise<KagiSearchResult> {
 	const apiKey = await findKagiApiKey();
 	if (!apiKey) {
@@ -127,14 +141,13 @@ export async function searchWithKagi(query: string, options: KagiSearchOptions =
 		signal: options.signal,
 	});
 	if (!response.ok) {
-		const errorText = await response.text();
-		throw new KagiApiError(`Kagi API error (${response.status}): ${errorText}`, response.status);
+		throw parseKagiErrorResponse(response.status, await response.text());
 	}
 
 	const payload = (await response.json()) as KagiSearchResponse;
 	if (payload.error && payload.error.length > 0) {
 		const firstError = payload.error[0];
-		throw new KagiApiError(`Kagi API error: ${firstError.msg}`, firstError.code);
+		throw createKagiApiError(firstError.code ?? response.status, extractKagiErrorMessage(payload) ?? undefined);
 	}
 
 	const sources: KagiSearchSource[] = [];

@@ -9,6 +9,7 @@ export type OAuthCredentials = {
 };
 
 export type OAuthProvider =
+	| "alibaba-coding-plan"
 	| "anthropic"
 	| "cerebras"
 	| "cloudflare-ai-gateway"
@@ -32,10 +33,12 @@ export type OAuthProvider =
 	| "openai-codex"
 	| "opencode-go"
 	| "opencode-zen"
+	| "parallel"
 	| "perplexity"
 	| "qianfan"
 	| "qwen-portal"
 	| "synthetic"
+	| "tavily"
 	| "together"
 	| "venice"
 	| "vllm"

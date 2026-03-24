@@ -49,6 +49,12 @@ export interface MCPAuthConfig {
 	type: "oauth" | "apikey";
 	/** Credential ID for OAuth (references agent.db) */
 	credentialId?: string;
+	/** Token endpoint URL — persisted for proactive token refresh */
+	tokenUrl?: string;
+	/** Client ID — persisted for token refresh */
+	clientId?: string;
+	/** Client secret — persisted for token refresh */
+	clientSecret?: string;
 }
 
 /** Base server config with shared options */
@@ -62,7 +68,10 @@ interface MCPServerConfigBase {
 	/** OAuth configuration for servers requiring explicit client credentials */
 	oauth?: {
 		clientId?: string;
+		clientSecret?: string;
+		redirectUri?: string;
 		callbackPort?: number;
+		callbackPath?: string;
 	};
 }
 
@@ -91,8 +100,12 @@ export interface MCPSseServerConfig extends MCPServerConfigBase {
 
 export type MCPServerConfig = MCPStdioServerConfig | MCPHttpServerConfig | MCPSseServerConfig;
 
-/** Root .mcp.json file structure */
+export const MCP_CONFIG_SCHEMA_URL =
+	"https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json";
+
+/** Root mcp.json/.mcp.json file structure */
 export interface MCPConfigFile {
+	$schema?: string;
 	mcpServers?: Record<string, MCPServerConfig>;
 	disabledServers?: string[];
 }
@@ -219,6 +232,8 @@ export interface MCPTransport {
 	onClose?: () => void;
 	onError?: (error: Error) => void;
 	onNotification?: (method: string, params: unknown) => void;
+	/** Handler for server-to-client requests (e.g. roots/list). Returns result or throws a JsonRpcError. */
+	onRequest?: (method: string, params: unknown) => Promise<unknown>;
 }
 
 /** Transport factory function */
@@ -391,3 +406,18 @@ export const MCPNotificationMethods = {
 	RESOURCES_UPDATED: "notifications/resources/updated",
 	PROMPTS_LIST_CHANGED: "notifications/prompts/list_changed",
 } as const;
+
+/** Extract a JsonRpcError from a thrown value. Preserves `.code` and `.message` from Error instances or plain objects. */
+export function toJsonRpcError(error: unknown): JsonRpcError {
+	if (error instanceof Error) {
+		const code = "code" in error && typeof error.code === "number" ? error.code : -32603;
+		return { code, message: error.message };
+	}
+	if (typeof error === "object" && error !== null) {
+		const obj = error as Record<string, unknown>;
+		if (typeof obj.code === "number" && typeof obj.message === "string") {
+			return { code: obj.code, message: obj.message };
+		}
+	}
+	return { code: -32603, message: "Internal error" };
+}

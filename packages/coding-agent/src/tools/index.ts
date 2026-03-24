@@ -9,6 +9,7 @@ import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
 import { checkPythonKernelAvailability } from "../ipy/kernel";
 import { LspTool } from "../lsp";
+import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import { EditTool } from "../patch";
 import type { PlanModeState } from "../plan-mode/state";
 import { TaskTool } from "../task";
@@ -28,6 +29,7 @@ import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
 import { GrepTool } from "./grep";
+import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
@@ -35,6 +37,7 @@ import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
+import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
@@ -63,6 +66,7 @@ export * from "./fetch";
 export * from "./find";
 export * from "./gemini-image";
 export * from "./grep";
+export * from "./inspect-image";
 export * from "./notebook";
 export * from "./pending-action";
 export * from "./python";
@@ -70,6 +74,7 @@ export * from "./read";
 export * from "./render-mermaid";
 export * from "./resolve";
 export * from "./review";
+export * from "./search-tool-bm25";
 export * from "./ssh";
 export * from "./submit-result";
 export * from "./todo-write";
@@ -83,6 +88,8 @@ export type ContextFileEntry = {
 	content: string;
 	depth?: number;
 };
+
+export type { DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 
 /** Session context for tool factories */
 export interface ToolSession {
@@ -152,6 +159,16 @@ export interface ToolSession {
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
 	setTodoPhases?: (phases: TodoPhase[]) => void;
+	/** Whether MCP tool discovery is active for this session. */
+	isMCPDiscoveryEnabled?: () => boolean;
+	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */
+	getDiscoverableMCPTools?: () => DiscoverableMCPTool[];
+	/** Get the cached discoverable MCP search index for search_tool_bm25 execution. */
+	getDiscoverableMCPSearchIndex?: () => DiscoverableMCPSearchIndex;
+	/** Get MCP tools activated by prior search_tool_bm25 calls. */
+	getSelectedMCPToolNames?: () => string[];
+	/** Merge MCP tool selections into the active session tool set. */
+	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
 	/** Pending action store for preview/apply workflows */
 	pendingActionStore?: import("./pending-action").PendingActionStore;
 	/** Get active checkpoint state if any. */
@@ -177,6 +194,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	lsp: LspTool.createIf,
 	notebook: s => new NotebookTool(s),
 	read: s => new ReadTool(s),
+	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
@@ -186,6 +204,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	todo_write: s => new TodoWriteTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
+	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 };
 
@@ -312,7 +331,8 @@ export async function createTools(
 ): Promise<Tool[]> {
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const enableLsp = session.enableLsp ?? true;
-	const requestedTools = toolNames && toolNames.length > 0 ? [...new Set(toolNames)] : undefined;
+	const requestedTools =
+		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
 	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
 	}
@@ -413,8 +433,11 @@ export async function createTools(
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
 		if (name === "notebook") return session.settings.get("notebook.enabled");
+		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "fetch") return session.settings.get("fetch.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
+		if (name === "search_tool_bm25") return session.settings.get("mcp.discoveryMode");
+		if (name === "lsp") return session.settings.get("lsp.enabled");
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");

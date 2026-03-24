@@ -18,7 +18,8 @@ type ModelUsageRow = {
 };
 
 /** Bump when schema changes require migration */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
 /** Singleton instances per database path */
 const instances = new Map<string, AgentStorage>();
@@ -59,9 +60,8 @@ export class AgentStorage {
 		this.#authStore = new AuthCredentialStore(this.#db);
 
 		this.#listSettingsStmt = this.#db.prepare("SELECT key, value FROM settings");
-
 		this.#upsertModelUsageStmt = this.#db.prepare(
-			"INSERT INTO model_usage (model_key, last_used_at) VALUES (?, unixepoch()) ON CONFLICT(model_key) DO UPDATE SET last_used_at = unixepoch()",
+			`INSERT INTO model_usage (model_key, last_used_at) VALUES (?, ${SQLITE_NOW_EPOCH}) ON CONFLICT(model_key) DO UPDATE SET last_used_at = ${SQLITE_NOW_EPOCH}`,
 		);
 		this.#listModelUsageStmt = this.#db.prepare(
 			"SELECT model_key, last_used_at FROM model_usage ORDER BY last_used_at DESC",
@@ -80,7 +80,7 @@ PRAGMA busy_timeout=5000;
 
 CREATE TABLE IF NOT EXISTS model_usage (
 	model_key TEXT PRIMARY KEY,
-	last_used_at INTEGER NOT NULL DEFAULT (unixepoch())
+	last_used_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
-	updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+	updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 );
 `);
 		} else if (!hasKey || !hasValue) {
@@ -122,12 +122,12 @@ CREATE TABLE settings (
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL,
-	updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+	updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
 );
 `);
 				if (settings) {
 					const insert = this.#db.prepare(
-						"INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())",
+						`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ${SQLITE_NOW_EPOCH})`,
 					);
 					for (const [key, value] of Object.entries(settings)) {
 						if (value === undefined) continue;
@@ -144,12 +144,15 @@ CREATE TABLE settings (
 		const versionRow = this.#db.prepare("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").get() as
 			| { version?: number }
 			| undefined;
+		const schemaVersion = typeof versionRow?.version === "number" ? versionRow.version : 0;
 		if (versionRow?.version !== undefined && versionRow.version !== SCHEMA_VERSION) {
 			logger.warn("AgentStorage schema version mismatch", {
 				current: versionRow.version,
 				expected: SCHEMA_VERSION,
 			});
-			this.#migrateSchema(versionRow.version);
+		}
+		if (schemaVersion < SCHEMA_VERSION) {
+			this.#migrateSchema(schemaVersion);
 		}
 		this.#db.prepare("INSERT OR REPLACE INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 	}
@@ -159,6 +162,43 @@ CREATE TABLE settings (
 			// v3 → v4: Add disabled column to auth_credentials (handled by AuthCredentialStore)
 			// Nothing to do here - AuthCredentialStore will handle this migration
 		}
+		if (fromVersion < 5) {
+			this.#migrateSchemaV4ToV5();
+		}
+	}
+
+	#migrateSchemaV4ToV5(): void {
+		const migrate = this.#db.transaction(() => {
+			this.#db.exec("ALTER TABLE settings RENAME TO settings_legacy");
+			this.#db.exec(`
+CREATE TABLE settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL,
+	updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+);
+`);
+			this.#db.exec(`
+INSERT INTO settings (key, value, updated_at)
+SELECT key, value, updated_at
+FROM settings_legacy
+`);
+			this.#db.exec("DROP TABLE settings_legacy");
+
+			this.#db.exec("ALTER TABLE model_usage RENAME TO model_usage_legacy");
+			this.#db.exec(`
+CREATE TABLE model_usage (
+	model_key TEXT PRIMARY KEY,
+	last_used_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+);
+`);
+			this.#db.exec(`
+INSERT INTO model_usage (model_key, last_used_at)
+SELECT model_key, last_used_at
+FROM model_usage_legacy
+`);
+			this.#db.exec("DROP TABLE model_usage_legacy");
+		});
+		migrate();
 	}
 
 	/**
@@ -276,22 +316,20 @@ CREATE TABLE settings (
 	 * @returns Array of stored credentials with their database IDs
 	 */
 	listAuthCredentials(provider?: string, includeDisabled = false): StoredAuthCredential[] {
-		// AuthCredentialStore doesn't expose includeDisabled yet, so we filter if needed
 		const credentials = this.#authStore.listAuthCredentials(provider);
 		if (!includeDisabled) return credentials;
 
-		// For now, includeDisabled requires direct DB access
-		// This is only used internally, so it's acceptable
 		const stmt = this.#db.prepare(
 			provider
-				? "SELECT id, provider, credential_type, data FROM auth_credentials WHERE provider = ? ORDER BY id ASC"
-				: "SELECT id, provider, credential_type, data FROM auth_credentials ORDER BY id ASC",
+				? "SELECT id, provider, credential_type, data, disabled_cause FROM auth_credentials WHERE provider = ? ORDER BY id ASC"
+				: "SELECT id, provider, credential_type, data, disabled_cause FROM auth_credentials ORDER BY id ASC",
 		);
 		const rows = (provider ? stmt.all(provider) : stmt.all()) as Array<{
 			id: number;
 			provider: string;
 			credential_type: string;
 			data: string;
+			disabled_cause: string | null;
 		}>;
 
 		const results: StoredAuthCredential[] = [];
@@ -309,7 +347,7 @@ CREATE TABLE settings (
 					continue;
 				}
 
-				results.push({ id: row.id, provider: row.provider, credential });
+				results.push({ id: row.id, provider: row.provider, credential, disabledCause: row.disabled_cause });
 			} catch {}
 		}
 		return results;
@@ -336,19 +374,21 @@ CREATE TABLE settings (
 	}
 
 	/**
-	 * Deletes an auth credential by ID.
-	 * @param id - Database row ID of the credential to delete
+	 * Disables an auth credential by ID with a persisted cause.
+	 * @param id - Database row ID of the credential to disable
+	 * @param disabledCause - Human-readable cause stored with the disabled row
 	 */
-	deleteAuthCredential(id: number): void {
-		this.#authStore.deleteAuthCredential(id);
+	deleteAuthCredential(id: number, disabledCause: string): void {
+		this.#authStore.deleteAuthCredential(id, disabledCause);
 	}
 
 	/**
-	 * Deletes all auth credentials for a provider.
-	 * @param provider - Provider name whose credentials should be deleted
+	 * Disables all auth credentials for a provider with a persisted cause.
+	 * @param provider - Provider name whose credentials should be disabled
+	 * @param disabledCause - Human-readable cause stored with the disabled rows
 	 */
-	deleteAuthCredentialsForProvider(provider: string): void {
-		this.#authStore.deleteAuthCredentialsForProvider(provider);
+	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
+		this.#authStore.deleteAuthCredentialsForProvider(provider, disabledCause);
 	}
 
 	/**

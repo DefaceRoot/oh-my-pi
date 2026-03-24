@@ -63,43 +63,56 @@ const ANTIGRAVITY_DAILY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const ANTIGRAVITY_ENDPOINT_FALLBACKS = [ANTIGRAVITY_DAILY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT] as const;
 
-const GEMINI_CLI_USER_AGENT = process.env.PI_AI_GEMINI_CLI_USER_AGENT || "google-api-nodejs-client/9.15.1";
+/**
+ * Build a User-Agent string that identifies as Gemini CLI to unlock higher rate limits.
+ * Uses the same format as the official Gemini CLI:
+ * GeminiCLI/VERSION/MODEL (PLATFORM; ARCH) google-api-nodejs-client/10.5.0
+ */
+export function getGeminiCliUserAgent(modelId = "gemini-3.1-pro-preview"): string {
+	const version = process.env.PI_AI_GEMINI_CLI_VERSION || "0.34.0";
+	const platform = process.platform === "win32" ? "win32" : process.platform;
+	const arch = process.arch === "x64" ? "x64" : process.arch;
+	return `GeminiCLI/${version}/${modelId} (${platform}; ${arch}) google-api-nodejs-client/10.5.0`;
+}
 
 const ANTIGRAVITY_USER_AGENT = (() => {
 	const DEFAULT_ANTIGRAVITY_VERSION = "1.104.0";
 	const version = process.env.PI_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
-	return `antigravity/${version} darwin/arm64`;
+	// Map Node.js platform/arch to Antigravity's expected format.
+	// Verified against Antigravity source: _qn() and wqn() in main.js.
+	// process.platform: win32→windows, others pass through (darwin, linux)
+	// process.arch:     x64→amd64, ia32→386, others pass through (arm64)
+	const os = process.platform === "win32" ? "windows" : process.platform;
+	const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
+	return `antigravity/${version} ${os}/${arch}`;
 })();
 
-const GEMINI_CLI_HEADERS = Object.freeze({
-	"User-Agent": GEMINI_CLI_USER_AGENT,
-	"X-Goog-Api-Client": "gl-node/22.17.0",
-	"Client-Metadata": "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
-});
+const GEMINI_CLI_HEADERS = (modelId?: string) =>
+	Object.freeze({
+		"User-Agent": getGeminiCliUserAgent(modelId),
+		"Client-Metadata": "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
+	});
 
-// Antigravity auth headers (project discovery/onboarding) — matches CLIProxyAPI antigravity auth module.
-// Same User-Agent as Gemini CLI, but different X-Goog-Api-Client.
+// Antigravity auth headers (project discovery/onboarding).
+// Verified from binary: kae.w() and kae.y() send only Content-Type + User-Agent.
+// X-Goog-Api-Client and Client-Metadata are NOT sent by the real client — product
+// identification (ideType, ideName, ideVersion) goes in the protobuf request body.
 const ANTIGRAVITY_AUTH_HEADERS = Object.freeze({
-	"User-Agent": GEMINI_CLI_USER_AGENT,
-	"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-	"Client-Metadata": JSON.stringify({
-		ideType: "IDE_UNSPECIFIED",
-		platform: "PLATFORM_UNSPECIFIED",
-		pluginType: "GEMINI",
-	}),
+	"User-Agent": ANTIGRAVITY_USER_AGENT,
 });
 
-// Antigravity executor headers (streaming/generation) — only User-Agent per CLIProxyAPI executor.
+// Antigravity executor headers (streaming/generation).
+// Same header set as auth calls — only User-Agent per binary analysis.
 const ANTIGRAVITY_STREAMING_HEADERS = Object.freeze({
 	"User-Agent": ANTIGRAVITY_USER_AGENT,
 });
 
 // Headers for Gemini CLI (prod endpoint)
-export function getGeminiCliHeaders() {
-	return GEMINI_CLI_HEADERS;
+export function getGeminiCliHeaders(modelId?: string) {
+	return GEMINI_CLI_HEADERS(modelId);
 }
-export function getGeminiCliUserAgent() {
-	return GEMINI_CLI_USER_AGENT;
+export function getGeminiCliUserAgentValue(modelId?: string) {
+	return getGeminiCliUserAgent(modelId);
 }
 
 // Headers for Antigravity (sandbox endpoint)
@@ -237,9 +250,8 @@ function isClaudeModel(modelId: string): boolean {
 	return modelId.toLowerCase().includes("claude");
 }
 
-function isClaudeThinkingModel(modelId: string): boolean {
-	const normalized = modelId.toLowerCase();
-	return normalized.includes("claude") && normalized.includes("thinking");
+function needsClaudeThinkingBetaHeader(model: Model<"google-gemini-cli">): boolean {
+	return model.provider === "google-antigravity" && model.id.startsWith("claude-") && model.reasoning;
 }
 
 function shouldInjectAntigravitySystemInstruction(modelId: string): boolean {
@@ -367,8 +379,14 @@ async function refreshGeminiCliCredentialsIfNeeded(
 			expiresAt: refreshed.expires,
 		};
 	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		// Permanent auth failure (revoked/invalid token) — re-authentication required.
+		// Google returns 400 invalid_grant when a token is revoked or expired server-side.
+		if (/invalid_grant|invalid_token|token.*revoked|account.*disabled/i.test(reason)) {
+			throw new Error(`OAuth token has been revoked or invalidated. Use /login to re-authenticate. (${reason})`);
+		}
+		// Transient failure (network, 5xx) — fall back to existing token if not yet expired.
 		if (credentials.expiresAt !== undefined && Date.now() >= credentials.expiresAt) {
-			const reason = error instanceof Error ? error.message : String(error);
 			throw new Error(`OAuth token refresh failed before request: ${reason}`);
 		}
 		return credentials;
@@ -478,18 +496,19 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			const baseUrl = model.baseUrl?.trim();
 			const endpoints = baseUrl ? [baseUrl] : isAntigravity ? ANTIGRAVITY_ENDPOINT_FALLBACKS : [DEFAULT_ENDPOINT];
 
-			const requestBody = buildRequest(model, context, projectId, options, isAntigravity);
-			options?.onPayload?.(requestBody);
-			const headers = isAntigravity ? getAntigravityHeaders() : GEMINI_CLI_HEADERS;
+			let requestBody = buildRequest(model, context, projectId, options, isAntigravity);
+			const replacementPayload = await options?.onPayload?.(requestBody, model);
+			if (replacementPayload !== undefined) {
+				requestBody = replacementPayload as typeof requestBody;
+			}
+			const headers = isAntigravity ? getAntigravityHeaders() : getGeminiCliHeaders(model.id);
 
 			const requestHeaders = {
 				Authorization: `Bearer ${accessToken}`,
 				"Content-Type": "application/json",
 				Accept: "text/event-stream",
 				...headers,
-				...(!isAntigravity && isClaudeThinkingModel(model.id)
-					? { "anthropic-beta": CLAUDE_THINKING_BETA_HEADER }
-					: {}),
+				...(needsClaudeThinkingBetaHeader(model) ? { "anthropic-beta": CLAUDE_THINKING_BETA_HEADER } : {}),
 				...(options?.headers ?? {}),
 			};
 			const requestBodyJson = JSON.stringify(requestBody);

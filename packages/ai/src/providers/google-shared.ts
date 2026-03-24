@@ -7,6 +7,7 @@ import { prepareSchemaForCCA, sanitizeSchemaForGoogle } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
 
 export { sanitizeSchemaForGoogle };
+
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
 
 /**
@@ -45,6 +46,8 @@ export function retainThoughtSignature(existing: string | undefined, incoming: s
 // Thought signatures must be base64 for Google APIs (TYPE_BYTES).
 const base64SignaturePattern = /^[A-Za-z0-9+/]+={0,2}$/;
 
+const SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
+
 function isValidThoughtSignature(signature: string | undefined): boolean {
 	if (!signature) return false;
 	if (signature.length % 4 !== 0) return false;
@@ -63,6 +66,20 @@ function resolveThoughtSignature(isSameProviderAndModel: boolean, signature: str
  */
 export function requiresToolCallId(modelId: string): boolean {
 	return modelId.startsWith("claude-");
+}
+
+function getGeminiMajorVersion(modelId: string): number | undefined {
+	const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+	if (!match) return undefined;
+	return Number.parseInt(match[1], 10);
+}
+
+function supportsMultimodalFunctionResponse(modelId: string): boolean {
+	const geminiMajorVersion = getGeminiMajorVersion(modelId);
+	if (geminiMajorVersion !== undefined) {
+		return geminiMajorVersion >= 3;
+	}
+	return true;
 }
 
 function isGemini3Model(modelId: string): boolean {
@@ -150,22 +167,8 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					}
 				} else if (block.type === "toolCall") {
 					const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
-					if (isGemini3Model(model.id) && !thoughtSignature) {
-						const params = Object.entries(block.arguments ?? {})
-							.map(([key, value]) => {
-								const valueStr = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-								return `<parameter name="${key}">${valueStr}</parameter>`;
-							})
-							.join("\n");
-
-						parts.push({
-							text: `<call_record tool="${block.name}">
-<critical>Historical context only. You cannot invoke tools this way—use proper function calling.</critical>
-${params}
-</call_record>`.toWellFormed(),
-						});
-						continue;
-					}
+					const effectiveSignature =
+						thoughtSignature || (isGemini3Model(model.id) ? SKIP_THOUGHT_SIGNATURE : undefined);
 
 					const part: Part = {
 						functionCall: {
@@ -177,8 +180,8 @@ ${params}
 					if (model.provider === "google-vertex" && part?.functionCall?.id) {
 						delete part.functionCall.id; // Vertex AI does not support 'id' in functionCall
 					}
-					if (thoughtSignature) {
-						part.thoughtSignature = thoughtSignature;
+					if (effectiveSignature) {
+						part.thoughtSignature = effectiveSignature;
 					}
 					parts.push(part);
 				}
@@ -200,10 +203,10 @@ ${params}
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;
 
-			// Gemini 3 supports multimodal function responses with images nested inside functionResponse.parts
-			// See: https://ai.google.dev/gemini-api/docs/function-calling#multimodal
-			// Older models don't support this, so we put images in a separate user message.
-			const supportsMultimodalFunctionResponse = model.id.includes("gemini-3");
+			// Gemini 3+ models support multimodal function responses with images nested inside
+			// functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
+			// Antigravity also accept this shape. Gemini < 3 still needs a separate user image turn.
+			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
 			const responseValue = hasText ? textResult.toWellFormed() : hasImages ? "(see attached image)" : "";
@@ -220,8 +223,7 @@ ${params}
 				functionResponse: {
 					name: msg.toolName,
 					response: msg.isError ? { error: responseValue } : { output: responseValue },
-					// Nest images inside functionResponse.parts for Gemini 3
-					...(hasImages && supportsMultimodalFunctionResponse && { parts: imageParts }),
+					...(hasImages && modelSupportsMultimodalFunctionResponse && { parts: imageParts }),
 					...(includeId ? { id: msg.toolCallId } : {}),
 				},
 			};
@@ -242,8 +244,8 @@ ${params}
 				});
 			}
 
-			// For older models, add images in a separate user message
-			if (hasImages && !supportsMultimodalFunctionResponse) {
+			// For Gemini < 3, add images in a separate user message
+			if (hasImages && !modelSupportsMultimodalFunctionResponse) {
 				contents.push({
 					role: "user",
 					parts: [{ text: "Tool result image:" }, ...imageParts],

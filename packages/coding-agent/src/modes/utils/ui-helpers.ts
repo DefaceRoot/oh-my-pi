@@ -220,6 +220,9 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
+		this.ctx.optimisticUserMessageSignature = undefined;
+		this.ctx.pendingTools.clear();
+
 		if (options.updateFooter) {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
@@ -252,11 +255,21 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
+		const deferredMessages: AgentMessage[] = [];
 		for (const message of sessionContext.messages) {
+			// Defer compaction summaries so they render at the bottom (visible after scroll)
+			if (message.role === "compactionSummary") {
+				deferredMessages.push(message);
+				continue;
+			}
+			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.addMessageToChat(message, options, target.chatContainer);
 				const lastChild = target.chatContainer.children[target.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
+				if (assistantComponent) {
+					assistantComponent.setUsageInfo(message.usage);
+				}
 				readGroup = null;
 				const hasErrorStop = message.stopReason === "aborted" || message.stopReason === "error";
 				const errorMessage = hasErrorStop
@@ -303,9 +316,13 @@ export class UiHelpers {
 
 					readGroup = null;
 					const tool = this.ctx.session.getToolByName(content.name);
+					const renderArgs =
+						"partialJson" in content
+							? { ...content.arguments, __partialJson: content.partialJson }
+							: content.arguments;
 					const component = new ToolExecutionComponent(
 						content.name,
-						content.arguments,
+						renderArgs,
 						{
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
@@ -372,6 +389,11 @@ export class UiHelpers {
 			} else {
 				this.addMessageToChat(message, options, target.chatContainer);
 			}
+		}
+
+		// Render deferred messages (compaction summaries) at the bottom so they're visible
+		for (const message of deferredMessages) {
+			this.addMessageToChat(message, options, target.chatContainer);
 		}
 
 		target.pendingTools.clear();
@@ -486,7 +508,7 @@ export class UiHelpers {
 				const queuedText = theme.fg("dim", `${entry.label}: ${entry.message}`);
 				this.ctx.pendingMessagesContainer.addChild(new TruncatedText(queuedText, 1, 0));
 			}
-			const dequeueKey = this.ctx.keybindings.getDisplayString("dequeue") || "Alt+Up";
+			const dequeueKey = this.ctx.keybindings.getDisplayString("app.message.dequeue") || "Alt+Up";
 			const hintText = theme.fg("dim", `${theme.tree.hook} ${dequeueKey} to edit`);
 			this.ctx.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}

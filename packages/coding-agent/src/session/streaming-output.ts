@@ -32,20 +32,20 @@ export interface OutputSinkOptions {
 	artifactId?: string;
 	spillThreshold?: number;
 	onChunk?: (chunk: string) => void;
+	/** Minimum ms between onChunk calls. 0 = every chunk (default). */
+	chunkThrottleMs?: number;
 }
 
 export interface TruncationResult {
 	content: string;
-	truncated: boolean;
-	truncatedBy: "lines" | "bytes" | null;
+	truncated?: boolean;
+	truncatedBy?: "lines" | "bytes";
 	totalLines: number;
 	totalBytes: number;
-	outputLines: number;
-	outputBytes: number;
-	lastLinePartial: boolean;
-	firstLineExceedsLimit: boolean;
-	maxLines: number;
-	maxBytes: number;
+	outputLines?: number;
+	outputBytes?: number;
+	lastLinePartial?: boolean;
+	firstLineExceedsLimit?: boolean;
 }
 
 export interface TruncationOptions {
@@ -206,26 +206,10 @@ export function truncateLine(
 // =============================================================================
 
 /** Shared helper to build a no-truncation result. */
-function noTruncResult(
-	content: string,
-	totalLines: number,
-	totalBytes: number,
-	maxLines: number,
-	maxBytes: number,
-): TruncationResult {
-	return {
-		content,
-		truncated: false,
-		truncatedBy: null,
-		totalLines,
-		totalBytes,
-		outputLines: totalLines,
-		outputBytes: totalBytes,
-		lastLinePartial: false,
-		firstLineExceedsLimit: false,
-		maxLines,
-		maxBytes,
-	};
+export function noTruncResult(content: string, totalLines?: number, totalBytes?: number): TruncationResult {
+	if (totalLines == null) totalLines = countNewlines(content) + 1;
+	if (totalBytes == null) totalBytes = Buffer.byteLength(content, "utf-8");
+	return { content, totalLines, totalBytes };
 }
 
 /**
@@ -244,7 +228,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	const totalLines = countNewlines(content) + 1;
 
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
-		return noTruncResult(content, totalLines, totalBytes, maxLines, maxBytes);
+		return noTruncResult(content, totalLines, totalBytes);
 	}
 
 	let includedLines = 0;
@@ -283,8 +267,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 					outputBytes: 0,
 					lastLinePartial: false,
 					firstLineExceedsLimit: true,
-					maxLines,
-					maxBytes,
 				};
 			}
 			break;
@@ -307,8 +289,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 					outputBytes: 0,
 					lastLinePartial: false,
 					firstLineExceedsLimit: true,
-					maxLines,
-					maxBytes,
 				};
 			}
 			break;
@@ -335,8 +315,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 		outputBytes: bytesUsed,
 		lastLinePartial: false,
 		firstLineExceedsLimit: false,
-		maxLines,
-		maxBytes,
 	};
 }
 
@@ -354,7 +332,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 	const totalLines = countNewlines(content) + 1;
 
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
-		return noTruncResult(content, totalLines, totalBytes, maxLines, maxBytes);
+		return noTruncResult(content, totalLines, totalBytes);
 	}
 
 	let includedLines = 0;
@@ -396,8 +374,6 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 					outputBytes: tail.bytes,
 					lastLinePartial: true,
 					firstLineExceedsLimit: false,
-					maxLines,
-					maxBytes,
 				};
 			}
 			break;
@@ -420,8 +396,6 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 					outputBytes: tail.bytes,
 					lastLinePartial: true,
 					firstLineExceedsLimit: false,
-					maxLines,
-					maxBytes,
 				};
 			}
 			break;
@@ -447,8 +421,6 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 		outputBytes: bytesUsed,
 		lastLinePartial: false,
 		firstLineExceedsLimit: false,
-		maxLines,
-		maxBytes,
 	};
 }
 
@@ -551,6 +523,7 @@ export class OutputSink {
 	#totalBytes = 0;
 	#sawData = false;
 	#truncated = false;
+	#lastChunkTime = 0;
 
 	#file?: {
 		path: string;
@@ -558,22 +531,46 @@ export class OutputSink {
 		sink: Bun.FileSink;
 	};
 
+	// Queue of chunks waiting for the file sink to be created.
+	#pendingFileWrites?: string[];
+	#fileReady = false;
+
 	readonly #artifactPath?: string;
 	readonly #artifactId?: string;
 	readonly #spillThreshold: number;
 	readonly #onChunk?: (chunk: string) => void;
+	readonly #chunkThrottleMs: number;
 
 	constructor(options?: OutputSinkOptions) {
-		const { artifactPath, artifactId, spillThreshold = DEFAULT_MAX_BYTES, onChunk } = options ?? {};
+		const {
+			artifactPath,
+			artifactId,
+			spillThreshold = DEFAULT_MAX_BYTES,
+			onChunk,
+			chunkThrottleMs = 0,
+		} = options ?? {};
 		this.#artifactPath = artifactPath;
 		this.#artifactId = artifactId;
 		this.#spillThreshold = spillThreshold;
 		this.#onChunk = onChunk;
+		this.#chunkThrottleMs = chunkThrottleMs;
 	}
 
-	async push(chunk: string): Promise<void> {
+	/**
+	 * Push a chunk of output. The buffer management and onChunk callback run
+	 * synchronously. File sink writes are deferred and serialized internally.
+	 */
+	push(chunk: string): void {
 		chunk = sanitizeWithOptionalSixelPassthrough(chunk, sanitizeText);
-		this.#onChunk?.(chunk);
+
+		// Throttled onChunk: only call the callback when enough time has passed.
+		if (this.#onChunk) {
+			const now = Date.now();
+			if (now - this.#lastChunkTime >= this.#chunkThrottleMs) {
+				this.#lastChunkTime = now;
+				this.#onChunk(chunk);
+			}
+		}
 
 		const dataBytes = Buffer.byteLength(chunk, "utf-8");
 		this.#totalBytes += dataBytes;
@@ -586,10 +583,9 @@ export class OutputSink {
 		const threshold = this.#spillThreshold;
 		const willOverflow = this.#bufferBytes + dataBytes > threshold;
 
-		// Write to file if already spilling or about to overflow
-		if (this.#file != null || willOverflow) {
-			const sink = await this.#ensureFileSink();
-			await sink?.write(chunk);
+		// Write to artifact file if configured and past the threshold
+		if (this.#artifactPath && (this.#file != null || willOverflow)) {
+			this.#writeToFile(chunk);
 		}
 
 		if (!willOverflow) {
@@ -619,14 +615,64 @@ export class OutputSink {
 		if (this.#file) this.#truncated = true;
 	}
 
+	/**
+	 * Write a chunk to the artifact file. Handles the async file sink creation
+	 * by queuing writes until the sink is ready, then draining synchronously.
+	 */
+	#writeToFile(chunk: string): void {
+		if (this.#fileReady && this.#file) {
+			// Fast path: file sink exists, write synchronously
+			this.#file.sink.write(chunk);
+			return;
+		}
+		// File sink not yet created — queue this chunk and kick off creation
+		if (!this.#pendingFileWrites) {
+			this.#pendingFileWrites = [chunk];
+			void this.#createFileSink();
+		} else {
+			this.#pendingFileWrites.push(chunk);
+		}
+	}
+
+	async #createFileSink(): Promise<void> {
+		if (!this.#artifactPath || this.#fileReady) return;
+		try {
+			const sink = Bun.file(this.#artifactPath).writer();
+			this.#file = { path: this.#artifactPath, artifactId: this.#artifactId, sink };
+
+			// Flush existing buffer to file BEFORE it gets trimmed further.
+			if (this.#buffer.length > 0) {
+				sink.write(this.#buffer);
+			}
+
+			// Drain any chunks that arrived while the sink was being created
+			if (this.#pendingFileWrites) {
+				for (const pending of this.#pendingFileWrites) {
+					sink.write(pending);
+				}
+				this.#pendingFileWrites = undefined;
+			}
+
+			this.#fileReady = true;
+		} catch {
+			try {
+				await this.#file?.sink?.end();
+			} catch {
+				/* ignore */
+			}
+			this.#file = undefined;
+			this.#pendingFileWrites = undefined;
+		}
+	}
+
 	createInput(): WritableStream<Uint8Array | string> {
 		const dec = new TextDecoder("utf-8", { ignoreBOM: true });
-		const finalize = async () => {
-			await this.push(dec.decode());
+		const finalize = () => {
+			this.push(dec.decode());
 		};
 		return new WritableStream({
-			write: async chunk => {
-				await this.push(typeof chunk === "string" ? chunk : dec.decode(chunk, { stream: true }));
+			write: chunk => {
+				this.push(typeof chunk === "string" ? chunk : dec.decode(chunk, { stream: true }));
 			},
 			close: finalize,
 			abort: finalize,
@@ -650,32 +696,6 @@ export class OutputSink {
 			artifactId: this.#file?.artifactId,
 		};
 	}
-
-	// -- private ---------------------------------------------------------------
-
-	async #ensureFileSink(): Promise<Bun.FileSink | null> {
-		if (!this.#artifactPath) return null;
-		if (this.#file) return this.#file.sink;
-
-		try {
-			const sink = Bun.file(this.#artifactPath).writer();
-			this.#file = { path: this.#artifactPath, artifactId: this.#artifactId, sink };
-
-			// Flush existing buffer to file BEFORE it gets trimmed further.
-			if (this.#buffer.length > 0) {
-				await sink.write(this.#buffer);
-			}
-			return sink;
-		} catch {
-			try {
-				await this.#file?.sink?.end();
-			} catch {
-				/* ignore */
-			}
-			this.#file = undefined;
-			return null;
-		}
-	}
 }
 
 // =============================================================================
@@ -693,7 +713,7 @@ export function formatTailTruncationNotice(
 	if (!truncation.truncated) return "";
 
 	const { fullOutputPath, originalContent, suffix = "" } = options;
-	const startLine = truncation.totalLines - truncation.outputLines + 1;
+	const startLine = truncation.totalLines - (truncation.outputLines ?? truncation.totalLines) + 1;
 	const endLine = truncation.totalLines;
 	const fullOutputPart = fullOutputPath ? `. Full output: ${fullOutputPath}` : "";
 
@@ -705,11 +725,9 @@ export function formatTailTruncationNotice(
 			const lastLine = lastNl === -1 ? originalContent : originalContent.substring(lastNl + 1);
 			lastLineSizePart = ` (line is ${formatBytes(Buffer.byteLength(lastLine, "utf-8"))})`;
 		}
-		notice = `[Showing last ${formatBytes(truncation.outputBytes)} of line ${endLine}${lastLineSizePart}${fullOutputPart}${suffix}]`;
-	} else if (truncation.truncatedBy === "lines") {
-		notice = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}${fullOutputPart}${suffix}]`;
+		notice = `[Showing last ${formatBytes(truncation.outputBytes ?? truncation.totalBytes)} of line ${endLine}${lastLineSizePart}${fullOutputPart}${suffix}]`;
 	} else {
-		notice = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatBytes(truncation.maxBytes)} limit)${fullOutputPart}${suffix}]`;
+		notice = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}${fullOutputPart}${suffix}]`;
 	}
 
 	return `\n\n${notice}`;
@@ -727,13 +745,8 @@ export function formatHeadTruncationNotice(
 
 	const startLineDisplay = options.startLine ?? 1;
 	const totalFileLines = options.totalFileLines ?? truncation.totalLines;
-	const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+	const endLineDisplay = startLineDisplay + (truncation.outputLines ?? truncation.totalLines) - 1;
 	const nextOffset = endLineDisplay + 1;
-
-	const notice =
-		truncation.truncatedBy === "lines"
-			? `[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue]`
-			: `[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatBytes(truncation.maxBytes)} limit). Use offset=${nextOffset} to continue]`;
-
+	const notice = `[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue]`;
 	return `\n\n${notice}`;
 }

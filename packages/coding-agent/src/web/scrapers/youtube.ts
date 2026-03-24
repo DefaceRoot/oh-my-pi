@@ -2,9 +2,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ptree, Snowflake } from "@oh-my-pi/pi-utils";
+import { settings } from "../../config/settings";
 import { throwIfAborted } from "../../tools/tool-errors";
 import { ensureTool } from "../../utils/tools-manager";
-import { summarizeUrlWithKagi } from "../kagi";
+import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../parallel";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, formatMediaDuration, formatNumber } from "./types";
 
@@ -110,20 +111,31 @@ export const handleYouTube: SpecialHandler = async (
 	const notes: string[] = [];
 	const videoUrl = `https://www.youtube.com/watch?v=${yt.videoId}`;
 
-	// Prefer Kagi Universal Summarizer when credentials are available
-	try {
-		const kagiSummary = await summarizeUrlWithKagi(videoUrl, { signal });
-		if (kagiSummary && kagiSummary.length > 100) {
-			return buildResult(kagiSummary, {
-				url,
-				finalUrl: videoUrl,
-				method: "kagi",
-				fetchedAt,
-				notes: ["Used Kagi Universal Summarizer for YouTube"],
+	// Prefer Parallel extract when credentials are available
+	if (settings.get("providers.parallelFetch") && (await findParallelApiKey())) {
+		try {
+			const parallelResult = await extractWithParallel([videoUrl], {
+				objective: "Extract the main content of this YouTube video page",
+				excerpts: true,
+				fullContent: false,
+				signal,
 			});
+			const firstDocument = parallelResult.results[0];
+			if (firstDocument) {
+				const content = getParallelExtractContent(firstDocument);
+				if (content.trim().length > 100) {
+					return buildResult(content, {
+						url,
+						finalUrl: videoUrl,
+						method: "parallel",
+						fetchedAt,
+						notes: ["Used Parallel extract for YouTube"],
+					});
+				}
+			}
+		} catch {
+			throwIfAborted(signal);
 		}
-	} catch {
-		throwIfAborted(signal);
 	}
 
 	// Ensure yt-dlp is available (auto-download if missing)

@@ -5,15 +5,27 @@
  * and after compaction the session is reloaded.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, completeSimple, Effort, type Model, type Usage } from "@oh-my-pi/pi-ai";
+import {
+	type AssistantMessage,
+	completeSimple,
+	Effort,
+	type MessageAttribution,
+	type Model,
+	type Usage,
+} from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
+import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { normalizeResponsesToolCallId } from "@oh-my-pi/pi-ai/utils";
+import {
+	getOpenAIResponsesHistoryItems,
+	getOpenAIResponsesHistoryPayload,
+	normalizeResponsesToolCallId,
+} from "@oh-my-pi/pi-ai/utils";
 import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import compactionShortSummaryPrompt from "../../prompts/compaction/compaction-short-summary.md" with { type: "text" };
@@ -124,6 +136,7 @@ export interface CompactionSettings {
 	enabled: boolean;
 	strategy?: "context-full" | "handoff" | "off";
 	thresholdPercent?: number;
+	thresholdTokens?: number;
 	reserveTokens: number;
 	keepRecentTokens: number;
 	autoContinue?: boolean;
@@ -135,6 +148,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
 	strategy: "context-full",
 	thresholdPercent: -1,
+	thresholdTokens: -1,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
 	autoContinue: true,
@@ -206,6 +220,14 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 }
 
 function resolveThresholdTokens(contextWindow: number, settings: CompactionSettings): number {
+	// Fixed token limit takes priority over percentage
+	const thresholdTokens = settings.thresholdTokens;
+	if (typeof thresholdTokens === "number" && Number.isFinite(thresholdTokens) && thresholdTokens > 0) {
+		// Clamp to [1, contextWindow - 1] so there's always room
+		return Math.min(contextWindow - 1, Math.max(1, thresholdTokens));
+	}
+
+	// Percentage-based threshold
 	const thresholdPercent = settings.thresholdPercent;
 	if (typeof thresholdPercent !== "number" || !Number.isFinite(thresholdPercent) || thresholdPercent <= 0) {
 		return contextWindow - effectiveReserveTokens(contextWindow, settings);
@@ -473,6 +495,7 @@ type OpenAiRemoteCompactionItem = {
 };
 
 interface OpenAiRemoteCompactionPreserveData {
+	provider?: string;
 	replacementHistory: Array<Record<string, unknown>>;
 	compactionItem: OpenAiRemoteCompactionItem;
 }
@@ -523,7 +546,7 @@ function getPreservedOpenAiRemoteCompactionData(
 ): OpenAiRemoteCompactionPreserveData | undefined {
 	const candidate = preserveData?.[OPENAI_REMOTE_COMPACTION_PRESERVE_KEY];
 	if (!candidate || typeof candidate !== "object") return undefined;
-	const maybeData = candidate as { replacementHistory?: unknown; compactionItem?: unknown };
+	const maybeData = candidate as { provider?: unknown; replacementHistory?: unknown; compactionItem?: unknown };
 	if (!Array.isArray(maybeData.replacementHistory)) return undefined;
 	const maybeItem = maybeData.compactionItem;
 	if (!maybeItem || typeof maybeItem !== "object") return undefined;
@@ -535,6 +558,7 @@ function getPreservedOpenAiRemoteCompactionData(
 		return undefined;
 	}
 	return {
+		provider: typeof maybeData.provider === "string" ? maybeData.provider : undefined,
 		replacementHistory: maybeData.replacementHistory as Array<Record<string, unknown>>,
 		compactionItem: compactionItem as unknown as OpenAiRemoteCompactionItem,
 	};
@@ -634,15 +658,6 @@ function trimOpenAiCompactInput(
 	return trimmed;
 }
 
-function getOpenAIResponsesHistoryItems(
-	providerPayload: { type?: string; items?: unknown } | undefined,
-): Array<Record<string, unknown>> | undefined {
-	if (providerPayload?.type !== "openaiResponsesHistory" || !Array.isArray(providerPayload.items)) {
-		return undefined;
-	}
-	return providerPayload.items as Array<Record<string, unknown>>;
-}
-
 function collectKnownOpenAiCallIds(items: Array<Record<string, unknown>>): Set<string> {
 	const knownCallIds = new Set<string>();
 	for (const item of items) {
@@ -667,8 +682,8 @@ function buildOpenAiNativeHistory(
 	let knownCallIds = collectKnownOpenAiCallIds(input);
 	for (const message of transformedMessages) {
 		if (message.role === "user" || message.role === "developer") {
-			const providerPayload = (message as { providerPayload?: { type?: string; items?: unknown } }).providerPayload;
-			const historyItems = getOpenAIResponsesHistoryItems(providerPayload);
+			const providerPayload = (message as { providerPayload?: AssistantMessage["providerPayload"] }).providerPayload;
+			const historyItems = getOpenAIResponsesHistoryItems(providerPayload, model.provider);
 			if (historyItems) {
 				input.push(...historyItems);
 				knownCallIds = collectKnownOpenAiCallIds(input);
@@ -705,22 +720,22 @@ function buildOpenAiNativeHistory(
 		}
 
 		if (message.role === "assistant") {
-			const providerPayload = (
-				message as { providerPayload?: { type?: string; incremental?: boolean; items?: unknown } }
-			).providerPayload;
-			const historyItems = getOpenAIResponsesHistoryItems(providerPayload);
-			if (historyItems) {
-				if (providerPayload?.incremental) {
-					input.push(...historyItems);
+			const assistant = message as AssistantMessage;
+			const providerPayload = getOpenAIResponsesHistoryPayload(
+				assistant.providerPayload,
+				model.provider,
+				assistant.provider,
+			);
+			if (providerPayload) {
+				if (providerPayload.dt) {
+					input.push(...providerPayload.items);
 				} else {
-					input.splice(0, input.length, ...historyItems);
+					input.splice(0, input.length, ...providerPayload.items);
 				}
 				knownCallIds = collectKnownOpenAiCallIds(input);
 				msgIndex++;
 				continue;
 			}
-
-			const assistant = message as AssistantMessage;
 			const isDifferentModel =
 				assistant.model !== model.id && assistant.provider === model.provider && assistant.api === model.api;
 
@@ -742,7 +757,8 @@ function buildOpenAiNativeHistory(
 
 				if (block.type === "text") {
 					if (!block.text || block.text.trim().length === 0) continue;
-					let msgId = block.textSignature;
+					const parsedSignature = parseTextSignature(block.textSignature);
+					let msgId = parsedSignature?.id;
 					if (!msgId) {
 						msgId = `msg_${msgIndex}`;
 					} else if (msgId.length > 64) {
@@ -754,11 +770,12 @@ function buildOpenAiNativeHistory(
 						content: [{ type: "output_text", text: block.text.toWellFormed(), annotations: [] }],
 						status: "completed",
 						id: msgId,
+						phase: parsedSignature?.phase,
 					});
 					continue;
 				}
 
-				if (block.type === "toolCall" && assistant.stopReason !== "error") {
+				if (block.type === "toolCall") {
 					const normalized = normalizeResponsesToolCallId(block.id);
 					let itemId: string | undefined = normalized.itemId;
 					if (isDifferentModel && (itemId?.startsWith("fc_") || itemId?.startsWith("fcr_"))) {
@@ -889,7 +906,7 @@ async function requestOpenAiRemoteCompaction(
 		});
 		throw new Error("Remote compaction response missing compaction item");
 	}
-	return { replacementHistory, compactionItem };
+	return { provider: model.provider, replacementHistory, compactionItem };
 }
 
 interface RemoteCompactionRequest {
@@ -935,6 +952,7 @@ export interface SummaryOptions {
 	extraContext?: string[];
 	remoteEndpoint?: string;
 	remoteInstructions?: string;
+	initiatorOverride?: MessageAttribution;
 }
 
 export async function generateSummary(
@@ -990,7 +1008,7 @@ export async function generateSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, reasoning: Effort.High },
+		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
 	);
 
 	if (response.stopReason === "error") {
@@ -1039,7 +1057,7 @@ async function generateShortSummary(
 			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
 			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 		},
-		{ maxTokens, signal, apiKey, reasoning: Effort.High },
+		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
 	);
 
 	if (response.stopReason === "error") {
@@ -1218,17 +1236,18 @@ export async function compact(
 		extraContext: options?.extraContext,
 		remoteEndpoint: settings.remoteEnabled === false ? undefined : settings.remoteEndpoint,
 		remoteInstructions: options?.remoteInstructions,
+		initiatorOverride: options?.initiatorOverride,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
 	if (settings.remoteEnabled !== false && shouldUseOpenAiRemoteCompaction(model)) {
 		const previousRemoteCompaction = getPreservedOpenAiRemoteCompactionData(previousPreserveData);
 		const remoteMessages = [...messagesToSummarize, ...turnPrefixMessages, ...recentMessages];
-		const remoteHistory = buildOpenAiNativeHistory(
-			remoteMessages,
-			model,
-			previousRemoteCompaction?.replacementHistory,
-		);
+		const previousReplacementHistory =
+			previousRemoteCompaction?.provider === model.provider
+				? previousRemoteCompaction.replacementHistory
+				: undefined;
+		const remoteHistory = buildOpenAiNativeHistory(remoteMessages, model, previousReplacementHistory);
 		if (remoteHistory.length > 0) {
 			try {
 				const remote = await requestOpenAiRemoteCompaction(
@@ -1266,7 +1285,14 @@ export async function compact(
 						summaryOptions,
 					)
 				: Promise.resolve("No prior history."),
-			generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
+			generateTurnPrefixSummary(
+				turnPrefixMessages,
+				model,
+				settings.reserveTokens,
+				apiKey,
+				signal,
+				summaryOptions.initiatorOverride,
+			),
 		]);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -1297,7 +1323,11 @@ export async function compact(
 		settings.reserveTokens,
 		apiKey,
 		signal,
-		{ extraContext: options?.extraContext, remoteEndpoint: summaryOptions.remoteEndpoint },
+		{
+			extraContext: options?.extraContext,
+			remoteEndpoint: summaryOptions.remoteEndpoint,
+			initiatorOverride: summaryOptions.initiatorOverride,
+		},
 	);
 
 	// Compute file lists and append to summary
@@ -1327,6 +1357,7 @@ async function generateTurnPrefixSummary(
 	reserveTokens: number,
 	apiKey: string,
 	signal?: AbortSignal,
+	initiatorOverride?: MessageAttribution,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
@@ -1344,7 +1375,7 @@ async function generateTurnPrefixSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, reasoning: Effort.High },
+		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride },
 	);
 
 	if (response.stopReason === "error") {

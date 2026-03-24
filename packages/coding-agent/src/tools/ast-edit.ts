@@ -14,7 +14,14 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
-import { hasGlobPathChars, parseSearchPath, resolveToCwd } from "./path-utils";
+import {
+	combineSearchGlobs,
+	hasGlobPathChars,
+	normalizePathLikeInput,
+	parseSearchPath,
+	resolveMultiSearchPath,
+	resolveToCwd,
+} from "./path-utils";
 import {
 	dedupeParseErrors,
 	formatCount,
@@ -38,7 +45,8 @@ const astEditSchema = Type.Object({
 	}),
 	lang: Type.Optional(Type.String({ description: "Language override" })),
 	path: Type.Optional(Type.String({ description: "File, directory, or glob pattern to rewrite (default: cwd)" })),
-	selector: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
+	glob: Type.Optional(Type.String({ description: "Optional glob filter relative to path" })),
+	sel: Type.Optional(Type.String({ description: "Optional selector for contextual pattern mode" })),
 	limit: Type.Optional(Type.Number({ description: "Max total replacements" })),
 });
 
@@ -97,9 +105,14 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			}
 			const maxFiles = parseInt(process.env.PI_MAX_AST_FILES ?? "", 10) || 1000;
 
+			const formatScopePath = (targetPath: string): string => {
+				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
+				return relative.length === 0 ? "." : relative;
+			};
 			let searchPath: string | undefined;
-			let globFilter: string | undefined;
-			const rawPath = params.path?.trim();
+			let scopePath: string | undefined;
+			let globFilter = params.glob ? normalizePathLikeInput(params.glob) || undefined : undefined;
+			const rawPath = params.path ? normalizePathLikeInput(params.path) || undefined : undefined;
 			if (rawPath) {
 				const internalRouter = this.session.internalRouter;
 				if (internalRouter?.canHandle(rawPath)) {
@@ -111,21 +124,29 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						throw new ToolError(`Cannot rewrite internal URL without backing file: ${rawPath}`);
 					}
 					searchPath = resource.sourcePath;
+					scopePath = formatScopePath(searchPath);
 				} else {
-					const parsedPath = parseSearchPath(rawPath);
-					searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
-					globFilter = parsedPath.glob;
+					const multiSearchPath = await resolveMultiSearchPath(rawPath, this.session.cwd, globFilter);
+					if (multiSearchPath) {
+						searchPath = multiSearchPath.basePath;
+						globFilter = multiSearchPath.glob;
+						scopePath = multiSearchPath.scopePath;
+					} else {
+						const parsedPath = parseSearchPath(rawPath);
+						searchPath = resolveToCwd(parsedPath.basePath, this.session.cwd);
+						globFilter = combineSearchGlobs(parsedPath.glob, globFilter);
+						scopePath = formatScopePath(searchPath);
+					}
 				}
 			}
-
 			const resolvedSearchPath = searchPath ?? resolveToCwd(".", this.session.cwd);
-			const scopePath = path.relative(this.session.cwd, resolvedSearchPath).replace(/\\/g, "/") || ".";
+			scopePath = scopePath ?? formatScopePath(resolvedSearchPath);
 			let isDirectory: boolean;
 			try {
 				const stat = await Bun.file(resolvedSearchPath).stat();
 				isDirectory = stat.isDirectory();
 			} catch {
-				throw new ToolError(`Path not found: ${resolvedSearchPath}`);
+				throw new ToolError(`Path not found: ${scopePath}`);
 			}
 
 			const result = await astEdit({
@@ -133,7 +154,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				lang: params.lang?.trim(),
 				path: resolvedSearchPath,
 				glob: globFilter,
-				selector: params.selector?.trim(),
+				selector: params.sel?.trim(),
 				dryRun: true,
 				maxReplacements,
 				maxFiles,
@@ -277,7 +298,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							lang: params.lang?.trim(),
 							path: resolvedSearchPath,
 							glob: globFilter,
-							selector: params.selector?.trim(),
+							selector: params.sel?.trim(),
 							dryRun: false,
 							maxReplacements,
 							maxFiles,
@@ -320,7 +341,7 @@ interface AstEditRenderArgs {
 	ops?: Array<{ pat?: string; out?: string }>;
 	lang?: string;
 	path?: string;
-	selector?: string;
+	sel?: string;
 	limit?: number;
 }
 

@@ -21,6 +21,7 @@ import type {
 } from "../../config/settings-schema";
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
+import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 import { PluginSettingsComponent } from "./plugin-settings";
@@ -178,7 +179,7 @@ export class SettingsSelectorComponent extends Container {
 	#pluginComponent: PluginSettingsComponent | null = null;
 	#statusPreviewContainer: Container | null = null;
 	#statusPreviewText: Text | null = null;
-	#currentTabId: SettingTab | "plugins" = "display";
+	#currentTabId: SettingTab | "plugins" = "appearance";
 
 	constructor(
 		private readonly context: SettingsRuntimeContext,
@@ -200,7 +201,7 @@ export class SettingsSelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 
 		// Initialize with first tab
-		this.#switchToTab("display");
+		this.#switchToTab("appearance");
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());
@@ -289,6 +290,9 @@ export class SettingsSelectorComponent extends Container {
 	#getSubmenuCurrentValue(path: SettingPath, value: unknown): string {
 		const rawValue = String(value ?? "");
 		if (path === "compaction.thresholdPercent" && (rawValue === "-1" || rawValue === "")) {
+			return "default";
+		}
+		if (path === "compaction.thresholdTokens" && (rawValue === "-1" || rawValue === "")) {
 			return "default";
 		}
 		return rawValue;
@@ -393,6 +397,8 @@ export class SettingsSelectorComponent extends Container {
 		const currentValue = settings.get(path);
 		if (path === "compaction.thresholdPercent" && value === "default") {
 			settings.set(path, -1 as never);
+		} else if (path === "compaction.thresholdTokens" && value === "default") {
+			settings.set(path, -1 as never);
 		} else if (typeof currentValue === "number") {
 			settings.set(path, Number(value) as never);
 		} else if (typeof currentValue === "boolean") {
@@ -416,8 +422,8 @@ export class SettingsSelectorComponent extends Container {
 			}
 		}
 
-		// Add status line preview for status tab
-		if (tabId === "status") {
+		// Add status line preview for appearance tab
+		if (tabId === "appearance") {
 			this.#statusPreviewContainer = new Container();
 			this.#statusPreviewContainer.addChild(new Spacer(1));
 			this.#statusPreviewContainer.addChild(new Text(theme.fg("muted", "Preview:"), 0, 0));
@@ -442,7 +448,7 @@ export class SettingsSelectorComponent extends Container {
 					settings.set(path, boolValue as never);
 					this.callbacks.onChange(path, boolValue);
 
-					if (tabId === "status") {
+					if (tabId === "appearance") {
 						this.#triggerStatusLinePreview();
 					}
 				} else if (def.type === "enum") {
@@ -485,7 +491,7 @@ export class SettingsSelectorComponent extends Container {
 	 * Update the inline status preview text.
 	 */
 	#updateStatusPreview(): void {
-		if (this.#statusPreviewText && this.#currentTabId === "status") {
+		if (this.#statusPreviewText && this.#currentTabId === "appearance") {
 			this.#statusPreviewText.setText(this.#getStatusPreviewString());
 		}
 	}
@@ -516,7 +522,7 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		// Escape at top level cancels
-		if ((matchesKey(data, "escape") || matchesKey(data, "esc")) && !this.#currentSubmenu) {
+		if (matchesAppInterrupt(data) && !this.#currentSubmenu) {
 			this.callbacks.onCancel();
 			return;
 		}

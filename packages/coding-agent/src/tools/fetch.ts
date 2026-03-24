@@ -7,6 +7,7 @@ import { ptree, truncate } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { parseHTML } from "linkedom";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { type Theme, theme } from "../modes/theme/theme";
 import fetchDescription from "../prompts/tools/fetch.md" with { type: "text" };
@@ -15,7 +16,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
-import { summarizeUrlWithKagi } from "../web/kagi";
+import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
 import { specialHandlers } from "../web/scrapers";
 import type { RenderResult } from "../web/scrapers/types";
 import { finalizeOutput, loadPage, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
@@ -97,14 +98,28 @@ function hasCommand(cmd: string): boolean {
 }
 
 /**
- * Extract origin from URL
+ * Build llms.txt candidates scoped to the requested URL
  */
-function getOrigin(url: string): string {
+function buildLlmEndpointCandidates(url: string): string[] {
 	try {
 		const parsed = new URL(url);
-		return `${parsed.protocol}//${parsed.host}`;
+		if (parsed.pathname === "/") {
+			return [`${parsed.origin}/.well-known/llms.txt`, `${parsed.origin}/llms.txt`, `${parsed.origin}/llms.md`];
+		}
+
+		const trimmedPath = parsed.pathname.replace(/\/+$/, "");
+		const segments = trimmedPath.split("/").filter(Boolean);
+		const scopeDepth = parsed.pathname.endsWith("/") ? segments.length : Math.max(segments.length - 1, 1);
+		const endpoints: string[] = [];
+
+		for (let depth = scopeDepth; depth >= 1; depth--) {
+			const scope = `/${segments.slice(0, depth).join("/")}/`;
+			endpoints.push(`${parsed.origin}${scope}llms.txt`, `${parsed.origin}${scope}llms.md`);
+		}
+
+		return endpoints;
 	} catch {
-		return "";
+		return [];
 	}
 }
 
@@ -227,10 +242,14 @@ async function tryMdSuffix(url: string, timeout: number, signal?: AbortSignal): 
 /**
  * Try to fetch LLM-friendly endpoints
  */
-async function tryLlmEndpoints(origin: string, timeout: number, signal?: AbortSignal): Promise<string | null> {
-	const endpoints = [`${origin}/.well-known/llms.txt`, `${origin}/llms.txt`, `${origin}/llms.md`];
+async function tryLlmEndpoints(
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; endpoint: string } | null> {
+	const endpoints = buildLlmEndpointCandidates(url);
 
-	if (signal?.aborted) {
+	if (signal?.aborted || endpoints.length === 0) {
 		return null;
 	}
 
@@ -240,7 +259,7 @@ async function tryLlmEndpoints(origin: string, timeout: number, signal?: AbortSi
 		}
 		const result = await loadPage(endpoint, { timeout: Math.min(timeout, 5), signal });
 		if (result.ok && result.content.trim().length > 100 && !looksLikeHtml(result.content)) {
-			return result.content;
+			return { content: result.content, endpoint };
 		}
 	}
 	return null;
@@ -448,13 +467,13 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
 }
 
 /**
- * Render HTML to markdown using kagi, jina, trafilatura, lynx (in order of preference)
+ * Render HTML to markdown using Parallel, jina, trafilatura, lynx (in order of preference)
  */
 async function renderHtmlToText(
 	url: string,
 	html: string,
 	timeout: number,
-	useKagiSummarizer: boolean,
+	settings: Settings,
 	userSignal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const signal = ptree.combineSignals(userSignal, timeout * 1000);
@@ -466,20 +485,29 @@ async function renderHtmlToText(
 		signal,
 	};
 
-	// Try Kagi Universal Summarizer first (if enabled and KAGI_API_KEY is configured)
-	if (useKagiSummarizer) {
+	// Try Parallel extract first when credentials are configured
+	if (settings.get("providers.parallelFetch") && (await findParallelApiKey())) {
 		try {
-			const kagiSummary = await summarizeUrlWithKagi(url, { signal });
-			if (kagiSummary && kagiSummary.length > 100 && !isLowQualityOutput(kagiSummary)) {
-				return { content: kagiSummary, ok: true, method: "kagi" };
+			const parallelResult = await extractWithParallel([url], {
+				objective: "Extract the main content",
+				excerpts: true,
+				fullContent: false,
+				signal,
+			});
+			const firstDocument = parallelResult.results[0];
+			if (firstDocument) {
+				const content = getParallelExtractContent(firstDocument);
+				if (content.trim().length > 100 && !isLowQualityOutput(content)) {
+					return { content, ok: true, method: "parallel" };
+				}
 			}
 		} catch {
-			// Kagi failed, continue to next method
+			// Parallel extract failed, continue to next method
 			signal?.throwIfAborted();
 		}
 	}
 
-	// Try jina next (reader API)
+	// Try jina first (reader API)
 	try {
 		const jinaUrl = `https://r.jina.ai/${url}`;
 		const response = await fetch(jinaUrl, {
@@ -609,7 +637,7 @@ async function renderUrl(
 	url: string,
 	timeout: number,
 	raw: boolean,
-	useKagiSummarizer: boolean,
+	settings: Settings,
 	signal?: AbortSignal,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
@@ -634,7 +662,6 @@ async function renderUrl(
 
 	// Step 0: Normalize URL (ensure scheme for special handlers)
 	url = normalizeUrl(url);
-	const origin = getOrigin(url);
 
 	// Step 1: Try special handlers for known sites (unless raw mode)
 	if (!raw) {
@@ -718,7 +745,7 @@ async function renderUrl(
 				}
 
 				const resized = await resizeImage(
-					{ type: "image", data: binary.buffer.toBase64(), mimeType: imageMimeType },
+					{ type: "image", data: Buffer.from(binary.buffer).toBase64(), mimeType: imageMimeType },
 					{ maxBytes: MAX_INLINE_IMAGE_OUTPUT_BYTES },
 				);
 				const isDecodedImage =
@@ -912,24 +939,7 @@ async function renderUrl(
 			};
 		}
 
-		// 5C: LLM-friendly endpoints
-		const llmContent = await tryLlmEndpoints(origin, timeout, signal);
-		if (llmContent) {
-			notes.push("Found llms.txt");
-			const output = finalizeOutput(llmContent);
-			return {
-				url,
-				finalUrl,
-				contentType: "text/plain",
-				method: "llms.txt",
-				content: output.content,
-				fetchedAt,
-				truncated: output.truncated,
-				notes,
-			};
-		}
-
-		// 5D: Content negotiation
+		// 5C: Content negotiation
 		const negotiated = await tryContentNegotiation(url, timeout, signal);
 		if (negotiated) {
 			notes.push(`Content negotiation returned ${negotiated.type}`);
@@ -946,7 +956,7 @@ async function renderUrl(
 			};
 		}
 
-		// 5E: Check for feed alternates
+		// 5D: Check for feed alternates
 		const feedAlternates = alternates.filter(alt => !alt.endsWith(".md") && !alt.includes("markdown"));
 		for (const altUrl of feedAlternates.slice(0, 2)) {
 			const resolved = altUrl.startsWith("http") ? altUrl : new URL(altUrl, finalUrl).href;
@@ -972,8 +982,8 @@ async function renderUrl(
 			throw new ToolAbortError();
 		}
 
-		// Step 6: Render HTML with lynx or html2text
-		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, useKagiSummarizer, signal);
+		// 5E: Render HTML with lynx or html2text
+		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal);
 		if (!htmlResult.ok) {
 			notes.push("html rendering failed (lynx/html2text unavailable)");
 			const output = finalizeOutput(rawContent);
@@ -989,7 +999,7 @@ async function renderUrl(
 			};
 		}
 
-		// Step 7: If lynx output is low quality, try extracting document links
+		// Step 6: If rendered output is low quality, try more targeted fallbacks
 		if (isLowQualityOutput(htmlResult.content)) {
 			const docLinks = extractDocumentLinks(rawContent, finalUrl);
 			if (docLinks.length > 0) {
@@ -1019,6 +1029,23 @@ async function renderUrl(
 					notes.push(`Binary fetch failed: ${binary.error}`);
 				}
 			}
+
+			const llmResult = await tryLlmEndpoints(finalUrl, timeout, signal);
+			if (llmResult) {
+				notes.push(`Used llms.txt fallback: ${llmResult.endpoint}`);
+				const output = finalizeOutput(llmResult.content);
+				return {
+					url,
+					finalUrl,
+					contentType: "text/plain",
+					method: "llms.txt",
+					content: output.content,
+					fetchedAt,
+					truncated: output.truncated,
+					notes,
+				};
+			}
+
 			notes.push("Page appears to require JavaScript or is mostly navigation");
 		}
 
@@ -1096,8 +1123,7 @@ export class FetchTool implements AgentTool<typeof fetchSchema, FetchToolDetails
 			throw new ToolAbortError();
 		}
 
-		const useKagiSummarizer = this.session.settings.get("fetch.useKagiSummarizer");
-		const result = await renderUrl(url, effectiveTimeout, raw, useKagiSummarizer, signal);
+		const result = await renderUrl(url, effectiveTimeout, raw, this.session.settings, signal);
 		const truncation = truncateHead(result.content, {
 			maxBytes: DEFAULT_MAX_BYTES,
 			maxLines: FETCH_DEFAULT_MAX_LINES,
@@ -1133,7 +1159,7 @@ export class FetchTool implements AgentTool<typeof fetchSchema, FetchToolDetails
 			finalUrl: result.finalUrl,
 			contentType: result.contentType,
 			method: result.method,
-			truncated: result.truncated || needsArtifact,
+			truncated: Boolean(result.truncated || needsArtifact),
 			notes: result.notes,
 		};
 

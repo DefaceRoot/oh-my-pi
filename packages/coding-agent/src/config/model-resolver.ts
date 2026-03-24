@@ -142,6 +142,55 @@ function isAlias(id: string): boolean {
 }
 
 /**
+ * Find an exact model reference match.
+ * Supports either a bare model id or a canonical provider/modelId reference.
+ * When matching by bare id, ambiguous matches across providers are rejected.
+ */
+export function findExactModelReferenceMatch(
+	modelReference: string,
+	availableModels: Model<Api>[],
+): Model<Api> | undefined {
+	const trimmedReference = modelReference.trim();
+	if (!trimmedReference) {
+		return undefined;
+	}
+
+	const normalizedReference = trimmedReference.toLowerCase();
+
+	const canonicalMatches = availableModels.filter(
+		model => `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
+	);
+	if (canonicalMatches.length === 1) {
+		return canonicalMatches[0];
+	}
+	if (canonicalMatches.length > 1) {
+		return undefined;
+	}
+
+	const slashIndex = trimmedReference.indexOf("/");
+	if (slashIndex !== -1) {
+		const provider = trimmedReference.substring(0, slashIndex).trim();
+		const modelId = trimmedReference.substring(slashIndex + 1).trim();
+		if (provider && modelId) {
+			const providerMatches = availableModels.filter(
+				model =>
+					model.provider.toLowerCase() === provider.toLowerCase() &&
+					model.id.toLowerCase() === modelId.toLowerCase(),
+			);
+			if (providerMatches.length === 1) {
+				return providerMatches[0];
+			}
+			if (providerMatches.length > 1) {
+				return undefined;
+			}
+		}
+	}
+
+	const idMatches = availableModels.filter(model => model.id.toLowerCase() === normalizedReference);
+	return idMatches.length === 1 ? idMatches[0] : undefined;
+}
+
+/**
  * Try to match a pattern to a model from the available models list.
  * Returns the matched model or undefined if no match found.
  */
@@ -150,17 +199,17 @@ function tryMatchModel(
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
 ): Model<Api> | undefined {
-	// Check for provider/modelId format (provider is everything before the first /)
+	// Try exact reference match first (handles provider/modelId and bare id with ambiguity rejection)
+	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
+	if (exactRefMatch) {
+		return exactRefMatch;
+	}
+
+	// Check for provider/modelId format — fuzzy match within provider
 	const slashIndex = modelPattern.indexOf("/");
 	if (slashIndex !== -1) {
 		const provider = modelPattern.substring(0, slashIndex);
 		const modelId = modelPattern.substring(slashIndex + 1);
-		const providerMatch = availableModels.find(
-			m => m.provider.toLowerCase() === provider.toLowerCase() && m.id.toLowerCase() === modelId.toLowerCase(),
-		);
-		if (providerMatch) {
-			return providerMatch;
-		}
 
 		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === provider.toLowerCase());
 		if (providerModels.length > 0) {
@@ -187,10 +236,9 @@ function tryMatchModel(
 				return scored[0]?.model;
 			}
 		}
-		// No exact provider/model match - fall through to other matching
 	}
 
-	// Check for exact ID match (case-insensitive)
+	// Exact ID match (case-insensitive) — with ambiguity across providers handled by preference
 	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
@@ -318,16 +366,41 @@ export function parseModelPattern(
 const PREFIX_MODEL_ROLE = "pi/";
 const DEFAULT_MODEL_ROLE = "default";
 
-/**
- * Check if a model override value is effectively the default role.
- */
-export function isDefaultModelAlias(value: string | string[] | undefined): boolean {
-	if (!value) return true;
-	if (Array.isArray(value)) return value.every(entry => isDefaultModelAlias(entry));
-	if (value.startsWith(PREFIX_MODEL_ROLE)) {
-		value = value.slice(PREFIX_MODEL_ROLE.length);
+function getModelRoleAlias(value: string): ModelRole | undefined {
+	const normalized = value.trim();
+	if (!normalized.startsWith(PREFIX_MODEL_ROLE)) return undefined;
+
+	const candidate = normalized.slice(PREFIX_MODEL_ROLE.length);
+	for (const role of MODEL_ROLE_IDS) {
+		if (candidate === role) return role;
 	}
-	return value === DEFAULT_MODEL_ROLE;
+	return undefined;
+}
+
+function normalizeModelPatternList(value: string | string[] | undefined): string[] {
+	if (!value) return [];
+	const patterns = Array.isArray(value) ? value : value.split(",");
+	return patterns.map(pattern => pattern.trim()).filter(Boolean);
+}
+
+function isSessionInheritedAgentPattern(value: string): boolean {
+	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
+}
+
+function resolveConfiguredRolePattern(value: string, settings?: Settings): string | undefined {
+	const normalized = value.trim();
+	if (!normalized) return undefined;
+
+	const lastColonIndex = normalized.lastIndexOf(":");
+	const thinkingLevel =
+		lastColonIndex > PREFIX_MODEL_ROLE.length ? parseThinkingLevel(normalized.slice(lastColonIndex + 1)) : undefined;
+	const aliasCandidate = thinkingLevel ? normalized.slice(0, lastColonIndex) : normalized;
+	const role = getModelRoleAlias(aliasCandidate);
+	if (!role) return normalized;
+
+	const configured = settings?.getModelRole(role)?.trim();
+	if (!configured) return undefined;
+	return thinkingLevel ? `${configured}:${thinkingLevel}` : configured;
 }
 
 /**
@@ -335,14 +408,54 @@ export function isDefaultModelAlias(value: string | string[] | undefined): boole
  */
 export function expandRoleAlias(value: string, settings?: Settings): string {
 	const normalized = value.trim();
-	if (normalized === "default") return settings?.getModelRole("default") ?? value;
-	if (!normalized.startsWith(PREFIX_MODEL_ROLE)) return value;
-	const role = normalized.slice(PREFIX_MODEL_ROLE.length) as ModelRole;
-	if (!MODEL_ROLE_IDS.includes(role)) return value;
-	const resolvedRole = settings?.getModelRole(role);
-	if (resolvedRole) return resolvedRole;
+	if (normalized === DEFAULT_MODEL_ROLE) {
+		return settings?.getModelRole("default") ?? value;
+	}
+
+	const resolved = resolveConfiguredRolePattern(value, settings);
+	if (resolved !== undefined) return resolved;
+
+	// For ask role, fall back to default model if not configured
+	const role = getModelRoleAlias(normalized);
 	if (role === "ask") return settings?.getModelRole("default") ?? value;
+
 	return value;
+}
+
+export function resolveConfiguredModelPatterns(value: string | string[] | undefined, settings?: Settings): string[] {
+	const patterns = normalizeModelPatternList(value);
+	return patterns.flatMap(pattern => {
+		const resolved = resolveConfiguredRolePattern(pattern, settings);
+		return resolved ? [resolved] : [];
+	});
+}
+
+export interface AgentModelPatternResolutionOptions {
+	settingsOverride?: string | string[];
+	agentModel?: string | string[];
+	settings?: Settings;
+	activeModelPattern?: string;
+	fallbackModelPattern?: string;
+}
+
+export function resolveAgentModelPatterns(options: AgentModelPatternResolutionOptions): string[] {
+	const { settingsOverride, agentModel, settings, activeModelPattern, fallbackModelPattern } = options;
+
+	const overridePatterns = resolveConfiguredModelPatterns(settingsOverride, settings);
+	if (overridePatterns.length > 0) return overridePatterns;
+
+	const normalizedAgentPatterns = normalizeModelPatternList(agentModel);
+	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, settings);
+	const singleAgentPattern = normalizedAgentPatterns.length === 1 ? normalizedAgentPatterns[0] : undefined;
+	const agentInheritsSessionModel = singleAgentPattern ? isSessionInheritedAgentPattern(singleAgentPattern) : false;
+	if (configuredAgentPatterns.length > 0) {
+		if (!agentInheritsSessionModel) return configuredAgentPatterns;
+		if (singleAgentPattern === "pi/task") return configuredAgentPatterns;
+	}
+
+	const fallback =
+		activeModelPattern?.trim() || fallbackModelPattern?.trim() || settings?.getModelRole("default")?.trim() || "";
+	return resolveConfiguredModelPatterns(fallback, settings);
 }
 
 /**
@@ -370,13 +483,14 @@ export function resolveModelRoleValue(
 	}
 
 	const lastColonIndex = normalized.lastIndexOf(":");
-	const hasThinkingSuffix =
-		lastColonIndex > PREFIX_MODEL_ROLE.length && parseThinkingLevel(normalized.slice(lastColonIndex + 1));
-	const aliasCandidate = hasThinkingSuffix ? normalized.slice(0, lastColonIndex) : normalized;
-	const effectivePattern = expandRoleAlias(aliasCandidate, options?.settings);
-	const patternWithSuffix = hasThinkingSuffix
-		? `${effectivePattern}:${normalized.slice(lastColonIndex + 1)}`
-		: effectivePattern;
+	const thinkingSelector =
+		lastColonIndex > PREFIX_MODEL_ROLE.length ? parseThinkingLevel(normalized.slice(lastColonIndex + 1)) : undefined;
+	const aliasCandidate = thinkingSelector ? normalized.slice(0, lastColonIndex) : normalized;
+	const effectivePattern = resolveConfiguredRolePattern(aliasCandidate, options?.settings);
+	if (!effectivePattern) {
+		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
+	}
+	const patternWithSuffix = thinkingSelector ? `${effectivePattern}:${thinkingSelector}` : effectivePattern;
 	const { model, thinkingLevel, warning, explicitThinkingLevel } = parseModelPattern(
 		patternWithSuffix,
 		availableModels,

@@ -2,6 +2,201 @@
 
 ## [Unreleased]
 
+## [13.15.0] - 2026-03-23
+
+### Added
+
+- Added `isUsageLimitError()` to `rate-limit-utils` as a single source of truth for detecting usage/quota limit errors across all providers
+
+### Fixed
+
+- Fixed lazy stream forwarding to properly handle final results from source streams with `result()` methods
+- Fixed lazy stream error handling to convert iterator failures into terminal error results instead of silently failing
+- Fixed `parseRateLimitReason` to recognize "usage limit" in error messages and correctly classify them as `QUOTA_EXHAUSTED`
+- Fixed Codex `fetchWithRetry` retrying 429 responses for `usage_limit_reached` errors for up to 5 minutes instead of returning immediately for credential switching
+- Removed `usage.?limit` from `TRANSIENT_MESSAGE_PATTERN` in retry utils since usage limits are not transient and require credential rotation
+- Fixed `parseRateLimitReason` not recognizing "usage limit" in Codex error messages, causing incorrect fallback to `UNKNOWN` classification instead of `QUOTA_EXHAUSTED`
+
+## [13.14.2] - 2026-03-21
+### Changed
+
+- Updated thinking configuration format from `levels` array to `minLevel` and `maxLevel` properties for improved clarity
+- Corrected context window from 400000 to 272000 tokens for GPT-5.4 mini and nano variants on Codex transport
+- Normalized GPT-5.4 variant priority handling to use parsed variant instead of special-casing raw model IDs
+- Added support for `mini` variant in OpenAI model parsing regex
+
+### Fixed
+
+- Fixed inconsistent thinking level configuration across multiple model definitions
+
+## [13.14.0] - 2026-03-20
+
+### Fixed
+
+- Fixed resumed OpenAI Responses sessions to avoid replaying stale same-provider native history on the first follow-up after process restart ([#488](https://github.com/can1357/oh-my-pi/issues/488))
+
+### Added
+
+- Added bundled GPT-5.4 mini model metadata for OpenAI, OpenAI Codex, and GitHub Copilot, including low-to-xhigh thinking support and GitHub Copilot premium multiplier metadata
+- Added bundled GPT-5.4 nano model metadata for OpenAI and OpenAI Codex, including low-to-xhigh thinking support
+
+
+## [13.13.2] - 2026-03-18
+### Changed
+
+- Modified tool result handling for aborted assistant messages to preserve existing tool results when already recorded, instead of always replacing them with synthetic 'aborted' results
+
+## [13.13.0] - 2026-03-18
+### Changed
+
+- Changed tool argument validation to always normalize optional null values before type coercion, ensuring consistent handling of LLM-generated 'null' strings
+
+### Fixed
+
+- Fixed tool argument validation to properly handle string 'null' values from LLMs on optional fields by stripping them during normalization
+- Improved type safety of `validateToolCall` and `validateToolArguments` functions by returning properly typed `ToolCall["arguments"]` instead of `any`
+
+## [13.12.9] - 2026-03-17
+### Changed
+
+- Extracted OpenAI compatibility detection and resolution logic into dedicated `openai-completions-compat` module for improved maintainability and reusability
+
+### Fixed
+
+- Fixed `openai-responses` manual history replay to strip replay-only item IDs and preserve normalized tool `call_id` values for GitHub Copilot follow-up turns ([#457](https://github.com/can1357/oh-my-pi/issues/457))
+
+## [13.12.0] - 2026-03-14
+
+### Added
+
+- Added support for `qwen-chat-template` thinking format to enable reasoning via `chat_template_kwargs.enable_thinking`
+- Added `reasoningEffortMap` option to `OpenAICompat` for mapping pi-ai reasoning levels to provider-specific `reasoning_effort` values
+- Added `extraBody` to `OpenAICompat` to support provider-specific request body routing fields in OpenAI-completions requests
+- Added support for reading token usage from choice-level `usage` field as fallback when root-level usage is unavailable
+- Added new models: DeepSeek-V3.2 (Bedrock), Llama 3.1 405B Instruct, Magistral Small 1.2, Ministral 3 3B, Mistral Large 3, Pixtral Large (25.02), NVIDIA Nemotron Nano 3 30B, and Qwen3-5-9b
+- Added `close()` method to `AuthStorage` for properly closing the underlying credential store
+- Added `initiatorOverride` option in OpenAI and Anthropic providers to customize message attribution
+
+### Changed
+
+- Changed assistant message content serialization to always use plain string format instead of text block arrays to prevent recursive nesting in OpenAI-compatible backends
+- Changed Bedrock Opus 4.6 context window from 1M to 1M and added max tokens limit of 128K
+- Changed OpenCode Zen/Go Sonnet 4.0/4.5 context window from 1M to 200K
+- Changed GitHub Copilot context windows from 200K to 128K for both gpt-4o and gpt-4o-mini
+- Changed Claude 3.5 Sonnet (Anthropic API) pricing: input from $0.5 to $0.25, output from $3 to $1.5, cache read from $0.05 to $0.025, cache write from $0 to $1
+- Changed Devstral 2 model name from '135B' to '123B'
+- Changed ByteDance Seed 2.0-Lite to support reasoning with effort-based thinking mode and image inputs
+- Changed Qwen3-32b (Groq) reasoning effort mapping to normalize all levels to 'default'
+- Changed finish_reason 'end' to map to 'stop' for improved compatibility with additional providers
+- Changed Anthropic reference model merging to prioritize bundled metadata for known models while using models.dev for newly discovered IDs
+
+### Fixed
+
+- Fixed reasoning_effort parameter handling to use provider-specific mappings instead of raw effort values
+- Fixed assistant content serialization for GitHub Copilot and other OpenAI-compatible backends that mirror array payloads
+- Fixed token usage calculation to properly extract cached tokens from both root and nested `prompt_tokens_details` fields
+- Fixed stop reason mapping to handle string values and unknown finish reasons gracefully
+- Fixed resource cleanup in `AuthCredentialStore.close()` to properly finalize all prepared statements before closing the database
+
+## [13.11.1] - 2026-03-13
+
+### Fixed
+
+- Added `llama.cpp` as local provider
+- Fixed auth schema V0-to-V1 migration crash when the V0 table lacks a `disabled` column
+
+## [13.11.0] - 2026-03-12
+### Added
+
+- Added support for Parallel AI provider with API key authentication
+- Added `PARALLEL_API_KEY` environment variable support for Parallel provider configuration
+- Added automatic websocket reconnection handling for connection limit errors, with fallback to SSE replay when content has already been emitted
+
+### Changed
+
+- Enhanced `CodexProviderStreamError` to include an optional error code field for better error categorization and handling
+
+### Fixed
+
+- Improved retry logic to handle HTTP/2 stream errors and internal_error responses from Anthropic API
+
+## [13.9.16] - 2026-03-10
+### Added
+
+- Support for `onPayload` callback to replace provider request payloads before sending, enabling request interception and modification
+- Support for structured text signature metadata with phase information (commentary/final_answer) in OpenAI and Azure OpenAI Responses providers
+- Support for OpenAI Codex Spark model selection with plan-based account prioritization
+- Added `modelId` option to `getApiKey()` to enable model-specific credential ranking
+
+### Changed
+
+- Enhanced `onPayload` callback signature to accept model parameter and support async payload replacement
+- Improved error messages for `response.failed` events to include detailed error codes, messages, and incomplete reasons
+- Refactored OpenAI Codex response streaming to improve code organization and maintainability with extracted helper functions and type definitions
+- Enhanced websocket fallback logic to safely replay buffered output over SSE when websocket connections fail mid-stream
+- Improved error recovery for websocket streams by distinguishing between fatal connection errors and retryable stream errors
+- Updated credential ranking strategy to prioritize Pro plan accounts when requesting OpenAI Codex Spark models
+
+### Fixed
+
+- Fixed websocket stream recovery to properly reset output state and clear buffered items when falling back to SSE after partial output
+- Fixed handling of malformed JSON messages in websocket streams to trigger immediate fallback to SSE without retry attempts
+
+## [13.9.13] - 2026-03-10
+### Added
+
+- Added `isSpecialServiceTier` utility function to validate OpenAI service tier values
+
+## [13.9.12] - 2026-03-09
+### Added
+
+- Added Tavily web search provider support with API key authentication
+
+### Fixed
+
+- Fixed OpenAI-family streaming transports to fail with an explicit idle-timeout error instead of hanging indefinitely when the provider stops sending events mid-response
+- Fixed OpenAI Codex OAuth refresh and usage-limit lookups to respect request timeouts instead of waiting indefinitely during account selection or rotation
+- Fixed OpenAI Codex prewarmed websocket requests to fall back quickly when the socket connects but never starts the response stream
+
+## [13.9.10] - 2026-03-08
+
+### Added
+
+- Added `identity_key` column to auth credentials storage for improved credential deduplication
+- Added schema versioning system to auth credentials database for safer migrations
+- Added automatic backfilling of identity keys during database schema migrations
+
+### Changed
+
+- Changed credential deduplication logic to use single identity key instead of multiple identifiers for better performance
+- Changed database schema to store normalized identity keys alongside credentials
+- Changed auth schema migration to support upgrading from legacy database versions with automatic data backfill
+
+### Fixed
+
+- Fixed API key credential matching to correctly identify when the same key is re-stored, preventing unnecessary row duplication on re-login
+- Fixed credential deduplication to correctly handle OAuth accounts with matching emails but different account IDs
+- Fixed API key replacement to reuse existing stored rows instead of accumulating disabled duplicates
+- Fixed auth storage to preserve newer recorded schema versions when opened by older binaries
+
+## [13.9.8] - 2026-03-08
+### Fixed
+
+- Fixed WebSocket stream fallback logic to safely replay buffered output over SSE when WebSocket fails after partial content has been streamed
+
+## [13.9.4] - 2026-03-07
+### Changed
+
+- Simplified API key credential storage to always replace existing credentials on re-login instead of accumulating multiple keys
+- Updated Kagi API key placeholder from `kagi_...` to `KG_...` to match current API key format
+- Updated Kagi login instructions to clarify Search API access is beta-only and provide support contact
+- Disabled usage reporting in streaming responses for Cerebras models due to compatibility issues
+
+### Fixed
+
+- Fixed Cerebras model compatibility by preventing `stream_options` usage requests in chat completions
+
+## [13.9.3] - 2026-03-07
 ### Breaking Changes
 
 - Changed `reasoning` parameter from `ThinkingLevel | undefined` to `Effort | undefined` in `SimpleStreamOptions`; 'off' is no longer valid (omit the field instead)
@@ -32,6 +227,8 @@
 
 ### Changed
 
+- Changed credential disabling mechanism from boolean `disabled` flag to `disabled_cause` text field for tracking why credentials were disabled
+- Changed `deleteAuthCredential()` and `deleteAuthCredentialsForProvider()` methods to require a `disabledCause` parameter explaining the reason for disabling
 - Changed Gemini model parsing to strip `-preview` suffix for consistent model identification
 - Changed OpenAI Codex websocket error handling to detect fatal connection errors and immediately fall back to SSE without retrying
 - Changed OpenAI Codex to always use websockets v2 protocol (removed v1 support)
@@ -65,6 +262,7 @@
 
 ### Fixed
 
+- Fixed credential purging to respect disabled credentials when deduplicating by email, preventing re-enablement of intentionally disabled credentials
 - Fixed OpenAI Codex websocket error reporting to include detailed error messages from error events
 - Fixed conversation history reconstruction to support incremental updates from multiple assistant messages while maintaining backward compatibility with full-snapshot payloads
 - Fixed OpenAI Codex to reject unsupported effort levels instead of silently clamping them, providing clear error messages about supported efforts
@@ -73,6 +271,8 @@
 - Fixed OpenAI Codex streaming to properly include service_tier in SSE payloads
 - Fixed type safety in OpenAI responses by removing unsafe type casts on image content blocks
 - Fixed credential purging to respect disabled credentials when deduplicating by email
+- Fixed API-key provider re-login to replace the active stored key instead of appending stale credentials that were still selected first
+- Fixed Kagi login guidance to use the correct `KG_...` key format and mention Search API beta access requirements
 
 ## [13.9.2] - 2026-03-05
 

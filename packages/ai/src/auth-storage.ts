@@ -10,7 +10,7 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import { getEnvApiKey } from "./stream";
 import type { Provider } from "./types";
 import type {
@@ -31,6 +31,7 @@ import { zaiUsageProvider } from "./usage/zai";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oauth";
 // Re-export login functions so consumers of AuthStorage.login() have access
 // (these are used inside the login() switch-case)
+import { loginAlibabaCodingPlan } from "./utils/oauth/alibaba-coding-plan";
 import { loginAnthropic } from "./utils/oauth/anthropic";
 import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
@@ -52,10 +53,12 @@ import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
+import { loginParallel } from "./utils/oauth/parallel";
 import { loginPerplexity } from "./utils/oauth/perplexity";
 import { loginQianfan } from "./utils/oauth/qianfan";
 import { loginQwenPortal } from "./utils/oauth/qwen-portal";
 import { loginSynthetic } from "./utils/oauth/synthetic";
+import { loginTavily } from "./utils/oauth/tavily";
 import { loginTogether } from "./utils/oauth/together";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 import { loginVenice } from "./utils/oauth/venice";
@@ -108,6 +111,7 @@ export interface StoredAuthCredential {
 	id: number;
 	provider: string;
 	credential: AuthCredential;
+	disabledCause: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +166,7 @@ const DEFAULT_USAGE_PROVIDER_MAP = new Map<Provider, UsageProvider>(
 const USAGE_CACHE_PREFIX = "usage_cache:";
 const USAGE_REPORT_TTL_MS = 30_000;
 const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 3_000;
+const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 
 type UsageCacheEntry<T> = {
 	value: T;
@@ -179,6 +184,28 @@ type UsageRequestDescriptor = {
 	credential: UsageCredential;
 	baseUrl?: string;
 };
+
+type AuthApiKeyOptions = {
+	baseUrl?: string;
+	modelId?: string;
+};
+
+function requiresOpenAICodexProModel(provider: string, modelId: string | undefined): boolean {
+	return provider === "openai-codex" && typeof modelId === "string" && modelId.includes("-spark");
+}
+
+function getUsagePlanType(report: UsageReport | null): string | undefined {
+	const metadata = report?.metadata;
+	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
+	const planType = (metadata as { planType?: unknown }).planType;
+	return typeof planType === "string" ? planType.toLowerCase() : undefined;
+}
+
+function getOpenAICodexPlanPriority(report: UsageReport | null): number {
+	const planType = getUsagePlanType(report);
+	if (!planType) return 1;
+	return planType.includes("pro") ? 0 : 2;
+}
 
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
 	return DEFAULT_USAGE_PROVIDER_MAP.get(provider);
@@ -265,6 +292,7 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
+	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
 		this.#store = store;
@@ -290,6 +318,17 @@ export class AuthStorage {
 	static async create(dbPath: string, options: AuthStorageOptions = {}): Promise<AuthStorage> {
 		const store = await AuthCredentialStore.open(dbPath);
 		return new AuthStorage(store, options);
+	}
+
+	/**
+	 * Close the underlying credential store.
+	 *
+	 * After calling this, the instance must not be reused.
+	 */
+	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#store.close();
 	}
 
 	/**
@@ -360,76 +399,8 @@ export class AuthStorage {
 		}
 	}
 
-	#getOAuthIdentifiers(credential: OAuthCredential): string[] {
-		const identifiers = new Set<string>();
-		const accountId = credential.accountId?.trim();
-		if (accountId) identifiers.add(`account:${accountId}`);
-		const email = credential.email?.trim().toLowerCase();
-		if (email) identifiers.add(`email:${email}`);
-		const tokenIdentifiers = this.#getOAuthIdentifiersFromToken(credential.access) ?? [];
-		for (const identifier of tokenIdentifiers) {
-			identifiers.add(identifier);
-		}
-		const refreshIdentifiers = this.#getOAuthIdentifiersFromToken(credential.refresh) ?? [];
-		for (const identifier of refreshIdentifiers) {
-			identifiers.add(identifier);
-		}
-		return [...identifiers];
-	}
-
-	#getOAuthIdentifiersFromToken(token: string | undefined): string[] | undefined {
-		if (!token) return undefined;
-		const parts = token.split(".");
-		if (parts.length !== 3) return undefined;
-		const payloadRaw = parts[1];
-		const decoder = new TextDecoder("utf-8");
-		try {
-			const payload = JSON.parse(
-				decoder.decode(Uint8Array.fromBase64(payloadRaw, { alphabet: "base64url" })),
-			) as Record<string, unknown>;
-			if (!payload || typeof payload !== "object") return undefined;
-			const openAiAuth =
-				typeof payload["https://api.openai.com/auth"] === "object" &&
-				payload["https://api.openai.com/auth"] !== null
-					? (payload["https://api.openai.com/auth"] as Record<string, unknown>)
-					: undefined;
-			const openAiProfile =
-				typeof payload["https://api.openai.com/profile"] === "object" &&
-				payload["https://api.openai.com/profile"] !== null
-					? (payload["https://api.openai.com/profile"] as Record<string, unknown>)
-					: undefined;
-			const identifiers: string[] = [];
-			const email =
-				typeof payload.email === "string"
-					? payload.email.trim().toLowerCase()
-					: typeof openAiProfile?.email === "string"
-						? openAiProfile.email.trim().toLowerCase()
-						: undefined;
-			if (email) identifiers.push(`email:${email}`);
-			const accountId =
-				typeof payload.account_id === "string"
-					? payload.account_id
-					: typeof payload.accountId === "string"
-						? payload.accountId
-						: typeof payload.user_id === "string"
-							? payload.user_id
-							: typeof payload.sub === "string"
-								? payload.sub
-								: typeof openAiAuth?.chatgpt_account_id === "string"
-									? openAiAuth.chatgpt_account_id
-									: undefined;
-			const trimmedAccountId = accountId?.trim();
-			if (trimmedAccountId) identifiers.push(`account:${trimmedAccountId}`);
-			return identifiers.length > 0 ? identifiers : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
-	#resolveOAuthDedupeIdentifiers(provider: string, credential: OAuthCredential): string[] {
-		const identifiers = this.#getOAuthIdentifiers(credential);
-		if (provider !== "openai-codex") return identifiers;
-		return identifiers.filter(identifier => identifier.startsWith("email:"));
+	#resolveOAuthDedupeIdentityKey(provider: string, credential: OAuthCredential): string | null {
+		return resolveCredentialIdentityKey(provider, credential);
 	}
 
 	#dedupeOAuthCredentials(provider: string, credentials: AuthCredential[]): AuthCredential[] {
@@ -441,17 +412,15 @@ export class AuthStorage {
 				deduped.push(credential);
 				continue;
 			}
-			const identifiers = this.#resolveOAuthDedupeIdentifiers(provider, credential);
-			if (identifiers.length === 0) {
+			const identityKey = this.#resolveOAuthDedupeIdentityKey(provider, credential);
+			if (!identityKey) {
 				deduped.push(credential);
 				continue;
 			}
-			if (identifiers.some(identifier => seen.has(identifier))) {
+			if (seen.has(identityKey)) {
 				continue;
 			}
-			for (const identifier of identifiers) {
-				seen.add(identifier);
-			}
+			seen.add(identityKey);
 			deduped.push(credential);
 		}
 		return deduped.reverse();
@@ -468,23 +437,21 @@ export class AuthStorage {
 				kept.push(entry);
 				continue;
 			}
-			const identifiers = this.#resolveOAuthDedupeIdentifiers(provider, credential);
-			if (identifiers.length === 0) {
+			const identityKey = this.#resolveOAuthDedupeIdentityKey(provider, credential);
+			if (!identityKey) {
 				kept.push(entry);
 				continue;
 			}
-			if (identifiers.some(identifier => seen.has(identifier))) {
+			if (seen.has(identityKey)) {
 				removed.push(entry);
 				continue;
 			}
-			for (const identifier of identifiers) {
-				seen.add(identifier);
-			}
+			seen.add(identityKey);
 			kept.push(entry);
 		}
 		if (removed.length > 0) {
 			for (const entry of removed) {
-				this.#store.deleteAuthCredential(entry.id);
+				this.#store.deleteAuthCredential(entry.id, "deduplicated duplicate credential");
 			}
 			this.#resetProviderAssignments(provider);
 		}
@@ -659,10 +626,10 @@ export class AuthStorage {
 	 * The credential remains in the database but is excluded from active queries.
 	 * Cleans up provider entry if last credential disabled.
 	 */
-	#removeCredentialAt(provider: string, index: number): void {
+	#disableCredentialAt(provider: string, index: number, disabledCause: string): void {
 		const entries = this.#getStoredCredentials(provider);
 		if (index < 0 || index >= entries.length) return;
-		this.#store.deleteAuthCredential(entries[index].id);
+		this.#store.deleteAuthCredential(entries[index].id, disabledCause);
 		const updated = entries.filter((_value, idx) => idx !== index);
 		this.#setStoredCredentials(provider, updated);
 		this.#resetProviderAssignments(provider);
@@ -693,7 +660,7 @@ export class AuthStorage {
 	 * Remove credential for a provider.
 	 */
 	async remove(provider: string): Promise<void> {
-		this.#store.deleteAuthCredentialsForProvider(provider);
+		this.#store.deleteAuthCredentialsForProvider(provider, "deleted by user");
 		this.#data.delete(provider);
 		this.#resetProviderAssignments(provider);
 	}
@@ -771,17 +738,7 @@ export class AuthStorage {
 		let credentials: OAuthCredentials;
 		const saveApiKeyCredential = async (apiKey: string): Promise<void> => {
 			const newCredential: ApiKeyCredential = { type: "api_key", key: apiKey };
-			const shouldReplaceExisting = provider === "minimax-code" || provider === "minimax-code-cn";
-			if (shouldReplaceExisting) {
-				await this.set(provider, newCredential);
-				return;
-			}
-			const existing = this.#getCredentialsForProvider(provider);
-			if (existing.length === 0) {
-				await this.set(provider, newCredential);
-				return;
-			}
-			await this.set(provider, [...existing, newCredential]);
+			await this.set(provider, newCredential);
 		};
 		const manualCodeInput = () => ctrl.onPrompt({ message: "Paste the authorization code (or full redirect URL):" });
 		switch (provider) {
@@ -791,6 +748,11 @@ export class AuthStorage {
 					onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
 				});
 				break;
+			case "alibaba-coding-plan": {
+				const apiKey = await loginAlibabaCodingPlan(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "github-copilot":
 				credentials = await loginGitHubCopilot({
 					onAuth: (url, instructions) => ctrl.onAuth({ url, instructions }),
@@ -892,6 +854,11 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "tavily": {
+				const apiKey = await loginTavily(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "venice": {
 				const apiKey = await loginVenice(ctrl);
 				await saveApiKeyCredential(apiKey);
@@ -929,6 +896,11 @@ export class AuthStorage {
 			}
 			case "vllm": {
 				const apiKey = await loginVllm(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "parallel": {
+				const apiKey = await loginParallel(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1016,11 +988,17 @@ export class AuthStorage {
 		if (projectId) parts.push(`project:${projectId}`);
 		const enterpriseUrl = credential.enterpriseUrl?.trim().toLowerCase();
 		if (enterpriseUrl) parts.push(`enterprise:${enterpriseUrl}`);
-		const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
-		if (secret) {
-			parts.push(`secret:${Bun.hash(secret).toString(16)}`);
-		} else if (parts.length === 1) {
-			parts.push("anonymous");
+		// Only fall back to a secret-derived key when a stable account identifier is unavailable.
+		// Including the token hash when accountId/email are present causes cache misses on
+		// every OAuth refresh — usage data is per-account, not per-token.
+		const hasStableIdentifier = Boolean(accountId || email);
+		if (!hasStableIdentifier) {
+			const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
+			if (secret) {
+				parts.push(`secret:${Bun.hash(secret).toString(16)}`);
+			} else {
+				parts.push("anonymous");
+			}
 		}
 		return parts.join("|");
 	}
@@ -1390,7 +1368,7 @@ export class AuthStorage {
 	): Promise<UsageReport | null> {
 		return this.#fetchUsageCached(
 			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-			options?.timeoutMs,
+			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
 		);
 	}
 
@@ -1548,7 +1526,7 @@ export class AuthStorage {
 		provider: string;
 		order: number[];
 		credentials: Array<{ credential: OAuthCredential; index: number }>;
-		options?: { baseUrl?: string };
+		options?: AuthApiKeyOptions;
 		strategy: CredentialRankingStrategy;
 	}): Promise<
 		Array<{
@@ -1629,9 +1607,12 @@ export class AuthStorage {
 				if (leftBlockedUntil !== rightBlockedUntil) return leftBlockedUntil - rightBlockedUntil;
 				return left.orderPos - right.orderPos;
 			}
-			if (left.hasPriorityBoost !== right.hasPriorityBoost) {
-				return left.hasPriorityBoost ? -1 : 1;
+			if (requiresOpenAICodexProModel(args.provider, args.options?.modelId)) {
+				const leftPlanPriority = getOpenAICodexPlanPriority(left.usage);
+				const rightPlanPriority = getOpenAICodexPlanPriority(right.usage);
+				if (leftPlanPriority !== rightPlanPriority) return leftPlanPriority - rightPlanPriority;
 			}
+			if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
 			if (left.secondaryDrainRate !== right.secondaryDrainRate)
 				return left.secondaryDrainRate - right.secondaryDrainRate;
 			if (left.secondaryUsed !== right.secondaryUsed) return left.secondaryUsed - right.secondaryUsed;
@@ -1654,7 +1635,7 @@ export class AuthStorage {
 	async #resolveOAuthApiKey(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string },
+		options?: AuthApiKeyOptions,
 	): Promise<string | undefined> {
 		const credentials = this.#getCredentialsForProvider(provider)
 			.map((credential, index) => ({ credential, index }))
@@ -1672,9 +1653,10 @@ export class AuthStorage {
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
-		const shouldRank = checkUsage && !sessionPreferredIsAvailable;
+		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
 		const candidates = shouldRank
 			? await this.#rankOAuthSelections({ providerKey, provider, order, credentials, options, strategy: strategy! })
 			: order
@@ -1682,7 +1664,7 @@ export class AuthStorage {
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
 					.map(selection => ({ selection, usage: null, usageChecked: false }));
 
-		if (sessionPreferredIndex !== undefined) {
+		if (sessionPreferredIndex !== undefined && !requiresProModel) {
 			const sessionPreferredCandidate = candidates.findIndex(
 				candidate =>
 					!this.#isCredentialBlocked(providerKey, candidate.selection.index) &&
@@ -1742,13 +1724,28 @@ export class AuthStorage {
 	async #refreshOAuthCredential(provider: Provider, credential: OAuthCredential): Promise<OAuthCredentials> {
 		if (Date.now() < credential.expires) return credential;
 		const customProvider = getOAuthProvider(provider);
+		let refreshPromise: Promise<OAuthCredentials>;
 		if (customProvider) {
 			if (!customProvider.refreshToken) {
 				throw new Error(`OAuth provider "${provider}" does not support token refresh`);
 			}
-			return customProvider.refreshToken(credential);
+			refreshPromise = customProvider.refreshToken(credential);
+		} else {
+			refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
 		}
-		return refreshOAuthToken(provider as OAuthProvider, credential);
+		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
+		let timeout: NodeJS.Timeout | undefined;
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeout = setTimeout(
+				() => reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
+				DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+			);
+		});
+		try {
+			return await Promise.race([refreshPromise, timeoutPromise]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
@@ -1757,7 +1754,7 @@ export class AuthStorage {
 		selection: { credential: OAuthCredential; index: number },
 		providerKey: string,
 		sessionId: string | undefined,
-		options: { baseUrl?: string } | undefined,
+		options: AuthApiKeyOptions | undefined,
 		usageOptions: {
 			checkUsage: boolean;
 			allowBlocked: boolean;
@@ -1858,8 +1855,8 @@ export class AuthStorage {
 			});
 
 			if (isDefinitiveFailure) {
-				// Permanently remove invalid credentials
-				this.#removeCredentialAt(provider, selection.index);
+				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
+				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
 					return this.getApiKey(provider, sessionId, options);
 				}
@@ -1913,7 +1910,7 @@ export class AuthStorage {
 	 * 4. Environment variable
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
-	async getApiKey(provider: string, sessionId?: string, options?: { baseUrl?: string }): Promise<string | undefined> {
+	async getApiKey(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.#runtimeOverrides.get(provider);
 		if (runtimeKey) {
@@ -1950,15 +1947,40 @@ type AuthRow = {
 	provider: string;
 	credential_type: string;
 	data: string;
+	disabled_cause: string | null;
+	identity_key: string | null;
 };
 
-function serializeCredential(
-	credential: AuthCredential,
-): { credentialType: AuthCredential["type"]; data: string } | null {
+type SerializedCredentialRecord = {
+	credentialType: AuthCredential["type"];
+	data: string;
+	identityKey: string | null;
+};
+
+const AUTH_SCHEMA_VERSION = 4;
+const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
+
+function normalizeStoredAccountId(accountId: string | null | undefined): string | null {
+	const normalized = accountId?.trim();
+	return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function normalizeStoredEmail(email: string | null | undefined): string | null {
+	const normalized = email?.trim().toLowerCase();
+	return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function normalizeStoredIdentityKey(identityKey: string | null | undefined): string | null {
+	const normalized = identityKey?.trim();
+	return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function serializeCredential(credential: AuthCredential): SerializedCredentialRecord | null {
 	if (credential.type === "api_key") {
 		return {
 			credentialType: "api_key",
 			data: JSON.stringify({ key: credential.key }),
+			identityKey: null,
 		};
 	}
 	if (credential.type === "oauth") {
@@ -1966,6 +1988,7 @@ function serializeCredential(
 		return {
 			credentialType: "oauth",
 			data: JSON.stringify(rest),
+			identityKey: resolveCredentialIdentityKey("", credential),
 		};
 	}
 	return null;
@@ -1993,42 +2016,109 @@ function deserializeCredential(row: AuthRow): AuthCredential | null {
 	return null;
 }
 
-/** Extracts normalized email identifiers from a credential, including JWT profile claims. */
-function extractCredentialEmails(credential: AuthCredential): string[] {
-	if (credential.type !== "oauth") return [];
-	const emails = new Set<string>();
-	const storedEmail = credential.email?.trim().toLowerCase();
-	if (storedEmail) emails.add(storedEmail);
-	for (const token of [credential.access, credential.refresh]) {
-		if (!token) continue;
-		const parts = token.split(".");
-		if (parts.length !== 3) continue;
-		try {
-			const payload = JSON.parse(
-				new TextDecoder("utf-8").decode(Uint8Array.fromBase64(parts[1], { alphabet: "base64url" })),
-			) as Record<string, unknown>;
-			const directEmail = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : undefined;
-			if (directEmail) emails.add(directEmail);
-			const openAiProfile = payload["https://api.openai.com/profile"];
-			if (typeof openAiProfile === "object" && openAiProfile !== null && !Array.isArray(openAiProfile)) {
-				const claimEmail = (openAiProfile as Record<string, unknown>).email;
-				if (typeof claimEmail === "string") {
-					const normalizedClaimEmail = claimEmail.trim().toLowerCase();
-					if (normalizedClaimEmail) emails.add(normalizedClaimEmail);
-				}
-			}
-		} catch {}
+function normalizeDisabledCause(disabledCause: string): string {
+	const normalized = disabledCause.trim();
+	return normalized.length > 0 ? normalized : "disabled";
+}
+
+function toStoredAuthCredential(row: AuthRow, credential: AuthCredential): StoredAuthCredential {
+	return { id: row.id, provider: row.provider, credential, disabledCause: row.disabled_cause };
+}
+
+function resolveProviderCredentialIdentityKey(provider: string, identifiers: string[]): string | null {
+	const emailIdentifier = identifiers.find(identifier => identifier.startsWith("email:"));
+	if ((provider === "openai-codex" || provider === "anthropic") && emailIdentifier) return emailIdentifier;
+	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
+	if (accountIdentifier) return accountIdentifier;
+	if (emailIdentifier) return emailIdentifier;
+	return null;
+}
+
+function resolveCredentialIdentityKey(provider: string, credential: AuthCredential): string | null {
+	if (credential.type === "api_key") return null;
+	return resolveProviderCredentialIdentityKey(provider, extractOAuthCredentialIdentifiers(credential));
+}
+
+function resolveRowCredentialIdentityKey(provider: string, row: AuthRow): string | null {
+	const identityKey = normalizeStoredIdentityKey(row.identity_key);
+	if (identityKey) return identityKey;
+	const credential = deserializeCredential(row);
+	return credential?.type === "oauth" ? resolveCredentialIdentityKey(provider, credential) : null;
+}
+
+function matchesReplacementCredential(
+	provider: string,
+	existing: AuthCredential | null,
+	existingIdentityKey: string | null,
+	incoming: AuthCredential,
+): boolean {
+	if (!existing || existing.type !== incoming.type) return false;
+	if (incoming.type === "api_key") {
+		return existing.type === "api_key" && existing.key === incoming.key;
 	}
-	return [...emails];
+	const incomingIdentityKey = resolveCredentialIdentityKey(provider, incoming);
+	return incomingIdentityKey !== null && incomingIdentityKey === existingIdentityKey;
 }
 
-/**
- * Get default path to agent.db
- */
-function getAgentDbPath(): string {
-	return path.join(getAgentDir(), "agent.db");
+function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[] {
+	const identifiers = new Set<string>();
+	const accountId = normalizeStoredAccountId(credential.accountId);
+	if (accountId) identifiers.add(`account:${accountId}`);
+	const email = normalizeStoredEmail(credential.email);
+	if (email) identifiers.add(`email:${email}`);
+	const accessIdentifiers = extractOAuthTokenIdentifiers(credential.access) ?? [];
+	for (const identifier of accessIdentifiers) {
+		identifiers.add(identifier);
+	}
+	const refreshIdentifiers = extractOAuthTokenIdentifiers(credential.refresh) ?? [];
+	for (const identifier of refreshIdentifiers) {
+		identifiers.add(identifier);
+	}
+	return [...identifiers];
 }
 
+function extractOAuthTokenIdentifiers(token: string | undefined): string[] | undefined {
+	if (!token) return undefined;
+	const parts = token.split(".");
+	if (parts.length !== 3) return undefined;
+	try {
+		const payload = JSON.parse(
+			new TextDecoder("utf-8").decode(Uint8Array.fromBase64(parts[1], { alphabet: "base64url" })),
+		) as Record<string, unknown>;
+		const identifiers = new Set<string>();
+		const directEmail = normalizeStoredEmail(typeof payload.email === "string" ? payload.email : undefined);
+		if (directEmail) identifiers.add(`email:${directEmail}`);
+		const openAiProfile = payload["https://api.openai.com/profile"];
+		if (typeof openAiProfile === "object" && openAiProfile !== null && !Array.isArray(openAiProfile)) {
+			const claimEmail = normalizeStoredEmail(
+				(openAiProfile as Record<string, unknown>).email as string | undefined,
+			);
+			if (claimEmail) identifiers.add(`email:${claimEmail}`);
+		}
+		const openAiAuth = payload["https://api.openai.com/auth"];
+		const authClaims =
+			typeof openAiAuth === "object" && openAiAuth !== null && !Array.isArray(openAiAuth)
+				? (openAiAuth as Record<string, unknown>)
+				: undefined;
+		const accountId = normalizeStoredAccountId(
+			typeof payload.account_id === "string"
+				? payload.account_id
+				: typeof payload.accountId === "string"
+					? payload.accountId
+					: typeof payload.user_id === "string"
+						? payload.user_id
+						: typeof payload.sub === "string"
+							? payload.sub
+							: typeof authClaims?.chatgpt_account_id === "string"
+								? authClaims.chatgpt_account_id
+								: undefined,
+		);
+		if (accountId) identifiers.add(`account:${accountId}`);
+		return identifiers.size > 0 ? [...identifiers] : undefined;
+	} catch {
+		return undefined;
+	}
+}
 /**
  * Standalone SQLite-backed implementation of AuthCredentialStore interface.
  * Used by the pi-ai CLI and as the default store for AuthStorage.create().
@@ -2047,38 +2137,41 @@ export class AuthCredentialStore {
 	#getCacheStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
+	#closed = false;
 
 	constructor(db: Database) {
 		this.#db = db;
 		this.#initializeSchema();
 
 		this.#listActiveStmt = this.#db.prepare(
-			"SELECT id, provider, credential_type, data FROM auth_credentials WHERE disabled = 0 ORDER BY id ASC",
+			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE disabled_cause IS NULL ORDER BY id ASC",
 		);
 		this.#listActiveByProviderStmt = this.#db.prepare(
-			"SELECT id, provider, credential_type, data FROM auth_credentials WHERE provider = ? AND disabled = 0 ORDER BY id ASC",
+			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL ORDER BY id ASC",
 		);
 		this.#listDisabledByProviderStmt = this.#db.prepare(
-			"SELECT id, credential_type, data FROM auth_credentials WHERE provider = ? AND disabled = 1 ORDER BY id ASC",
+			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE provider = ? AND disabled_cause IS NOT NULL ORDER BY id ASC",
 		);
 		this.#insertStmt = this.#db.prepare(
-			"INSERT INTO auth_credentials (provider, credential_type, data) VALUES (?, ?, ?) RETURNING id",
+			`INSERT INTO auth_credentials (provider, credential_type, data, identity_key, created_at, updated_at) VALUES (?, ?, ?, ?, ${SQLITE_NOW_EPOCH}, ${SQLITE_NOW_EPOCH}) RETURNING id`,
 		);
 		this.#updateStmt = this.#db.prepare(
-			"UPDATE auth_credentials SET credential_type = ?, data = ?, updated_at = unixepoch() WHERE id = ?",
+			`UPDATE auth_credentials SET credential_type = ?, data = ?, identity_key = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
 		);
 		this.#deleteStmt = this.#db.prepare(
-			"UPDATE auth_credentials SET disabled = 1, updated_at = unixepoch() WHERE id = ?",
+			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
 		);
 		this.#deleteByProviderStmt = this.#db.prepare(
-			"UPDATE auth_credentials SET disabled = 1, updated_at = unixepoch() WHERE provider = ?",
+			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE provider = ? AND disabled_cause IS NULL`,
 		);
 		this.#hardDeleteStmt = this.#db.prepare("DELETE FROM auth_credentials WHERE id = ?");
-		this.#getCacheStmt = this.#db.prepare("SELECT value FROM cache WHERE key = ? AND expires_at > unixepoch()");
+		this.#getCacheStmt = this.#db.prepare(
+			`SELECT value FROM cache WHERE key = ? AND expires_at > ${SQLITE_NOW_EPOCH}`,
+		);
 		this.#upsertCacheStmt = this.#db.prepare(
 			"INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
 		);
-		this.#deleteExpiredCacheStmt = this.#db.prepare("DELETE FROM cache WHERE expires_at <= unixepoch()");
+		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
 	}
 
 	static async open(dbPath: string = getAgentDbPath()): Promise<AuthCredentialStore> {
@@ -2103,33 +2196,200 @@ export class AuthCredentialStore {
 
 	#initializeSchema(): void {
 		this.#db.exec(`
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-PRAGMA busy_timeout=5000;
-
-CREATE TABLE IF NOT EXISTS auth_credentials (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	provider TEXT NOT NULL,
-	credential_type TEXT NOT NULL,
-	data TEXT NOT NULL,
-	disabled INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-	updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-);
-CREATE INDEX IF NOT EXISTS idx_auth_provider ON auth_credentials(provider);
-
-CREATE TABLE IF NOT EXISTS cache (
-	key TEXT PRIMARY KEY,
-	value TEXT NOT NULL,
-	expires_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
+			PRAGMA journal_mode=WAL;
+			PRAGMA synchronous=NORMAL;
+			PRAGMA busy_timeout=5000;
+			CREATE TABLE IF NOT EXISTS auth_schema_version (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				version INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS cache (
+				key TEXT PRIMARY KEY,
+				value TEXT NOT NULL,
+				expires_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 		`);
 
-		// Migration: add disabled column if missing (for databases created by old CliAuthStorage)
+		if (!this.#authCredentialsTableExists()) {
+			this.#createAuthCredentialsTable();
+			this.#writeAuthSchemaVersion(AUTH_SCHEMA_VERSION);
+			return;
+		}
+
+		const schemaVersion = this.#readAuthSchemaVersion() ?? this.#inferAuthSchemaVersion();
+		const shouldWriteSchemaVersion = schemaVersion <= AUTH_SCHEMA_VERSION;
+		if (schemaVersion > AUTH_SCHEMA_VERSION) {
+			logger.warn("AuthCredentialStore schema version mismatch", {
+				current: schemaVersion,
+				expected: AUTH_SCHEMA_VERSION,
+			});
+		} else if (schemaVersion < AUTH_SCHEMA_VERSION) {
+			this.#migrateAuthSchema(schemaVersion);
+		}
+
+		this.#createAuthCredentialIndexes();
+		this.#backfillCredentialIdentityKeys();
+		if (shouldWriteSchemaVersion) {
+			this.#writeAuthSchemaVersion(AUTH_SCHEMA_VERSION);
+		}
+	}
+
+	#authCredentialsTableExists(): boolean {
+		const row = this.#db
+			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'auth_credentials'")
+			.get() as { present?: number } | undefined;
+		return row?.present === 1;
+	}
+
+	#readAuthSchemaVersion(): number | null {
+		const row = this.#db.prepare("SELECT version FROM auth_schema_version WHERE id = 1").get() as
+			| { version?: number }
+			| undefined;
+		return typeof row?.version === "number" ? row.version : null;
+	}
+
+	#writeAuthSchemaVersion(version: number): void {
+		this.#db.prepare("INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, ?)").run(version);
+	}
+
+	#inferAuthSchemaVersion(): number {
 		const cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
-		if (!cols.some(c => c.name === "disabled")) {
-			this.#db.exec("ALTER TABLE auth_credentials ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
+		const hasDisabledCause = cols.some(column => column.name === "disabled_cause");
+		const hasIdentityKey = cols.some(column => column.name === "identity_key");
+		const hasAccountId = cols.some(column => column.name === "account_id");
+		const hasEmail = cols.some(column => column.name === "email");
+		if (hasIdentityKey) return 3;
+		if (hasAccountId || hasEmail) return 2;
+		if (hasDisabledCause) return 1;
+		return 0;
+	}
+
+	#createAuthCredentialsTable(): void {
+		this.#db.exec(`
+			CREATE TABLE IF NOT EXISTS auth_credentials (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				provider TEXT NOT NULL,
+				credential_type TEXT NOT NULL,
+				data TEXT NOT NULL,
+				disabled_cause TEXT DEFAULT NULL,
+				identity_key TEXT DEFAULT NULL,
+				created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
+				updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+			);
+		`);
+		this.#createAuthCredentialIndexes();
+	}
+
+	#createAuthCredentialIndexes(): void {
+		this.#db.exec(`
+			CREATE INDEX IF NOT EXISTS idx_auth_provider ON auth_credentials(provider);
+			CREATE INDEX IF NOT EXISTS idx_auth_provider_identity ON auth_credentials(provider, identity_key) WHERE identity_key IS NOT NULL;
+		`);
+	}
+
+	#migrateAuthSchema(fromVersion: number): void {
+		if (fromVersion < 1) {
+			this.#migrateAuthSchemaV0ToV1();
+		}
+		if (fromVersion < 3) {
+			this.#migrateAuthSchemaV1OrV2ToV3();
+		}
+		if (fromVersion < 4) {
+			this.#migrateAuthSchemaV3ToV4();
+		}
+	}
+
+	#migrateAuthSchemaV0ToV1(): void {
+		const migrate = this.#db.transaction(() => {
+			const v0Cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
+			const hasDisabled = v0Cols.some(col => col.name === "disabled");
+
+			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
+			this.#db.exec(`
+				CREATE TABLE auth_credentials (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					provider TEXT NOT NULL,
+					credential_type TEXT NOT NULL,
+					data TEXT NOT NULL,
+					disabled_cause TEXT DEFAULT NULL,
+					created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
+					updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+				);
+			`);
+			this.#db.exec(`
+				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, created_at, updated_at)
+				SELECT
+					id,
+					provider,
+					credential_type,
+					data,
+					${hasDisabled ? "CASE WHEN disabled = 1 THEN 'disabled' ELSE NULL END" : "NULL"},
+					created_at,
+					updated_at
+				FROM auth_credentials_v0
+			`);
+			this.#db.exec("DROP TABLE auth_credentials_v0");
+		});
+		migrate();
+	}
+
+	#migrateAuthSchemaV1OrV2ToV3(): void {
+		const migrate = this.#db.transaction(() => {
+			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_legacy");
+			this.#createAuthCredentialsTable();
+			this.#db.exec(`
+				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
+				SELECT
+					id,
+					provider,
+					credential_type,
+					data,
+					disabled_cause,
+					NULL,
+					created_at,
+					updated_at
+				FROM auth_credentials_legacy
+			`);
+			this.#db.exec("DROP TABLE auth_credentials_legacy");
+		});
+		migrate();
+	}
+
+	#migrateAuthSchemaV3ToV4(): void {
+		const migrate = this.#db.transaction(() => {
+			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_v3");
+			this.#createAuthCredentialsTable();
+			this.#db.exec(`
+				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
+				SELECT
+					id,
+					provider,
+					credential_type,
+					data,
+					disabled_cause,
+					identity_key,
+					created_at,
+					updated_at
+				FROM auth_credentials_v3
+			`);
+			this.#db.exec("DROP TABLE auth_credentials_v3");
+		});
+		migrate();
+	}
+
+	#backfillCredentialIdentityKeys(): void {
+		const rows = this.#db
+			.prepare(
+				"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE identity_key IS NULL ORDER BY id ASC",
+			)
+			.all() as AuthRow[];
+		if (rows.length === 0) return;
+
+		const updateIdentity = this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
+		for (const row of rows) {
+			const identityKey = resolveRowCredentialIdentityKey(row.provider, row);
+			updateIdentity.run(identityKey, row.id);
 		}
 	}
 
@@ -2145,26 +2405,55 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 		for (const row of rows) {
 			const credential = deserializeCredential(row);
 			if (!credential) continue;
-			results.push({ id: row.id, provider: row.provider, credential });
+			results.push(toStoredAuthCredential(row, credential));
 		}
 		return results;
 	}
 
 	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[] {
 		const replace = this.#db.transaction((providerName: string, items: AuthCredential[]) => {
-			this.#deleteByProviderStmt.run(providerName);
-			const inserted: StoredAuthCredential[] = [];
+			const existingRows = this.#listActiveByProviderStmt.all(providerName) as AuthRow[];
+			const existing = existingRows.map(row => ({
+				id: row.id,
+				credential: deserializeCredential(row),
+				identityKey: resolveRowCredentialIdentityKey(providerName, row),
+			}));
+
+			const result: StoredAuthCredential[] = [];
+			const matchedExistingIds = new Set<number>();
+
 			for (const credential of items) {
 				const serialized = serializeCredential(credential);
 				if (!serialized) continue;
-				const row = this.#insertStmt.get(providerName, serialized.credentialType, serialized.data) as
-					| { id?: number }
-					| undefined;
-				if (row?.id) {
-					inserted.push({ id: row.id, provider: providerName, credential });
+				const match = existing.find(
+					entry =>
+						!matchedExistingIds.has(entry.id) &&
+						matchesReplacementCredential(providerName, entry.credential, entry.identityKey, credential),
+				);
+				if (match) {
+					matchedExistingIds.add(match.id);
+					this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, match.id);
+					result.push({ id: match.id, provider: providerName, credential, disabledCause: null });
+				} else {
+					const row = this.#insertStmt.get(
+						providerName,
+						serialized.credentialType,
+						serialized.data,
+						serialized.identityKey,
+					) as { id?: number } | undefined;
+					if (row?.id) {
+						result.push({ id: row.id, provider: providerName, credential, disabledCause: null });
+					}
 				}
 			}
-			return inserted;
+
+			for (const row of existing) {
+				if (!matchedExistingIds.has(row.id)) {
+					this.#deleteStmt.run("replaced by newer credential", row.id);
+				}
+			}
+
+			return result;
 		});
 
 		const result = replace(provider, credentials);
@@ -2173,33 +2462,23 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 	}
 
 	/**
-	 * Hard-deletes disabled rows for a provider when an active row with the same email exists.
+	 * Hard-deletes disabled rows for a provider when an active row with the same identity exists.
 	 * This prevents unbounded accumulation of soft-deleted credentials while preserving
 	 * disabled rows that have no active replacement (safety net for recovery).
 	 */
 	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
 		try {
-			const activeEmails = new Set<string>();
+			const activeIdentityKeys = new Set<string>();
 			for (const row of activeRows) {
-				for (const email of extractCredentialEmails(row.credential)) {
-					activeEmails.add(email);
-				}
+				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
+				if (identityKey) activeIdentityKeys.add(identityKey);
 			}
-			if (activeEmails.size === 0) return;
+			if (activeIdentityKeys.size === 0) return;
 
-			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as Array<{
-				id: number;
-				credential_type: string;
-				data: string;
-			}>;
+			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as AuthRow[];
 			for (const row of disabledRows) {
-				const credential = deserializeCredential({ ...row, provider });
-				if (!credential) {
-					this.#hardDeleteStmt.run(row.id);
-					continue;
-				}
-				const emails = extractCredentialEmails(credential);
-				if (emails.some(email => activeEmails.has(email))) {
+				const identityKey = resolveRowCredentialIdentityKey(provider, row);
+				if (identityKey && activeIdentityKeys.has(identityKey)) {
 					this.#hardDeleteStmt.run(row.id);
 				}
 			}
@@ -2212,7 +2491,7 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 		const serialized = serializeCredential(credential);
 		if (!serialized) return;
 		try {
-			this.#updateStmt.run(serialized.credentialType, serialized.data, id);
+			this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, id);
 			const providerRow = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?").get(id) as
 				| { provider?: string }
 				| undefined;
@@ -2224,17 +2503,17 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 		}
 	}
 
-	deleteAuthCredential(id: number): void {
+	deleteAuthCredential(id: number, disabledCause: string): void {
 		try {
-			this.#deleteStmt.run(id);
+			this.#deleteStmt.run(normalizeDisabledCause(disabledCause), id);
 		} catch {
 			// Ignore delete failures
 		}
 	}
 
-	deleteAuthCredentialsForProvider(provider: string): void {
+	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
 		try {
-			this.#deleteByProviderStmt.run(provider);
+			this.#deleteByProviderStmt.run(normalizeDisabledCause(disabledCause), provider);
 		} catch {
 			// Ignore delete failures
 		}
@@ -2328,10 +2607,23 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
 	 * Delete all credentials for a provider.
 	 */
 	deleteProvider(provider: string): void {
-		this.deleteAuthCredentialsForProvider(provider);
+		this.deleteAuthCredentialsForProvider(provider, "deleted by user");
 	}
 
 	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#listActiveStmt.finalize();
+		this.#listActiveByProviderStmt.finalize();
+		this.#listDisabledByProviderStmt.finalize();
+		this.#insertStmt.finalize();
+		this.#updateStmt.finalize();
+		this.#deleteStmt.finalize();
+		this.#deleteByProviderStmt.finalize();
+		this.#hardDeleteStmt.finalize();
+		this.#getCacheStmt.finalize();
+		this.#upsertCacheStmt.finalize();
+		this.#deleteExpiredCacheStmt.finalize();
 		this.#db.close();
 	}
 }

@@ -1,7 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel, type ThinkingBudgets, type Usage } from "@oh-my-pi/pi-ai";
+import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import {
+	type AssistantMessage,
+	getBundledModel,
+	type SimpleStreamOptions,
+	type ThinkingBudgets,
+	type Usage,
+} from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { Type } from "@sinclair/typebox";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 
@@ -226,6 +233,146 @@ describe("Agent", () => {
 		expect(responseCount).toBe(2);
 	});
 
+	it("prompt() refreshes tools and system prompt between same-turn model calls", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		type Details = { value: string };
+		let callIndex = 0;
+		const callContexts: Array<{ systemPrompt: string; toolNames: string[] }> = [];
+
+		const betaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "beta",
+			label: "Beta",
+			description: "Beta tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const alphaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "alpha",
+			label: "Alpha",
+			description: "Alpha tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+			},
+		};
+
+		const agent = new Agent({
+			initialState: {
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				systemPrompt: "prompt-one",
+				tools: [alphaTool],
+				messages: [],
+			},
+			streamFn: (_model, context) => {
+				callContexts.push({
+					systemPrompt: context.systemPrompt ?? "",
+					toolNames: (context.tools ?? []).map(tool => tool.name),
+				});
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						const message = createAssistantMessage(
+							[{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }],
+							"toolUse",
+						);
+						stream.push({ type: "done", reason: "toolUse", message });
+					} else {
+						const message = createAssistantMessage([{ type: "text", text: "done" }]);
+						stream.push({ type: "done", reason: "stop", message });
+					}
+					callIndex += 1;
+				});
+				return stream;
+			},
+		});
+
+		const unsubscribe = agent.subscribe(event => {
+			if (event.type === "message_end" && event.message.role === "toolResult") {
+				agent.setSystemPrompt("prompt-two");
+				agent.setTools([alphaTool, betaTool]);
+			}
+		});
+
+		await agent.prompt("refresh tools");
+		unsubscribe();
+
+		expect(callContexts).toEqual([
+			{ systemPrompt: "prompt-one", toolNames: ["alpha"] },
+			{ systemPrompt: "prompt-two", toolNames: ["alpha", "beta"] },
+		]);
+	});
+
+	it("prompt() drops stale forced toolChoice after same-turn tool refresh", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		type Details = { value: string };
+		let callIndex = 0;
+		const providerCalls: Array<{ toolNames: string[]; toolChoice: SimpleStreamOptions["toolChoice"] }> = [];
+
+		const betaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "beta",
+			label: "Beta",
+			description: "Beta tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const alphaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "alpha",
+			label: "Alpha",
+			description: "Alpha tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+			},
+		};
+
+		const agent = new Agent({
+			initialState: {
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				tools: [alphaTool],
+				messages: [],
+			},
+			streamFn: (_model, context, options) => {
+				providerCalls.push({
+					toolNames: (context.tools ?? []).map(tool => tool.name),
+					toolChoice: options?.toolChoice,
+				});
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						const message = createAssistantMessage(
+							[{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }],
+							"toolUse",
+						);
+						stream.push({ type: "done", reason: "toolUse", message });
+					} else {
+						const message = createAssistantMessage([{ type: "text", text: "done" }]);
+						stream.push({ type: "done", reason: "stop", message });
+					}
+					callIndex += 1;
+				});
+				return stream;
+			},
+		});
+
+		const unsubscribe = agent.subscribe(event => {
+			if (event.type === "message_end" && event.message.role === "toolResult") {
+				agent.setTools([betaTool]);
+			}
+		});
+
+		await agent.prompt("refresh tools", { toolChoice: { type: "function", name: "alpha" } });
+		unsubscribe();
+
+		expect(providerCalls).toEqual([
+			{ toolNames: ["alpha"], toolChoice: { type: "function", name: "alpha" } },
+			{ toolNames: ["beta"], toolChoice: undefined },
+		]);
+	});
+
 	it("forwards sessionId and thinkingBudgets to streamFn options", async () => {
 		let receivedSessionId: string | undefined;
 		let receivedBudgets: ThinkingBudgets | undefined;
@@ -255,5 +402,31 @@ describe("Agent", () => {
 		await agent.prompt("hello again");
 		expect(receivedSessionId).toBe("session-def");
 		expect(receivedBudgets).toEqual({ medium: 512 });
+	});
+
+	it("forwards onPayload to streamFn options", async () => {
+		let receivedOnPayload: SimpleStreamOptions["onPayload"] | undefined;
+
+		const agent = new Agent({
+			onPayload: async (payload, model) => ({ payload, provider: model?.provider }),
+			streamFn: (_model, _context, options) => {
+				receivedOnPayload = options?.onPayload;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage([{ type: "text", text: "ok" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("hello");
+		expect(receivedOnPayload).toBeDefined();
+
+		const replacementPayload = await receivedOnPayload?.({ request: true }, getBundledModel("openai", "gpt-4o-mini"));
+		expect(replacementPayload).toEqual({
+			payload: { request: true },
+			provider: "openai",
+		});
 	});
 });

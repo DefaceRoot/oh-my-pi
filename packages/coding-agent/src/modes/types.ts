@@ -3,7 +3,12 @@ import type { AssistantMessage, ImageContent, Message, UsageReport } from "@oh-m
 import type { Component, Container, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager } from "../config/keybindings";
 import type { Settings } from "../config/settings";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
+import type {
+	ExtensionUIContext,
+	ExtensionUIDialogOptions,
+	ExtensionWidgetContent,
+	ExtensionWidgetOptions,
+} from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import type { MCPManager } from "../mcp";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
@@ -26,10 +31,26 @@ export type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
+export type SubmittedUserInput = {
+	text: string;
+	images?: ImageContent[];
+	cancelled: boolean;
+	started: boolean;
+};
+
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
+
 export type TodoItem = {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed";
+	status: TodoStatus;
+	details?: string;
+};
+
+export type TodoPhase = {
+	id: string;
+	name: string;
+	tasks: TodoItem[];
 };
 
 export interface InteractiveModeContext {
@@ -39,8 +60,11 @@ export interface InteractiveModeContext {
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	btwContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
+	hookWidgetContainerAbove: Container;
+	hookWidgetContainerBelow: Container;
 	statusLine: StatusLineComponent;
 	oauthManualInput: import("./oauth-manual-input").OAuthManualInputManager;
 
@@ -79,7 +103,8 @@ export interface InteractiveModeContext {
 	autoCompactionEscapeHandler?: () => void;
 	retryEscapeHandler?: () => void;
 	unsubscribe?: () => void;
-	onInputCallback?: (input: { text: string; images?: ImageContent[] }) => void;
+	onInputCallback?: (input: SubmittedUserInput) => void;
+	optimisticUserMessageSignature: string | undefined;
 	lastSigintTime: number;
 	lastEscapeTime: number;
 	shutdownRequested: boolean;
@@ -118,6 +143,11 @@ export interface InteractiveModeContext {
 	flushPendingModelSwitch(): Promise<void>;
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
+	ensureLoadingAnimation(): void;
+	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput;
+	cancelPendingSubmission(): boolean;
+	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
+	finishPendingSubmission(input: SubmittedUserInput): void;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionContext(
@@ -138,7 +168,7 @@ export interface InteractiveModeContext {
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleCopyCommand(): void;
+	handleCopyCommand(sub?: string): void;
 	handleSessionCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(): Promise<void>;
@@ -164,6 +194,7 @@ export interface InteractiveModeContext {
 	showSessionSelector(): void;
 	openResumeModal(): Promise<void>;
 	handleResumeSession(sessionPath: string): Promise<void>;
+	handleSessionDeleteCommand(): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
@@ -183,6 +214,9 @@ export interface InteractiveModeContext {
 	ingestTaskToolResult(results: unknown[]): void;
 	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
+	handleBtwCommand(question: string): Promise<void>;
+	hasActiveBtw(): boolean;
+	handleBtwEscape(): boolean;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(options?: { temporary?: boolean }): Promise<void>;
 	toggleToolOutputExpansion(): void;
@@ -199,7 +233,7 @@ export interface InteractiveModeContext {
 		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
 		previousSessionFile?: string,
 	): Promise<void>;
-	setHookWidget(key: string, content: unknown): void;
+	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
 		title: string,

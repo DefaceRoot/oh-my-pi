@@ -20,6 +20,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	type Component,
 	Container,
+	extractPrintableText,
 	Input,
 	matchesKey,
 	padding,
@@ -34,7 +35,12 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirs } from "../../config";
 import type { ModelRegistry } from "../../config/model-registry";
-import { formatModelString, isDefaultModelAlias, resolveModelOverride } from "../../config/model-resolver";
+import {
+	formatModelString,
+	resolveAgentModelPatterns,
+	resolveConfiguredModelPatterns,
+	resolveModelOverride,
+} from "../../config/model-resolver";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import { Settings } from "../../config/settings";
 import agentCreationArchitectPrompt from "../../prompts/system/agent-creation-architect.md" with { type: "text" };
@@ -44,6 +50,7 @@ import { discoverAgents } from "../../task/discovery";
 import type { AgentDefinition, AgentSource } from "../../task/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
+import { matchesAppInterrupt } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type SourceTabId = "all" | AgentSource;
@@ -92,21 +99,8 @@ const SOURCE_LABEL: Record<AgentSource, string> = {
 
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
 
-function normalizeModelPatterns(value: string | string[] | undefined): string[] {
-	if (Array.isArray(value)) {
-		return value.map(pattern => pattern.trim()).filter(pattern => pattern.length > 0);
-	}
-	if (typeof value === "string") {
-		const normalized = value.trim();
-		if (normalized.length > 0) {
-			return [normalized];
-		}
-	}
-	return [];
-}
-
 function joinPatterns(patterns: string[]): string {
-	if (patterns.length === 0) return "(session default)";
+	if (patterns.length === 0) return "(session model)";
 	return patterns.join(", ");
 }
 
@@ -397,8 +391,7 @@ export class AgentDashboard extends Container {
 			const activeTabId = this.#tabs[this.#activeTabIndex]?.id ?? "all";
 			const { agents } = await discoverAgents(this.cwd);
 			const disabled = new Set((this.#settingsManager?.get("task.disabledAgents") as string[] | undefined) ?? []);
-			const overrides =
-				(this.#settingsManager?.get("task.agentModelOverrides") as Record<string, string> | undefined) ?? {};
+			const overrides = this.#settingsManager?.get("task.agentModelOverrides") ?? {};
 
 			this.#allAgents = agents
 				.slice()
@@ -621,10 +614,11 @@ export class AgentDashboard extends Container {
 		await modelRegistry.refresh();
 
 		const settings = this.#settingsManager ?? undefined;
-		const modelPatterns = normalizeModelPatterns(
+		const modelPatterns = resolveConfiguredModelPatterns(
 			this.modelContext.activeModelPattern ??
 				this.modelContext.defaultModelPattern ??
 				settings?.getModelRole("default"),
+			settings,
 		);
 		const { model } = resolveModelOverride(modelPatterns, modelRegistry, settings);
 		const fallbackModel = modelRegistry.getAvailable()[0];
@@ -749,26 +743,22 @@ export class AgentDashboard extends Container {
 	}
 
 	#defaultPatternsFor(agent: DashboardAgent): string[] {
-		const explicitAgentPatterns = isDefaultModelAlias(agent.model) ? [] : normalizeModelPatterns(agent.model);
-		if (explicitAgentPatterns.length > 0) {
-			return explicitAgentPatterns;
-		}
-
-		const fallback =
-			this.modelContext.activeModelPattern?.trim() ||
-			this.modelContext.defaultModelPattern?.trim() ||
-			this.#settingsManager?.getModelRole("default")?.trim() ||
-			"";
-		if (!fallback) return [];
-		return normalizeModelPatterns(fallback);
+		return resolveAgentModelPatterns({
+			agentModel: agent.model,
+			settings: this.#settingsManager ?? undefined,
+			activeModelPattern: this.modelContext.activeModelPattern,
+			fallbackModelPattern: this.modelContext.defaultModelPattern,
+		});
 	}
 
 	#effectivePatternsFor(agent: DashboardAgent, draftOverride: string | undefined): string[] {
-		const override = draftOverride?.trim() || "";
-		if (override.length > 0) {
-			return [override];
-		}
-		return this.#defaultPatternsFor(agent);
+		return resolveAgentModelPatterns({
+			settingsOverride: draftOverride,
+			agentModel: agent.model,
+			settings: this.#settingsManager ?? undefined,
+			activeModelPattern: this.modelContext.activeModelPattern,
+			fallbackModelPattern: this.modelContext.defaultModelPattern,
+		});
 	}
 
 	#resolvePatterns(patterns: string[]): ModelResolution | undefined {
@@ -998,15 +988,13 @@ export class AgentDashboard extends Container {
 	}
 
 	handleInput(data: string): void {
-		const charCode = data.length === 1 ? data.charCodeAt(0) : -1;
-
 		if (matchesKey(data, "ctrl+c")) {
 			this.onClose?.();
 			return;
 		}
 
 		if (this.#createSpec) {
-			if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
+			if (matchesAppInterrupt(data)) {
 				this.#clearCreateFlow();
 				this.#buildLayout();
 				return;
@@ -1030,7 +1018,7 @@ export class AgentDashboard extends Container {
 		}
 
 		if (this.#createInput || this.#createGenerating) {
-			if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
+			if (matchesAppInterrupt(data)) {
 				if (!this.#createGenerating) {
 					this.#clearCreateFlow();
 					this.#buildLayout();
@@ -1050,7 +1038,7 @@ export class AgentDashboard extends Container {
 		}
 
 		if (this.#editInput) {
-			if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
+			if (matchesAppInterrupt(data)) {
 				this.#cancelModelEdit();
 				return;
 			}
@@ -1061,7 +1049,7 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
+		if (matchesAppInterrupt(data)) {
 			if (this.#searchQuery.length > 0) {
 				this.#searchQuery = "";
 				this.#applyFilters();
@@ -1117,13 +1105,17 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (data.length === 1 && charCode > 32 && charCode < 127) {
-			if (data === "j" || data === "k") {
-				return;
+		const printableText = extractPrintableText(data);
+		if (printableText && printableText.length === 1) {
+			const printableCharCode = printableText.charCodeAt(0);
+			if (printableCharCode > 32 && printableCharCode < 127) {
+				if (printableText === "j" || printableText === "k") {
+					return;
+				}
+				this.#searchQuery += printableText;
+				this.#applyFilters();
+				this.#buildLayout();
 			}
-			this.#searchQuery += data;
-			this.#applyFilters();
-			this.#buildLayout();
 		}
 	}
 }

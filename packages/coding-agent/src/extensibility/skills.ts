@@ -126,6 +126,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		ignoredSkills = [],
 		includeSkills = [],
 		categories,
+		disabledExtensions = [],
 	} = options;
 
 	// Early return if skills are disabled
@@ -148,7 +149,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	}
 
 	// Use capability API to load all skills
-	const result = await loadCapability<CapabilitySkill>(skillCapability.id, { cwd });
+	const result = await loadCapability<CapabilitySkill>(skillCapability.id, { cwd, disabledExtensions });
 
 	const skillMap = new Map<string, Skill>();
 	const realPathSet = new Set<string>();
@@ -175,8 +176,12 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		return matchesCategorySet(name, categorySet);
 	}
 
+	const disabledSkillNames = new Set(
+		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
+	);
 	// Filter skills by source and patterns first
 	const filteredSkills = result.items.filter(capSkill => {
+		if (disabledSkillNames.has(capSkill.name)) return false;
 		if (!isSourceEnabled(capSkill._source)) return false;
 		if (matchesIgnorePatterns(capSkill.name)) return false;
 		if (!matchesIncludePatterns(capSkill.name)) return false;
@@ -243,6 +248,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const allCustomSkills: Array<{ skill: Skill; path: string }> = [];
 	for (const { expandedDir, scanResult } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
+			if (disabledSkillNames.has(capSkill.name)) continue;
 			if (matchesIgnorePatterns(capSkill.name)) continue;
 			if (!matchesIncludePatterns(capSkill.name)) continue;
 			if (!matchesCategoryFilter(capSkill.name)) continue;

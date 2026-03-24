@@ -14,10 +14,10 @@ Subagents do not inherit your chat history. Put all required constraints, file p
 </parameters>
 
 <critical>
-- Keep shared constraints in `context`; do not duplicate them in every assignment.
-- Do not request project-wide build/lint/test inside task assignments.
-- If scope is unclear, run a discovery task first, then fan out.
-- Each task should be narrowly scoped (about 3-5 files max) with explicit file paths.
+- **MUST NOT** duplicate shared constraints across assignments — put them in `context` once.
+- **MUST NOT** tell tasks to run project-wide build/test/lint. Parallel agents share the working tree; each task edits, stops. Caller verifies after all complete.
+- For large payloads (traces, JSON blobs), write to `local://<path>` and pass the path in context.
+- Prefer `task` agents that investigate **and** edit in one pass. Only launch a dedicated read-only discovery step when the affected files are genuinely unknown and cannot be inferred from the task description.
 </critical>
 
 <parallelization>

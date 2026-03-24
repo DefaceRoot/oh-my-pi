@@ -1,5 +1,5 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
-import { Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
@@ -9,6 +9,9 @@ import type {
 	ExtensionError,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUiComponent,
+	ExtensionWidgetContent,
+	ExtensionWidgetOptions,
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
@@ -16,7 +19,9 @@ import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent } from "../../modes/components/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { setTerminalTitle } from "../../utils/title-generator";
+import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-generator";
+
+const MAX_WIDGET_LINES = 10;
 
 export class ExtensionUiController {
 	#hookSelectorOverlay: OverlayHandle | undefined;
@@ -31,6 +36,8 @@ export class ExtensionUiController {
 		margin: 1,
 	} as const;
 
+	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
+	#hookWidgetsBelow = new Map<string, ExtensionUiComponent>();
 	constructor(private ctx: InteractiveModeContext) {}
 
 	/**
@@ -46,7 +53,7 @@ export class ExtensionUiController {
 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setHookStatus(key, text),
 			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
-			setWidget: (key, content) => this.setHookWidget(key, content),
+			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
 			setTitle: title => setTerminalTitle(title),
 			custom: (factory, options) => this.showHookCustom(factory, options),
 			setEditorText: text => this.ctx.editor.setText(text),
@@ -161,10 +168,12 @@ export class ExtensionUiController {
 
 				// Create new session
 				this.clearExtensionTerminalInputListeners();
+				this.clearHookWidgets();
 				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
 				if (!success) {
 					return { cancelled: true };
 				}
+				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 				// Reset subagent state for new session root
 				this.ctx.handleSessionRootChange();
@@ -173,6 +182,12 @@ export class ExtensionUiController {
 				if (options?.setup) {
 					await options.setup(this.ctx.sessionManager);
 				}
+
+				// Reset and update status line
+				this.ctx.statusLine.invalidate();
+				this.ctx.statusLine.setSessionStartTime(Date.now());
+				this.ctx.updateEditorTopBorder();
+				this.ctx.ui.requestRender();
 
 				// Clear UI state
 				this.ctx.chatContainer.clear();
@@ -236,11 +251,13 @@ export class ExtensionUiController {
 				await this.ctx.executeCompaction(instructionsOrOptions, false);
 			},
 			switchSession: async sessionPath => {
+				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
 				if (!result) {
 					return { cancelled: true };
 				}
 				this.ctx.handleSessionRootChange();
+				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages();
 				await this.ctx.reloadTodos();
@@ -261,9 +278,71 @@ export class ExtensionUiController {
 		});
 	}
 
-	setHookWidget(key: string, content: unknown): void {
-		this.ctx.statusLine.setHookStatus(key, String(content));
+	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void {
+		const placement = options?.placement ?? "aboveEditor";
+		this.#removeHookWidget(this.#hookWidgetsAbove, key);
+		this.#removeHookWidget(this.#hookWidgetsBelow, key);
+
+		if (content === undefined) {
+			this.#rebuildHookWidgets();
+			return;
+		}
+
+		const target = placement === "belowEditor" ? this.#hookWidgetsBelow : this.#hookWidgetsAbove;
+		target.set(key, this.#createHookWidget(content));
+		this.#rebuildHookWidgets();
+	}
+
+	#removeHookWidget(widgets: Map<string, ExtensionUiComponent>, key: string): void {
+		const existing = widgets.get(key);
+		existing?.dispose?.();
+		widgets.delete(key);
+	}
+
+	#createHookWidget(content: ExtensionWidgetContent): ExtensionUiComponent {
+		if (Array.isArray(content)) {
+			const container = new Container();
+			for (const line of content.slice(0, MAX_WIDGET_LINES)) {
+				container.addChild(new Text(line, 1, 0));
+			}
+			if (content.length > MAX_WIDGET_LINES) {
+				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
+			}
+			return container;
+		}
+		if (content === undefined) {
+			throw new Error("Widget content missing");
+		}
+		return content(this.ctx.ui, theme);
+	}
+
+	#rebuildHookWidgets(): void {
+		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove, true, true);
+		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow, false, false);
 		this.ctx.ui.requestRender();
+	}
+
+	#renderHookWidgetContainer(
+		container: Container,
+		widgets: Map<string, ExtensionUiComponent>,
+		spacerWhenEmpty: boolean,
+		leadingSpacer: boolean,
+	): void {
+		container.clear();
+
+		if (widgets.size === 0) {
+			if (spacerWhenEmpty) {
+				container.addChild(new Spacer(1));
+			}
+			return;
+		}
+
+		if (leadingSpacer) {
+			container.addChild(new Spacer(1));
+		}
+		for (const widget of widgets.values()) {
+			container.addChild(widget);
+		}
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, _hasUI: boolean): void {
@@ -362,6 +441,7 @@ export class ExtensionUiController {
 
 				// Create new session
 				this.clearExtensionTerminalInputListeners();
+				this.clearHookWidgets();
 				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
 				if (!success) {
 					return { cancelled: true };
@@ -446,6 +526,7 @@ export class ExtensionUiController {
 				if (this.ctx.isBackgrounded) {
 					return { cancelled: true };
 				}
+				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
 				if (!result) {
 					return { cancelled: true };
@@ -773,6 +854,18 @@ export class ExtensionUiController {
 			unsubscribe();
 			this.#extensionTerminalInputUnsubscribers.delete(unsubscribe);
 		};
+	}
+
+	clearHookWidgets(): void {
+		for (const widget of this.#hookWidgetsAbove.values()) {
+			widget.dispose?.();
+		}
+		for (const widget of this.#hookWidgetsBelow.values()) {
+			widget.dispose?.();
+		}
+		this.#hookWidgetsAbove.clear();
+		this.#hookWidgetsBelow.clear();
+		this.#rebuildHookWidgets();
 	}
 
 	clearExtensionTerminalInputListeners(): void {

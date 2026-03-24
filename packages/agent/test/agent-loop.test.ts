@@ -669,33 +669,16 @@ describe("agentLoop with AgentMessage", () => {
 		).toBe(false);
 	});
 
-	it("should inject queued messages and skip remaining tool calls", async () => {
+	it("should skip remaining tool calls when steering is queued", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];
-		const { promise: allowSecond, resolve: allowSecondResolve } = Promise.withResolvers<void>();
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",
 			description: "Echo tool",
 			parameters: toolSchema,
-			async execute(_toolCallId, params, signal) {
-				if (params.value === "second") {
-					await new Promise<void>((resolve, reject) => {
-						if (signal?.aborted) {
-							reject(new Error("Tool aborted"));
-							return;
-						}
-						const onAbort = () => reject(new Error("Tool aborted"));
-						signal?.addEventListener("abort", onAbort, { once: true });
-						allowSecond.then(() => {
-							signal?.removeEventListener("abort", onAbort);
-							resolve();
-						});
-					});
-					if (signal?.aborted) {
-						throw new Error("Tool aborted");
-					}
-				}
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
 				executed.push(params.value);
 				return {
 					content: [{ type: "text", text: `ok:${params.value}` }],
@@ -720,11 +703,11 @@ describe("agentLoop with AgentMessage", () => {
 		const config: AgentLoopConfig = {
 			model: createModel(),
 			convertToLlm: identityConverter,
+			interruptMode: "immediate",
 			getSteeringMessages: async () => {
-				// Return queued message after first tool executes
-				if (executed.length === 1 && !queuedDelivered) {
+				// Return steering message after tool execution has started
+				if (executed.length >= 1 && !queuedDelivered) {
 					queuedDelivered = true;
-					allowSecondResolve();
 					return [queuedUserMessage];
 				}
 				return [];
@@ -766,33 +749,115 @@ describe("agentLoop with AgentMessage", () => {
 			events.push(event);
 		}
 
-		// Only first tool should have executed
+		// Only the first tool should execute; the second is skipped after steering is queued.
 		expect(executed).toEqual(["first"]);
 
-		// Second tool should be skipped
 		const toolEnds = events.filter(
 			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
 		);
 		expect(toolEnds.length).toBe(2);
-		expect(toolEnds[0].isError).toBeFalsy();
+		expect(toolEnds[0].isError).toBe(false);
 		expect(toolEnds[1].isError).toBe(true);
 		if (toolEnds[1].result.content[0]?.type === "text") {
 			expect(toolEnds[1].result.content[0].text).toContain("Skipped due to queued user message");
 		}
 
-		// Queued message should appear in events
-		const queuedMessageEvent = events.find(
-			e =>
-				e.type === "message_start" &&
-				e.message.role === "user" &&
-				typeof e.message.content === "string" &&
-				e.message.content === "interrupt",
-		);
-		expect(queuedMessageEvent).toBeDefined();
+		// Queued message should appear in events after the tool results and before the next model call.
+		const eventSequence = events.flatMap(event => {
+			if (event.type !== "message_start") return [];
+			if (event.message.role === "toolResult") return [`tool:${event.message.toolCallId}`];
+			if (event.message.role === "user" && typeof event.message.content === "string") {
+				return [event.message.content];
+			}
+			return [];
+		});
+		expect(eventSequence).toContain("interrupt");
+		expect(eventSequence.indexOf("tool:tool-1")).toBeLessThan(eventSequence.indexOf("interrupt"));
+		expect(eventSequence.indexOf("tool:tool-2")).toBeLessThan(eventSequence.indexOf("interrupt"));
 
 		// Interrupt message should be in context when second LLM call is made
 		expect(sawInterruptInContext).toBe(true);
 	});
+});
+
+it("refreshes tools and system prompt between same-turn model calls", async () => {
+	const toolSchema = Type.Object({ value: Type.String() });
+	let activeSystemPrompt = "prompt-one";
+	let activeTools: Array<AgentTool<typeof toolSchema, { value: string }>> = [];
+	const betaTool: AgentTool<typeof toolSchema, { value: string }> = {
+		name: "beta",
+		label: "Beta",
+		description: "Beta tool",
+		parameters: toolSchema,
+		async execute(_toolCallId, params) {
+			return {
+				content: [{ type: "text", text: `beta:${params.value}` }],
+				details: { value: params.value },
+			};
+		},
+	};
+	const alphaTool: AgentTool<typeof toolSchema, { value: string }> = {
+		name: "alpha",
+		label: "Alpha",
+		description: "Alpha tool",
+		parameters: toolSchema,
+		async execute(_toolCallId, params) {
+			activeSystemPrompt = "prompt-two";
+			activeTools = [alphaTool, betaTool];
+			return {
+				content: [{ type: "text", text: `alpha:${params.value}` }],
+				details: { value: params.value },
+			};
+		},
+	};
+	activeTools = [alphaTool];
+
+	const context: AgentContext = {
+		systemPrompt: activeSystemPrompt,
+		messages: [],
+		tools: activeTools,
+	};
+	const userPrompt: AgentMessage = createUserMessage("refresh tools");
+	const config: AgentLoopConfig = {
+		model: createModel(),
+		convertToLlm: identityConverter,
+		syncContextBeforeModelCall: async currentContext => {
+			currentContext.systemPrompt = activeSystemPrompt;
+			currentContext.tools = activeTools;
+		},
+	};
+
+	const callContexts: Context[] = [];
+	let callIndex = 0;
+	const streamFn = (_model: Model, llmContext: Context) => {
+		callContexts.push(llmContext);
+		const stream = new MockAssistantStream();
+		queueMicrotask(() => {
+			if (callIndex === 0) {
+				const message = createAssistantMessage(
+					[{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }],
+					"toolUse",
+				);
+				stream.push({ type: "done", reason: "toolUse", message });
+			} else {
+				const message = createAssistantMessage([{ type: "text", text: "done" }]);
+				stream.push({ type: "done", reason: "stop", message });
+			}
+			callIndex += 1;
+		});
+		return stream;
+	};
+
+	const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+	for await (const _event of stream) {
+		// consume
+	}
+
+	expect(callContexts).toHaveLength(2);
+	expect(callContexts[0]?.systemPrompt).toBe("prompt-one");
+	expect(callContexts[0]?.tools?.map(tool => tool.name)).toEqual(["alpha"]);
+	expect(callContexts[1]?.systemPrompt).toBe("prompt-two");
+	expect(callContexts[1]?.tools?.map(tool => tool.name)).toEqual(["alpha", "beta"]);
 });
 
 describe("agentLoopContinue with AgentMessage", () => {

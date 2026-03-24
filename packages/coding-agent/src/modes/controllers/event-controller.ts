@@ -57,19 +57,7 @@ export class EventController {
 					this.ctx.retryLoader = undefined;
 					this.ctx.statusContainer.clear();
 				}
-				if (this.ctx.loadingAnimation) {
-					this.ctx.loadingAnimation.stop();
-				}
-				this.ctx.statusContainer.clear();
-				this.ctx.loadingAnimation = new Loader(
-					this.ctx.ui,
-					spinner => theme.fg("accent", spinner),
-					text => theme.fg("muted", text),
-					`Working… (esc to interrupt)`,
-					getSymbolTheme().spinnerFrames,
-				);
-				this.ctx.statusContainer.addChild(this.ctx.loadingAnimation);
-				this.ctx.applyPendingWorkingMessage();
+				this.ctx.ensureLoadingAnimation();
 				this.ctx.ui.requestRender();
 				break;
 
@@ -84,8 +72,18 @@ export class EventController {
 					this.ctx.addMessageToChat(event.message);
 					this.ctx.ui.requestRender();
 				} else if (event.message.role === "user") {
+					const textContent = this.ctx.getUserMessageText(event.message);
+					const imageCount =
+						typeof event.message.content === "string"
+							? 0
+							: event.message.content.filter(content => content.type === "image").length;
+					const signature = `${textContent}\u0000${imageCount}`;
+
 					this.resetReadGroup();
-					this.ctx.addMessageToChat(event.message);
+					if (this.ctx.optimisticUserMessageSignature !== signature) {
+						this.ctx.addMessageToChat(event.message);
+					}
+					this.ctx.optimisticUserMessageSignature = undefined;
 					if (!event.message.synthetic) {
 						this.ctx.editor.setText("");
 						this.ctx.updatePendingMessagesDisplay();
@@ -122,6 +120,12 @@ export class EventController {
 					for (const content of this.ctx.streamingMessage.content) {
 						if (content.type !== "toolCall") continue;
 
+						// Preserve the raw partial JSON for renderers that need to surface fields before the JSON object closes.
+						// Bash uses this to show inline env assignments during streaming instead of popping them in at completion.
+						const renderArgs =
+							"partialJson" in content
+								? { ...content.arguments, __partialJson: content.partialJson }
+								: content.arguments;
 						if (!this.ctx.pendingTools.has(content.id)) {
 							if (content.name === "read") {
 								const group = this.getReadGroup();
@@ -135,7 +139,7 @@ export class EventController {
 							const tool = this.ctx.session.getToolByName(content.name);
 							const component = new ToolExecutionComponent(
 								content.name,
-								content.arguments,
+								renderArgs,
 								{
 									showImages: settings.get("terminal.showImages"),
 									editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
@@ -151,7 +155,7 @@ export class EventController {
 						} else {
 							const component = this.ctx.pendingTools.get(content.id);
 							if (component) {
-								component.updateArgs(content.arguments, content.id);
+								component.updateArgs(renderArgs, content.id);
 							}
 						}
 					}
@@ -187,6 +191,8 @@ export class EventController {
 							component.setArgsComplete(toolCallId);
 						}
 					}
+					this.#lastAssistantComponent = this.ctx.streamingComponent;
+					this.#lastAssistantComponent.setUsageInfo(event.message.usage);
 					this.ctx.streamingComponent = undefined;
 					this.ctx.streamingMessage = undefined;
 					this.ctx.statusLine.invalidate();
@@ -329,15 +335,7 @@ export class EventController {
 						isHandoffAction ? "Auto-handoff cancelled" : "Auto context-full maintenance cancelled",
 					);
 				} else if (event.result) {
-					this.ctx.chatContainer.clear();
 					this.ctx.rebuildChatFromMessages();
-					this.ctx.addMessageToChat({
-						role: "compactionSummary",
-						tokensBefore: event.result.tokensBefore,
-						summary: event.result.summary,
-						shortSummary: event.result.shortSummary,
-						timestamp: Date.now(),
-					});
 					this.ctx.statusLine.invalidate();
 					this.ctx.updateEditorTopBorder();
 				} else if (event.noOpReason === "nothing_to_compact") {
@@ -351,6 +349,9 @@ export class EventController {
 					this.ctx.updateEditorTopBorder();
 					await this.ctx.reloadTodos();
 					this.ctx.showStatus("Auto-handoff completed");
+				} else if (event.skipped) {
+					// Benign skip: no model selected, no candidate models available, or nothing
+					// to compact yet. Not a failure — suppress the warning.
 				} else {
 					this.ctx.showWarning("Auto context-full maintenance failed; continuing without maintenance");
 				}
@@ -411,6 +412,10 @@ export class EventController {
 				this.ctx.ui.requestRender();
 				break;
 			}
+
+			case "todo_auto_clear":
+				await this.ctx.reloadTodos();
+				break;
 		}
 	}
 

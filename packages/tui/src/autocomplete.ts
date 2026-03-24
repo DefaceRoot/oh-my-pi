@@ -188,6 +188,7 @@ export interface AutocompleteProvider {
 		lines: string[];
 		cursorLine: number;
 		cursorCol: number;
+		onApplied?: () => void;
 	};
 
 	/** Get inline hint text to show as dim ghost text after the cursor */
@@ -627,6 +628,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						}
 					} else {
 						relativePath = path.join(path.dirname(displayPrefix), name);
+						if (displayPrefix.startsWith("./") && !relativePath.startsWith("./")) {
+							relativePath = `./${relativePath}`;
+						}
 					}
 				} else {
 					// For standalone entries, preserve ~/ if original prefix was ~/

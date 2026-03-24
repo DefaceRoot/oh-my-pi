@@ -8,6 +8,8 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { calculatePromptTokens } from "../../session/compaction/compaction";
+import { findGitHeadPathSync, sanitizeStatusText } from "../shared";
 import {
 	type FlattenedWorkflowMenuAction,
 	flattenWorkflowMenuActions,
@@ -481,12 +483,7 @@ export class StatusLineComponent implements Component {
 		// Get context percentage
 		const lastAssistantMessage = findLastAssistantWithUsageAfterRewindReport(state.messages);
 
-		const contextTokens = lastAssistantMessage
-			? lastAssistantMessage.usage.input +
-				lastAssistantMessage.usage.output +
-				lastAssistantMessage.usage.cacheRead +
-				lastAssistantMessage.usage.cacheWrite
-			: 0;
+		const contextTokens = lastAssistantMessage ? calculatePromptTokens(lastAssistantMessage.usage) : 0;
 		const contextWindow = state.model?.contextWindow || 0;
 		const contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
 
