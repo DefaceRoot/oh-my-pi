@@ -1123,8 +1123,6 @@ export class TUI extends Container {
 		// Extract cursor position (marker must be found before diff comparison)
 		const cursorPos = this.#extractCursorPosition(newLines, height);
 
-		newLines = this.#applyLineResets(newLines);
-
 		// Width changed - need full re-render (line wrapping changes)
 		const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight !== 0 && this.#previousHeight !== height;
@@ -1138,7 +1136,11 @@ export class TUI extends Container {
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				const line = newLines[i];
-				buffer += TERMINAL.isImageLine(line) ? line : line + reset;
+				const isImage = TERMINAL.isImageLine(line);
+				if (!isImage && visibleWidth(line) > width) {
+					newLines[i] = truncateToWidth(line, width);
+				}
+				buffer += isImage ? newLines[i] : newLines[i] + reset;
 			}
 			buffer += "\x1b[?2026l"; // End synchronized output
 			this.terminal.write(buffer);

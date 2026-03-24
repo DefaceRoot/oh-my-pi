@@ -367,7 +367,7 @@ export class ProcessTerminal implements Terminal {
 	 * the terminal does not support OSC 11.
 	 */
 	#queryBackgroundColor(): void {
-		if (this.#dead) return;
+		if (this.dead) return;
 		// Queue if an OSC 11 query is in flight or its DA1 sentinel hasn't been
 		// consumed yet. Starting a new query while a DA1 is outstanding would
 		// increment the sentinel counter, and the old DA1 arrival would then
@@ -417,7 +417,7 @@ export class ProcessTerminal implements Terminal {
 	#startOsc11Poll(): void {
 		this.#stopOsc11Poll();
 		this.#osc11PollTimer = setInterval(() => {
-			if (this.#dead) {
+			if (this.dead) {
 				this.#stopOsc11Poll();
 				return;
 			}

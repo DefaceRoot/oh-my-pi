@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, type Terminal, type TerminalAppearance, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -38,7 +38,7 @@ class RawLinesComponent implements Component {
 	}
 }
 
-class RecordingTerminal {
+class RecordingTerminal implements Terminal {
 	#inner: VirtualTerminal;
 	writes: string[] = [];
 
@@ -73,6 +73,14 @@ class RecordingTerminal {
 
 	get kittyProtocolActive(): boolean {
 		return this.#inner.kittyProtocolActive;
+	}
+
+	get appearance(): TerminalAppearance | undefined {
+		return this.#inner.appearance;
+	}
+
+	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
+		this.#inner.onAppearanceChange(callback);
 	}
 
 	moveBy(lines: number): void {
