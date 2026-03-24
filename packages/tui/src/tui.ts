@@ -289,6 +289,7 @@ export class TUI extends Container {
 	#showHardwareCursor = process.env.PI_HARDWARE_CURSOR === "1";
 	#clearOnShrink = process.env.PI_CLEAR_ON_SHRINK === "1"; // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // High-water line count used for clear-on-shrink policy
+	#manualScrollRows = 0; // Rows scrolled above the live bottom viewport
 	#fullRedrawCount = 0;
 	#stopped = false;
 
@@ -672,11 +673,19 @@ export class TUI extends Container {
 			const lineText =
 				lineIndex >= 0 && lineIndex < this.#previousLines.length ? this.#previousLines[lineIndex] : "";
 			const handled = this.onMouse?.({ ...mouseEvent, lineIndex, lineText });
-			if (handled) {
+			const scrolled = this.#handleWheelViewportScroll({ ...mouseEvent, lineIndex, lineText });
+			if (handled || scrolled) {
 				this.requestRender();
 			}
 			return;
 		}
+
+
+		// Reset manual scroll on any keyboard input (return to live view)
+		if (this.#manualScrollRows > 0) {
+			this.#manualScrollRows = 0;
+		}
+
 
 		// Global debug key handler (Shift+Ctrl+D)
 		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
@@ -701,6 +710,28 @@ export class TUI extends Container {
 			this.#focusedComponent.handleInput(data);
 			this.requestRender();
 		}
+	}
+
+
+	/** Handle wheel events for viewport scrolling. Returns true if scroll was applied. */
+	#handleWheelViewportScroll(mouseEvent: TerminalMouseEvent): boolean {
+		if (mouseEvent.button !== "wheel-up" && mouseEvent.button !== "wheel-down") {
+			return false;
+		}
+		if (this.hasOverlay()) {
+			return false;
+		}
+		const maxScrollRows = Math.max(0, this.#previousLines.length - this.terminal.rows);
+		if (maxScrollRows === 0) {
+			return false;
+		}
+		const delta = mouseEvent.button === "wheel-up" ? 1 : -1;
+		const nextScrollRows = Math.max(0, Math.min(maxScrollRows, this.#manualScrollRows + delta));
+		if (nextScrollRows === this.#manualScrollRows) {
+			return false;
+		}
+		this.#manualScrollRows = nextScrollRows;
+		return true;
 	}
 
 	#parseCellSizeResponse(): string {
@@ -744,6 +775,7 @@ export class TUI extends Container {
 		this.#cellSizeQueryPending = false; // Give up waiting
 		return result;
 	}
+
 
 	/**
 	 * Resolve overlay layout from options.
@@ -1069,7 +1101,14 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
-		let viewportTop = Math.max(0, this.#maxLinesRendered - height);
+		const liveViewportTop = Math.max(0, this.#maxLinesRendered - height);
+		const maxScrollRows = Math.max(0, this.#previousLines.length - height);
+		// Clamp manual scroll to available content
+		if (this.#manualScrollRows > maxScrollRows) {
+			this.#manualScrollRows = maxScrollRows;
+		}
+		const manualScrollActive = this.#manualScrollRows > 0 && this.overlayStack.length === 0;
+		let viewportTop = manualScrollActive ? Math.max(0, liveViewportTop - this.#manualScrollRows) : liveViewportTop;
 		let prevViewportTop = this.#viewportTopRow;
 		let hardwareCursorRow = this.#hardwareCursorRow;
 		const computeLineDiff = (targetRow: number): number => {
@@ -1402,4 +1441,3 @@ export class TUI extends Container {
 		this.terminal.write(`\x1b[?2026h${buffer}\x1b[?2026l`);
 		this.#hardwareCursorRow = targetRow;
 	}
-}

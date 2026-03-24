@@ -974,6 +974,7 @@ export class Editor implements Component, Focusable {
 			data === "\x1b[27;5;13~" || // Ctrl+Enter (legacy format)
 			data === "\x1b\r" || // Option+Enter in some terminals (legacy)
 			data === "\x1b[13;2~" || // Shift+Enter in some terminals (legacy format)
+			data === "\x1b[13;2u" || // Shift+Enter (Kitty CSI-u format)
 			matchesKey(data, "shift+enter") || // Shift+Enter (Kitty protocol, handles lock bits)
 			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
 			(data === "\n" && data.length === 1) // Shift+Enter from iTerm2 mapping
