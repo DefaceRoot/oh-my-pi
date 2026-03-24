@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext, ImageContent } from "@oh-my-pi/pi-coding-agent";
+import { ImageFormat, PhotonImage, SamplingFilter } from "@oh-my-pi/pi-natives";
 import {
 	Image,
 	ImageProtocol,
@@ -352,6 +353,42 @@ async function loadImageBase64Async(path: string): Promise<{ data: string; mimeT
 	};
 }
 
+/**
+ * Convert image to PNG for Kitty graphics protocol (f=100).
+ * Returns the original data if already PNG or conversion fails.
+ */
+async function convertToPng(image: { data: string; mimeType: string }): Promise<{ data: string; mimeType: string }> {
+	if (image.mimeType === "image/png") return image;
+	try {
+		const decoded = new Uint8Array(Buffer.from(image.data, "base64"));
+		const photonImage = await PhotonImage.parse(decoded);
+		const pngBuffer = await photonImage.encode(ImageFormat.PNG, 100);
+		return { data: Buffer.from(pngBuffer).toBase64(), mimeType: "image/png" };
+	} catch {
+		return image;
+	}
+}
+
+/**
+ * Resize and encode image to PNG at target pixel dimensions.
+ * Pre-scales the image so Kitty doesn't resample, avoiding pixelation.
+ */
+async function resizeAndEncodePng(
+	image: { data: string; mimeType: string },
+	targetWidthPx: number,
+	targetHeightPx: number,
+): Promise<string | null> {
+	try {
+		const decoded = new Uint8Array(Buffer.from(image.data, "base64"));
+		const photonImage = await PhotonImage.parse(decoded);
+		const resized = await photonImage.resize(targetWidthPx, targetHeightPx, SamplingFilter.Lanczos3);
+		const pngBuffer = await resized.encode(ImageFormat.PNG, 100);
+		return Buffer.from(pngBuffer).toBase64();
+	} catch {
+		return null;
+	}
+}
+
 function getMimeType(path: string): string {
 	const lower = path.toLowerCase();
 	if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
@@ -564,29 +601,33 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		};
 	});
 
-	function toggleStagedScreenshot(screenshot: ScreenshotInfo): void {
-		if (stagedState.paths.has(screenshot.path)) {
-			const pathOrder = [...stagedState.paths];
-			const index = pathOrder.indexOf(screenshot.path);
-			if (index !== -1) {
-				stagedState.images.splice(index, 1);
-			}
-			stagedState.paths.delete(screenshot.path);
-			return;
+function toggleStagedScreenshot(screenshot: ScreenshotInfo, ctx: ExtensionContext): void {
+	if (stagedState.paths.has(screenshot.path)) {
+		const pathOrder = [...stagedState.paths];
+		const index = pathOrder.indexOf(screenshot.path);
+		if (index !== -1) {
+			stagedState.images.splice(index, 1);
 		}
+		stagedState.paths.delete(screenshot.path);
+		updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
+		return;
+	}
 
-		try {
-			const image = loadImageBase64(screenshot.path);
+	const image = loadImageBase64(screenshot.path);
+	convertToPng(image)
+		.then((converted) => {
 			stagedState.images.push({
 				type: "image",
-				mimeType: image.mimeType,
-				data: image.data,
+				mimeType: converted.mimeType,
+				data: converted.data,
 			});
 			stagedState.paths.add(screenshot.path);
-		} catch {
+			updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
+		})
+		.catch(() => {
 			// Ignore unreadable files.
-		}
-	}
+		});
+}
 
 	async function showScreenshotSelector(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
@@ -604,6 +645,7 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		const thumbnails = new Map<string, { data: string; mimeType: string } | null>();
 		const thumbnailLoads = new Map<string, Promise<void>>();
 		const imageDimensionsCache = new Map<string, { width: number; height: number } | null>();
+		const resizedDimensionsCache = new Map<string, { width: number; height: number }>();
 			const chafaBinary = Bun.which("chafa");
 			const chafaRenders = new Map<string, string[] | null>();
 			const chafaLoads = new Map<string, Promise<void>>();
@@ -686,30 +728,42 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 			return thumbnailLoads.has(path);
 		}
 
-		function startThumbnailLoad(screenshot: ScreenshotInfo): void {
-			if (thumbnails.has(screenshot.path) || thumbnailLoads.has(screenshot.path)) {
-				return;
-			}
-			if (screenshot.size > MAX_THUMB_SIZE) {
-				thumbnails.set(screenshot.path, null);
-				return;
-			}
+function startThumbnailLoad(screenshot: ScreenshotInfo): void {
+	if (thumbnails.has(screenshot.path) || thumbnailLoads.has(screenshot.path)) {
+		return;
+	}
+	if (screenshot.size > MAX_THUMB_SIZE) {
+		thumbnails.set(screenshot.path, null);
+		return;
+	}
 
-			const loadPromise = loadImageBase64Async(screenshot.path)
-				.then((image) => {
-					thumbnails.set(screenshot.path, image);
-					imageDimensionsCache.delete(screenshot.path);
-				})
-				.catch(() => {
-					thumbnails.set(screenshot.path, null);
-					imageDimensionsCache.delete(screenshot.path);
-				})
-				.finally(() => {
-					thumbnailLoads.delete(screenshot.path);
-					requestPreviewRender?.();
-				});
-			thumbnailLoads.set(screenshot.path, loadPromise);
+	const loadPromise = (async () => {
+		try {
+			const image = await loadImageBase64Async(screenshot.path);
+			const converted = await convertToPng(image);
+
+			// Pre-scale to standard preview size for sharp Kitty rendering
+			const cellDims = getCellDimensions();
+			const targetWidthPx = PREVIEW_WIDTH_CAP * cellDims.widthPx;
+			const targetHeightPx = PREVIEW_LINES * cellDims.heightPx;
+			const resized = await resizeAndEncodePng(converted, targetWidthPx, targetHeightPx);
+			if (resized) {
+				thumbnails.set(screenshot.path, { data: resized, mimeType: "image/png" });
+				resizedDimensionsCache.set(screenshot.path, { width: targetWidthPx, height: targetHeightPx });
+			} else {
+				thumbnails.set(screenshot.path, converted);
+			}
+			imageDimensionsCache.delete(screenshot.path);
+		} catch {
+			thumbnails.set(screenshot.path, null);
+			imageDimensionsCache.delete(screenshot.path);
+		} finally {
+			thumbnailLoads.delete(screenshot.path);
+			requestPreviewRender?.();
 		}
+	})();
+	thumbnailLoads.set(screenshot.path, loadPromise);
+}
 
 		function loadThumbnail(screenshot: ScreenshotInfo): { data: string; mimeType: string } | null {
 			if (thumbnails.has(screenshot.path)) {
@@ -735,6 +789,9 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		}
 
 		function getScreenshotDimensions(screenshot: ScreenshotInfo): { width: number; height: number } | null {
+			// Use resized dimensions if pre-scaled
+			const resized = resizedDimensionsCache.get(screenshot.path);
+			if (resized) return resized;
 			if (imageDimensionsCache.has(screenshot.path)) {
 				return imageDimensionsCache.get(screenshot.path) ?? null;
 			}
@@ -1473,8 +1530,7 @@ function clearRenderedKittyImage(): void {
 						}
 						if (matchesKey(data, "space") || data === "s" || data === "S") {
 							if (currentScreenshot) {
-								toggleStagedScreenshot(currentScreenshot);
-								updateStagedWidget(ctx, stagedState, { suppress: selectorOpen });
+toggleStagedScreenshot(currentScreenshot, ctx);
 								clearPendingDelete();
 								requestPickerRender();
 							}
