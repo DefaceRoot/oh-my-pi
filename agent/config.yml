@@ -1,24 +1,24 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: github-copilot/gpt-5.4:high
+  default: anthropic/claude-opus-4-6:high
   ask: kimi-code/kimi-k2-turbo-preview:high
-  orchestrator: anthropic/claude-sonnet-4-6:high
-  plan: anthropic/claude-opus-4-6:xhigh
+  orchestrator: anthropic/claude-opus-4-6:high
+  plan: github-copilot/claude-opus-4.6:xhigh
   commit: zai/glm-5:medium
-  implement: anthropic/claude-sonnet-4-6:high
-  explore: xiaomi/mimo-v2-flash:low
+  implement: github-copilot/gpt-5.4:xhigh
+  explore: zai/glm-5:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
-  curator: kimi-code/kimi-k2.5:medium
-  research: anthropic/claude-sonnet-4-6:low
-  verifier: openai-codex/gpt-5.4:high
+  curator: zai/glm-5:medium
+  research: openai-codex/gpt-5.4-mini:medium
+  verifier: anthropic/claude-opus-4-6:high
   worktree-setup: kimi-code/kimi-k2.5:medium
-  code-reviewer: anthropic/claude-opus-4-6:xhigh
-  plan-verifier: openai-codex/gpt-5.4:high
+  code-reviewer: github-copilot/gpt-5.4:xhigh
+  plan-verifier: github-copilot/gpt-5.4:xhigh
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: github-copilot/gemini-3.1-pro-preview:high
-  grafana: anthropic/claude-opus-4-6:high
+  grafana: anthropic/claude-sonnet-4-6:high
   debug: openai-codex/gpt-5.4:xhigh
 defaultThinkingLevel: high
 providers: 
