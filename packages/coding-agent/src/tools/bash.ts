@@ -18,6 +18,13 @@ import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
+import { detectSudoNeedsPassword, isSudoCandidate } from "./bash-sudo";
+import {
+	TASK_SUDO_PTY_REQUEST_CHANNEL,
+	TASK_SUDO_PTY_RESPONSE_CHANNEL,
+	type SudoPtyRequest,
+	type SudoPtyResponse,
+} from "../task/types";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
@@ -253,6 +260,91 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return outputText;
 	}
 
+	/**
+	 * Escalate a sudo command that needs a password to the parent session via
+	 * the event bus. Used by subagents (hasUI: false) to show the PTY overlay
+	 * on the main Oh My Pi session instead.
+	 */
+	async #runSudoViaParent(
+		command: string,
+		cwd: string,
+		env: Record<string, string> | undefined,
+		timeoutMs: number,
+		headLines: number | undefined,
+		tailLines: number | undefined,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<BashToolDetails> | undefined,
+	): Promise<AgentToolResult<BashToolDetails>> {
+		const eventBus = this.session.eventBus;
+		if (!eventBus) {
+			throw new ToolError(
+				"This sudo command requires a password but no UI is available. " +
+					"Run from an interactive session, configure NOPASSWD, or pass pty: true manually.",
+			);
+		}
+
+		const requestId = `sudo-pty-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const ESCALATION_BUFFER_MS = 120_000; // 2 min for user to type password
+		const escalationTimeoutMs = Math.max(timeoutMs, 30_000) + ESCALATION_BUFFER_MS;
+
+		onUpdate?.({
+			content: [{ type: "text", text: "Waiting for sudo password input on the main session…" }],
+			details: {},
+		});
+
+		const { promise, resolve, reject } = Promise.withResolvers<BashInteractiveResult>();
+		let unsubscribe: (() => void) | undefined;
+		const timeoutId = setTimeout(() => {
+			unsubscribe?.();
+			reject(
+				new ToolError(
+					"Sudo PTY escalation timed out — the main Oh My Pi session did not handle the " +
+						"password prompt. Ensure the interactive session is active.",
+				),
+			);
+		}, escalationTimeoutMs);
+
+		unsubscribe = eventBus.on(TASK_SUDO_PTY_RESPONSE_CHANNEL, (data: unknown) => {
+			const response = data as SudoPtyResponse;
+			if (response.requestId !== requestId) return;
+			clearTimeout(timeoutId);
+			unsubscribe?.();
+			if (response.error) {
+				reject(new ToolError(response.error));
+			} else if (response.result) {
+				resolve(response.result as BashInteractiveResult);
+			} else {
+				reject(new ToolError("Sudo PTY escalation returned an empty result."));
+			}
+		});
+
+		const request: SudoPtyRequest = { requestId, command, cwd, timeoutMs, env };
+		eventBus.emit(TASK_SUDO_PTY_REQUEST_CHANNEL, request);
+
+		const result = await promise;
+
+		const outputText = this.#formatResultOutput(result, headLines, tailLines);
+		const details: BashToolDetails = {};
+		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
+
+		if (result.cancelled) {
+			if (signal?.aborted) {
+				throw new ToolAbortError(normalizeResultOutput(result) || "Command aborted");
+			}
+			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
+		}
+		if ((result as import("./bash-interactive").BashInteractiveResult).timedOut) {
+			throw new ToolError(normalizeResultOutput(result) || "Command timed out");
+		}
+		if (result.exitCode === undefined) {
+			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`);
+		}
+		if (result.exitCode !== 0) {
+			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`);
+		}
+		return resultBuilder.done();
+	}
+
 	async execute(
 		_toolCallId: string,
 		{
@@ -393,13 +485,40 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			};
 		}
 
+		// Auto-detect sudo password requirement and upgrade to PTY when needed.
+		// Without this check, sudo opens /dev/tty and calls tcsetattr(), which
+		// corrupts the TUI's terminal mode and causes mouse tracking sequences
+		// to be echoed as literal text into the editor input box.
+		let effectivePty = pty;
+		if (!effectivePty && isSudoCandidate(command) && $env.PI_NO_PTY !== "1") {
+			const needsPassword = await detectSudoNeedsPassword(commandCwd, signal);
+			if (needsPassword) {
+				if (ctx?.hasUI === true && ctx.ui !== undefined) {
+					// Main session: silently upgrade to PTY mode.
+					effectivePty = true;
+				} else if (this.session.eventBus) {
+					// Subagent: escalate to parent session's UI.
+					return await this.#runSudoViaParent(
+						command,
+						commandCwd,
+						resolvedEnv,
+						timeoutMs,
+						headLines,
+						tailLines,
+						signal,
+						onUpdate,
+					);
+				}
+			}
+		}
+
 		// Track output for streaming updates (tail only)
 		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
 
 		// Allocate artifact for truncated output storage
 		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 
-		const usePty = pty && $env.PI_NO_PTY !== "1" && ctx?.hasUI === true && ctx.ui !== undefined;
+		const usePty = effectivePty && $env.PI_NO_PTY !== "1" && ctx?.hasUI === true && ctx.ui !== undefined;
 		const result: BashResult | BashInteractiveResult = usePty
 			? await runInteractiveBashPty(ctx.ui!, {
 					command,
