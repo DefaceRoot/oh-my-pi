@@ -193,6 +193,7 @@ describe("screenshots picker modal hosting", () => {
 			(TERMINAL as unknown as { imageProtocol: ImageProtocol | null }).imageProtocol = originalProtocol;
 		}
 	});
+
 });
 
 

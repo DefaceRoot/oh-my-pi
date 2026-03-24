@@ -1,12 +1,12 @@
 lastChangelogVersion: 13.9.2
 modelRoles: 
-  default: openai-codex/gpt-5.4:high
+  default: github-copilot/gpt-5.4:high
   ask: kimi-code/kimi-k2-turbo-preview:high
-  orchestrator: github-copilot/claude-opus-4.6:high
+  orchestrator: anthropic/claude-sonnet-4-6:high
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
-  implement: github-copilot/gpt-5.3-codex:high
-  explore: anthropic/claude-sonnet-4-6:low
+  implement: anthropic/claude-sonnet-4-6:high
+  explore: xiaomi/mimo-v2-flash:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium

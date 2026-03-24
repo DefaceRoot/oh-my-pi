@@ -175,3 +175,15 @@ it("wraps Kitty graphics sequences for tmux passthrough", () => {
 		}
 	}
 });
+
+it("treats iTerm2 inline image updates as image lines after metadata fallback text", () => {
+	const originalProtocol = TERMINAL.imageProtocol;
+	terminal.imageProtocol = ImageProtocol.Iterm2;
+	try {
+		const mixedLine = `${"prefix ".repeat(20)}│ \x1b]1337;File=inline=1;width=4;height=auto:AA==\x07`;
+
+		expect(TERMINAL.isImageLine(mixedLine)).toBe(true);
+	} finally {
+		terminal.imageProtocol = originalProtocol;
+	}
+});

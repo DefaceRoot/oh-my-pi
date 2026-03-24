@@ -687,7 +687,7 @@ export default function screenshotsPickerExtension(pi: ExtensionAPI): void {
 		selectorOpen = true;
 		try {
 			result = await ctx.ui.custom<string[] | null>((tui, theme, _keybindings, done) => {
-				const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol === ImageProtocol.Kitty);
+			const requestPickerRender = () => tui.requestRender(TERMINAL.imageProtocol !== null);
 				requestPreviewRender = requestPickerRender;
 				let activeTab = 0;
 				let cursor = 0;
