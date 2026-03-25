@@ -268,25 +268,30 @@ describe("task unit scope metadata", () => {
 	});
 
 
-	test("rewrites coderabbit tasks to report blocked handoff when required scope metadata is missing", () => {
+	test("rewrites coderabbit tasks with TOON context fallback when scope metadata is missing", () => {
 		const input = {
 			agent: "coderabbit",
 			tasks: [
-				{ id: "CodeRabbitBlocked", assignment: "Review the implementation and report findings." },
+				{ id: "CodeRabbitFallback", assignment: "Review the implementation and report findings." },
 			],
 		};
-
 
 		const didMutate = rewriteCodeRabbitTaskInput({
 			input,
 			scopeByUnitId: new Map(),
 		});
 
-
 		expect(didMutate).toBe(true);
-		expect(input.context).toContain("Parent handoff is incomplete");
-		expect(input.tasks[0]?.assignment).toContain("Return `verdict: \"no_go\"`");
-		expect(input.tasks[0]?.assignment).toContain("Do not inspect repository files manually");
+		// Should NOT contain blocked/poison instructions
+		expect(input.context).not.toContain("Parent handoff is incomplete");
+		expect(input.tasks[0]?.assignment).not.toContain('Return `verdict: "no_go"`');
+		expect(input.tasks[0]?.assignment).not.toContain("Do not inspect repository files manually");
+		// Should contain TOON context fallback instructions
+		expect(input.context).toContain("TOON context");
+		expect(input.tasks[0]?.assignment).toContain("TOON context");
+		// Should still instruct to run CodeRabbit CLI
+		expect(input.context).toContain("Run CodeRabbit CLI only");
+		expect(input.tasks[0]?.assignment).toContain("Run CodeRabbit CLI only");
 	});
 
 

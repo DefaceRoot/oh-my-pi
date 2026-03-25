@@ -209,7 +209,7 @@ describe("SubagentNavigatorModal", () => {
 			expect(text).toContain("12,450");
 			expect(
 				lines.some(line =>
-					/│\s*1\s*│\s*Build runbook dashboard\s*│\s*●\s+RUNNING\s*│\s*---\s*│\s*explore/.test(line),
+					/│\s*1\s*│\s*Build runbook dashboard\s*│\s*●\s+RUNNING\s*│\s*---\s*│\s*---\s*│\s*explore/.test(line),
 				),
 			).toBe(true);
 		});
@@ -269,6 +269,47 @@ describe("SubagentNavigatorModal", () => {
 			expect(text).toContain("---");
 		});
 
+		test("renders Changes column with file and line stats at wide widths", () => {
+			const refs = [
+				makeRef("impl-001", {
+					status: "completed",
+					filesChanged: 3,
+					linesAdded: 45,
+					linesDeleted: 12,
+				}),
+				makeRef("lint-002", {
+					status: "completed",
+					parentId: "impl-001",
+					rootId: "impl-001",
+				}),
+			];
+			const modal = createModal([makeGroup("impl-001", refs)]);
+
+			// At width 140+, Changes column should be visible
+			const wideHeader = renderLines(modal, 150).find(line => line.includes("Title")) ?? "";
+			expect(wideHeader).toContain("Changes");
+
+			const wideText = renderText(modal, 150);
+			expect(wideText).toContain("+45");
+			expect(wideText).toContain("-12");
+
+			// At width 120, Changes column should be hidden
+			const narrowHeader = renderLines(modal, 120).find(line => line.includes("Title")) ?? "";
+			expect(narrowHeader).not.toContain("Changes");
+		});
+
+		test("renders --- in Changes column for agents without edit stats", () => {
+			const refs = [makeRef("lint-001", { status: "completed" })];
+			const modal = createModal([makeGroup("lint-001", refs)]);
+			const text = renderText(modal, 150);
+			// At width 150, Changes column is visible and should show --- for no-stats agents
+			const header = renderLines(modal, 150).find(line => line.includes("Title")) ?? "";
+			expect(header).toContain("Changes");
+			// The row should have the changes cell (--- rendered as dim text, visible after strip)
+			expect(text).toContain("DONE");
+			expect(text).toContain("lint");
+		});
+
 		test("keeps rows within target width for long titles and models", () => {
 			const refs = [
 				makeRef("long-1", {
@@ -313,7 +354,7 @@ describe("SubagentNavigatorModal", () => {
 				makeRef("grandchild-001", { status: "completed", parentId: "child-001", rootId: "root-001", depth: 2 }),
 			];
 			const modal = createModal([makeGroup("root-001", refs)]);
-			const text = renderText(modal, 140);
+			const text = renderText(modal, 155);
 			expect(text).toContain("       └─ Task for grandchild-001");
 			expect(text).not.toContain("  │   └─ Task for grandchild-001");
 		});

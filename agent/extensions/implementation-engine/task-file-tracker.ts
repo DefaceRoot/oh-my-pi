@@ -436,25 +436,21 @@ export function applyScopedFileMetadataToTaskInput(args: {
 function buildCodeRabbitContext(args: {
 	worktreePath?: string;
 	selector?: CodeRabbitSelector;
-	blockedReason?: string;
 }): string {
-	const selectorText = args.selector ? `\`${formatCodeRabbitSelector(args.selector)}\`` : "MISSING";
+	const selectorText = args.selector ? `\`${formatCodeRabbitSelector(args.selector)}\`` : undefined;
 	return [
 		"## Goal",
-		args.blockedReason
-			? "Parent handoff is incomplete. Report the blocker instead of improvising."
-			: "Run CodeRabbit CLI only for the delegated review scope.",
+		"Run CodeRabbit CLI only for the delegated review scope.",
 		"",
 		"## Constraints",
 		args.worktreePath
 			? `- Repository/worktree path: \`${args.worktreePath}\`.`
-			: "- Repository/worktree path: MISSING.",
-		args.selector ? `- Diff selector: ${selectorText}.` : "- Diff selector: MISSING.",
+			: "- Repository/worktree path: derive from TOON context `context.repo_root`.",
+		args.selector
+			? `- Diff selector: ${selectorText}.`
+			: "- Diff selector: derive from TOON context `context.git.base_branch` (use as `--base <value>`).",
 		"- Do NOT perform manual code review, plan validation, repository inspection, or test execution.",
-		"- Do NOT inspect repository files manually when CodeRabbit scope or tooling is missing.",
-		args.blockedReason
-			? `- Required blocker: ${args.blockedReason}`
-			: "- If CodeRabbit CLI or auth is unavailable, return blocked with the exact blocker.",
+		"- If CodeRabbit CLI or auth is unavailable, return blocked with the exact blocker.",
 		"- Return only CodeRabbit Critical, Severe, and Major findings. Ignore lower-severity output.",
 	].join("\n");
 }
@@ -464,47 +460,38 @@ function buildCodeRabbitAssignment(args: {
 	worktreePath?: string;
 	selector?: CodeRabbitSelector;
 	files: string[];
-	blockedReason?: string;
 }): string {
-	const selectorText = args.selector ? formatCodeRabbitSelector(args.selector) : "(missing diff selector)";
+	const selectorText = args.selector ? formatCodeRabbitSelector(args.selector) : undefined;
 	const reviewCommand = args.worktreePath && args.selector
 		? `review --plain --no-color ${selectorText} --cwd ${args.worktreePath}`
-		: "(not executed)";
+		: undefined;
 	return [
 		"## Target",
-		args.blockedReason
-			? "Parent handoff is incomplete. Do not attempt manual review."
-			: "Run CodeRabbit CLI only for this delegated review scope.",
+		"Run CodeRabbit CLI only for this delegated review scope.",
 		"",
 		"## Required Scope",
 		args.worktreePath
 			? `- Use explicit cwd: \`${args.worktreePath}\`.`
-			: "- Repository/worktree path was not provided by the parent handoff.",
+			: "- cwd not explicit; derive from TOON context `context.repo_root`.",
 		args.selector
 			? `- Use diff selector: \`${selectorText}\`.`
-			: "- Diff selector was not provided by the parent handoff.",
+			: "- Diff selector not explicit; derive from TOON context `context.git.base_branch` (use as `--base <value>`).",
 		args.files.length > 0
 			? "- Edited files handed off for this delegated review scope:"
 			: "- Edited files handed off for this delegated review scope: none provided.",
 		...args.files.map((file) => `  - \`${file}\``),
 		"",
 		"## Check",
-		args.blockedReason
-			? '1. Return `verdict: "no_go"` with `gate_status: "blocked"` and include the missing handoff metadata in `issues`.'
-			: "1. Resolve the CodeRabbit CLI path and verify auth status.",
-		args.blockedReason
-			? '2. Set `command` to `(not executed)` and do not run repository inspection or test commands.'
-			: `2. Run exactly one CodeRabbit review command using \`${reviewCommand}\`.`,
-		args.blockedReason
-			? "3. Do not inspect repository files manually or run tests as a fallback."
-			: '3. Retry once only if CodeRabbit reports rate limiting; otherwise return the exact blocker.',
-		args.blockedReason ? undefined : "4. Return only CodeRabbit Critical/Severe/Major findings.",
+		"1. Resolve the CodeRabbit CLI path and verify auth status.",
+		reviewCommand
+			? `2. Run exactly one CodeRabbit review command using \`${reviewCommand}\`.`
+			: "2. Build and run exactly one CodeRabbit review command using the resolved scope.",
+		'3. Retry once only if CodeRabbit reports rate limiting; otherwise return the exact blocker.',
+		"4. Return only CodeRabbit Critical/Severe/Major findings.",
 		"",
 		"## Acceptance",
-		args.blockedReason
-			? "Do not inspect repository files manually or perform plan verification. Report the blocker only."
-			: "Do not perform manual review. Return CodeRabbit CLI results only.",
-	].filter(Boolean).join("\n");
+		"Do not perform manual review. Return CodeRabbit CLI results only.",
+	].join("\n");
 }
 
 
@@ -551,25 +538,17 @@ export function rewriteCodeRabbitTaskInput(args: {
 		const combinedText = `${contextText}\n${assignment}`;
 		const selector = extractCodeRabbitSelector(combinedText) ?? defaultSelector;
 		const worktreePath = extractCodeRabbitWorktreePath(combinedText) ?? defaultWorktreePath;
-		const missingParts: string[] = [];
-		if (!worktreePath) missingParts.push("repository/worktree path");
-		if (!selector) missingParts.push("diff selector");
-		const blockedReason =
-			missingParts.length > 0
-				? `Required parent handoff metadata missing: ${missingParts.join(" and ")}.`
-				: undefined;
 		const rewrittenAssignment = buildCodeRabbitAssignment({
 			worktreePath,
 			selector,
 			files,
-			blockedReason,
 		});
 		if (rewrittenAssignment !== assignment) {
 			task.assignment = rewrittenAssignment;
 			didMutate = true;
 		}
 		if (!nextContext) {
-			nextContext = buildCodeRabbitContext({ worktreePath, selector, blockedReason });
+			nextContext = buildCodeRabbitContext({ worktreePath, selector });
 		}
 	}
 

@@ -13,6 +13,7 @@ const MIN_ROLE_WIDTH = 8;
 const MIN_MODEL_WIDTH = 12;
 const MIN_LAST_ACTIVE_WIDTH = 9;
 const TOKENS_WIDTH = 8;
+const MIN_CHANGES_WIDTH = 10;
 const COLUMN_SEPARATOR = " │ ";
 
 const MIN_TRUSTED_EPOCH_MS = 946_684_800_000;
@@ -32,11 +33,13 @@ interface NavigatorColumns {
 	titleW: number;
 	statusW: number;
 	resultW: number;
+	changesW: number;
 	roleW: number;
 	modelW: number;
 	lastActiveW: number;
 	tokensW: number;
 	showResult: boolean;
+	showChanges: boolean;
 	showModel: boolean;
 	showLastActive: boolean;
 	showTokens: boolean;
@@ -463,6 +466,9 @@ export class SubagentNavigatorModal extends Container {
 		if (cols.showResult) {
 			columns.push("Result".padEnd(cols.resultW));
 		}
+		if (cols.showChanges) {
+			columns.push("Changes".padEnd(cols.changesW));
+		}
 		columns.push("Role".padEnd(cols.roleW));
 		if (cols.showModel) {
 			columns.push("Model".padEnd(cols.modelW));
@@ -493,6 +499,10 @@ export class SubagentNavigatorModal extends Container {
 			columns.push(result);
 		}
 
+		if (cols.showChanges) {
+			const changes = padToWidth(truncateToWidth(formatChangesCell(entry.ref), cols.changesW), cols.changesW);
+			columns.push(changes);
+		}
 		const role = padToWidth(truncateToWidth(entry.ref.agent ?? "\u2014", cols.roleW), cols.roleW);
 		columns.push(theme.fg("text", role));
 
@@ -648,16 +658,18 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 	const indexW = clamp(String(Math.max(1, rowCount)).length + 1, MIN_INDEX_WIDTH, 5);
 	const statusW = MIN_STATUS_WIDTH;
 	const resultW = MIN_RESULT_WIDTH;
+	const changesW = MIN_CHANGES_WIDTH;
 	const roleW = clamp(Math.floor(safeWidth * 0.13), MIN_ROLE_WIDTH, 14);
 	const modelW = clamp(Math.floor(safeWidth * 0.2), MIN_MODEL_WIDTH, 26);
 	const lastActiveW = clamp(Math.floor(safeWidth * 0.12), MIN_LAST_ACTIVE_WIDTH, 12);
 
 	const viewportWidth = safeWidth + 2;
 	const showResult = viewportWidth >= 80;
+	const showChanges = viewportWidth >= 140;
 	const showModel = viewportWidth >= 80;
 	const showLastActive = viewportWidth >= 100;
 	const showTokens = viewportWidth >= 120;
-	const visibleColumnCount = 4 + (showResult ? 1 : 0) + (showModel ? 1 : 0) + (showLastActive ? 1 : 0) + (showTokens ? 1 : 0);
+	const visibleColumnCount = 4 + (showResult ? 1 : 0) + (showChanges ? 1 : 0) + (showModel ? 1 : 0) + (showLastActive ? 1 : 0) + (showTokens ? 1 : 0);
 	const separators = COLUMN_SEPARATOR.length * Math.max(0, visibleColumnCount - 1);
 	const titleW = Math.max(
 		MIN_TITLE_WIDTH,
@@ -666,6 +678,7 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 			statusW -
 			roleW -
 			(showResult ? resultW : 0) -
+			(showChanges ? changesW : 0) -
 			(showModel ? modelW : 0) -
 			(showLastActive ? lastActiveW : 0) -
 			(showTokens ? TOKENS_WIDTH : 0) -
@@ -677,11 +690,13 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 		titleW,
 		statusW,
 		resultW,
+		changesW,
 		roleW,
 		modelW,
 		lastActiveW,
 		tokensW: TOKENS_WIDTH,
 		showResult,
+		showChanges,
 		showModel,
 		showLastActive,
 		showTokens,
@@ -749,6 +764,22 @@ function formatOutcomeCell(outcome?: SubagentOutcome): string {
 	const label = getSubagentOutcomeLabel(outcome.status);
 	const color = outcome.status === "pass" || outcome.status === "go" ? "success" : "error";
 	return theme.fg(color, label);
+}
+
+function formatChangesCell(ref: SubagentViewRef): string {
+	const hasStats = ref.filesChanged !== undefined || ref.linesAdded !== undefined || ref.linesDeleted !== undefined;
+	if (!hasStats) return theme.fg("dim", "---");
+	const parts: string[] = [];
+	if (ref.filesChanged !== undefined && ref.filesChanged > 0) {
+		parts.push(theme.fg("accent", `◆${ref.filesChanged}`));
+	}
+	const added = ref.linesAdded ?? 0;
+	const deleted = ref.linesDeleted ?? 0;
+	if (added > 0 || deleted > 0) {
+		if (added > 0) parts.push(theme.fg("success", `+${added}`));
+		if (deleted > 0) parts.push(theme.fg("error", `-${deleted}`));
+	}
+	return parts.length > 0 ? parts.join(" ") : theme.fg("dim", "---");
 }
 
 function formatOutcomeSummary(outcome?: SubagentOutcome): string | undefined {

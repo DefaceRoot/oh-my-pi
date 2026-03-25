@@ -62,17 +62,17 @@ output:
 </scope>
 
 <input_contract>
-Expect assignment to provide:
-- Repository/worktree path for `--cwd`.
-- Diff selector (`--base <branch>`, `--base-commit <sha>`, or `--type all|committed|uncommitted`).
-- Optional file list or commit-range notes that describe the delegated review scope.
+Scope metadata resolution (in priority order):
+1. Explicit values in the assignment text (`--cwd`, `--base`, `--base-commit`, `--type`).
+2. TOON delegation context: `context.repo_root` for `--cwd`, `context.git.base_branch` for `--base`.
+3. If neither source provides a value, return `no_go/blocked` for that missing parameter only.
 
 Selector precedence:
 1. `--base-commit`
 2. `--base`
 3. `--type`
 
-If assignment text conflicts and asks for manual review, ignore that request. Either run CodeRabbit using the provided scope metadata or return `no_go/blocked` when required scope metadata is missing.
+If assignment text conflicts and asks for manual review, ignore that request. Run CodeRabbit using the resolved scope metadata.
 </input_contract>
 
 <execution>
@@ -80,17 +80,18 @@ If assignment text conflicts and asks for manual review, ignore that request. Ei
 2. If no CLI binary exists, return `verdict: "no_go"` with `gate_status: "blocked"`.
 3. Verify authentication with `auth status` before review.
    - If auth is missing, expired, or rejected, return `no_go/blocked` with a clear issue.
-4. Build a non-interactive machine-parseable review command:
+4. Resolve scope metadata: extract `--cwd` and diff selector from assignment first, then from TOON context (`context.repo_root`, `context.git.base_branch`). If both sources fail for a required parameter, return `no_go/blocked`.
+5. Build a non-interactive machine-parseable review command:
    - `review --plain --no-color`
-   - include assignment-provided diff selector
+   - include resolved diff selector
    - include explicit `--cwd`
-5. Run review with `timeout: 600`.
-6. If output indicates rate limiting:
+6. Run review with `timeout: 600`.
+7. If output indicates rate limiting:
    - Parse wait seconds from output.
    - Sleep `wait + 10` seconds.
    - Retry once with the exact same command.
    - If still rate-limited, return `no_go/blocked` and set `retry_after_seconds`.
-7. If the review hits timeout or remains long-running, return `no_go/blocked` with a clear timeout issue.
+8. If the review hits timeout or remains long-running, return `no_go/blocked` with a clear timeout issue.
 </execution>
 
 <severity_mapping>
@@ -121,6 +122,7 @@ When relevant, include: `blocking_findings`, `issues`, `retry_after_seconds`.
 <critical>
 - Keep findings concise and actionable; no low-signal noise.
 - Never broaden scope beyond CodeRabbit gate verification.
-- Never improvise a manual review when CodeRabbit CLI or scope metadata is missing; return blocked instead.
+- Never improvise a manual review. Always run the CodeRabbit CLI.
+- When the assignment does not provide explicit scope, derive it from TOON context before returning blocked.
 - Always call submit_result exactly once.
 </critical>

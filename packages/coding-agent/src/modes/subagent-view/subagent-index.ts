@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString } from "../../config/model-resolver";
-import { deriveSubagentOutcomeFromReviewData, normalizeSubagentOutcome } from "../../task/subagent-outcome";
+import { type SubagentOutcome, deriveSubagentOutcomeFromReviewData, normalizeSubagentOutcome } from "../../task/subagent-outcome";
 import { isUserStoppedAbortReason } from "../../task/subagent-stop";
 import type { SingleResult } from "../../task/types";
 import { getTotalUsageTokens } from "../../utils/usage-tokens";
@@ -66,6 +66,7 @@ export class SubagentIndex {
 	#reconcileToken = 0;
 	#delegationSidecars = new Map<string, ParsedDelegationSidecar[]>();
 	#editStatsCache = new Map<string, { filesChanged: number; linesAdded: number; linesDeleted: number } | null>();
+	#outcomeCache = new Map<string, SubagentOutcome | null>();
 	#statsComputing = false;
 
 	constructor(options: SubagentIndexOptions) {
@@ -547,6 +548,10 @@ export class SubagentIndex {
 			next.linesAdded = stats.linesAdded;
 			next.linesDeleted = stats.linesDeleted;
 		}
+		if (!next.outcome && next.sessionPath) {
+			const cachedOutcome = this.#outcomeCache.get(next.sessionPath);
+			if (cachedOutcome) next.outcome = cachedOutcome;
+		}
 		return next;
 	}
 
@@ -894,7 +899,7 @@ export class SubagentIndex {
 		return sidecarsInDir.find(sc => sc.taskId === taskItemId);
 	}
 
-/** Compute and cache edit stats for all completed sessions not yet scanned.
+/** Compute and cache edit stats and outcome for all completed sessions not yet scanned.
 	 * Returns true if any sessions were updated.
 	 */
 	async computeAllEditStats(): Promise<boolean> {
@@ -911,8 +916,9 @@ export class SubagentIndex {
 			if (toProcess.length === 0) return false;
 			for (const ref of toProcess) {
 				if (!ref.sessionPath) continue;
-				const stats = await this.#scanEditStatsFromFile(ref.sessionPath);
-				this.#editStatsCache.set(ref.sessionPath, stats.filesChanged > 0 ? stats : null);
+				const result = await this.#scanSessionFileMetadata(ref.sessionPath);
+				this.#editStatsCache.set(ref.sessionPath, result.editStats.filesChanged > 0 ? result.editStats : null);
+				this.#outcomeCache.set(ref.sessionPath, result.outcome ?? null);
 			}
 			this.#rebuildSnapshot();
 			return true;
@@ -921,12 +927,16 @@ export class SubagentIndex {
 		}
 	}
 
-	async #scanEditStatsFromFile(
+	async #scanSessionFileMetadata(
 		sessionPath: string,
-	): Promise<{ filesChanged: number; linesAdded: number; linesDeleted: number }> {
+	): Promise<{
+		editStats: { filesChanged: number; linesAdded: number; linesDeleted: number };
+		outcome?: SubagentOutcome;
+	}> {
 		const filePaths = new Set<string>();
 		let linesAdded = 0;
 		let linesDeleted = 0;
+		let outcome: SubagentOutcome | undefined;
 		try {
 			const content = await Bun.file(sessionPath).text();
 			for (const rawLine of content.split("\n")) {
@@ -937,12 +947,23 @@ export class SubagentIndex {
 					!isEdit &&
 					rawLine.includes('"write"') &&
 					/"toolName"\s*:\s*"write"/.test(rawLine);
-				if (!isEdit && !isWrite) continue;
+				const isSubmitResult =
+					!isEdit &&
+					!isWrite &&
+					rawLine.includes('"submit_result"') &&
+					/"toolName"\s*:\s*"submit_result"/.test(rawLine);
+				if (!isEdit && !isWrite && !isSubmitResult) continue;
+
+				if (isSubmitResult) {
+					outcome = this.#extractOutcomeFromToolResultLine(rawLine) ?? outcome;
+					continue;
+				}
+
 				const textRegex = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
 				let textMatch: RegExpExecArray | null;
 				while ((textMatch = textRegex.exec(rawLine)) !== null) {
 					try {
-						const text = JSON.parse(`"${textMatch[1]}"`);
+						const text = JSON.parse(`"${textMatch[1]}"`) as unknown;
 						if (typeof text !== "string") continue;
 						if (isEdit) {
 							const pathLine = /^Updated\s+(.+?)$/m.exec(text);
@@ -964,7 +985,44 @@ export class SubagentIndex {
 		} catch {
 			// Ignore file read errors
 		}
-		return { filesChanged: filePaths.size, linesAdded, linesDeleted };
+		return { editStats: { filesChanged: filePaths.size, linesAdded, linesDeleted }, outcome };
+	}
+
+	/**
+	 * Extract outcome from a submit_result toolResult JSONL line.
+	 * The details object contains { data, status, outcome? } and/or the data
+	 * itself may contain review fields (passed, verdict, overall_correctness).
+	 */
+	#extractOutcomeFromToolResultLine(rawLine: string): SubagentOutcome | undefined {
+		// Try to extract outcome from the details.outcome field
+		const outcomeStatusMatch = /"outcome"\s*:\s*\{[^}]*"status"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(rawLine);
+		if (outcomeStatusMatch) {
+			try {
+				const status = JSON.parse(`"${outcomeStatusMatch[1]}"`) as unknown;
+				const result = normalizeSubagentOutcome({ status });
+				if (result) return result;
+			} catch {
+				// fall through
+			}
+		}
+
+		// Fallback: try to parse the details block to derive outcome from review data
+		// Look for the details JSON object in the line
+		const detailsMatch = /"details"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})/.exec(rawLine);
+		if (detailsMatch?.[1]) {
+			try {
+				const details = JSON.parse(detailsMatch[1]) as Record<string, unknown>;
+				// Try explicit outcome first
+				const explicit = normalizeSubagentOutcome(details.outcome);
+				if (explicit) return explicit;
+				// Try deriving from the data field (passed, verdict, etc.)
+				const derived = deriveSubagentOutcomeFromReviewData(details.data);
+				if (derived) return derived;
+			} catch {
+				// Malformed JSON, fall through
+			}
+		}
+		return undefined;
 	}
 
 	#applyDelegationSidecar(ref: SubagentViewRef): void {
