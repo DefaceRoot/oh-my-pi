@@ -23,11 +23,19 @@ function stripFrontmatter(content: string): string {
 	return endIndex === -1 ? normalized.trim() : normalized.slice(endIndex + 4).trim();
 }
 
+/** Collapse runs of blank lines to a single newline so prompt-rendering whitespace normalization doesn't break substring matching. */
+function normalizeForMatching(text: string): string {
+	return text.replace(/\n[ \t]*\n/g, "\n");
+}
+
 function detectAgentNameFromPrompt(systemPrompt: string, knownAgentPrompts: KnownAgentPrompt[]): string {
 	const match = systemPrompt.match(/^name:\s*(\S+)/m);
 	if (match) return match[1];
 	if (!systemPrompt.includes(SUBAGENT_ROLE_MARKER)) return "default";
-	const matchedAgent = knownAgentPrompts.find(({ body }) => body.length > 0 && systemPrompt.includes(body));
+	const normalizedPrompt = normalizeForMatching(systemPrompt);
+	const matchedAgent = knownAgentPrompts.find(
+		({ body }) => body.length > 0 && normalizedPrompt.includes(normalizeForMatching(body)),
+	);
 	return matchedAgent?.name ?? SUBAGENT_DEFAULT_NAME;
 }
 

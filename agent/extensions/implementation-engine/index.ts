@@ -3777,7 +3777,7 @@ const notifyWorktreeProgress = (
 			}
 			if (taskAgent === "code-reviewer" || taskAgent === "verifier" || taskAgent === "coderabbit") {
 				const ownedFiles = await captureImplementationWorkerOwnedFiles();
-				if (taskAgent === "code-reviewer" || taskAgent === "verifier") {
+				if ((taskAgent === "code-reviewer" || taskAgent === "verifier") && activeImplementationWorkerGate) {
 					const didApplyScopeMetadata = applyScopedFileMetadataToTaskInput({
 						input: taskInput,
 						scopeByUnitId: implementationUnitScopeById,

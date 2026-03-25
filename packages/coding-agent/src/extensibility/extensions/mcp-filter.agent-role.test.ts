@@ -56,6 +56,17 @@ describe("mcp-filter agent role detection", () => {
 		expect(result).toBeUndefined();
 	});
 
+	it("allows chrome-devtools MCP tools for designer subagent prompts", async () => {
+		const handlers = createRegisteredHandlers();
+		await runBeforeAgentStart(handlers, await renderSubagentPrompt("designer"));
+
+		const toolCall = handlers.get("tool_call")?.[0];
+		if (!toolCall) throw new Error("tool_call handler not registered");
+		const result = await toolCall({ toolName: "mcp_chrome_devtools_new_page" }, {});
+
+		expect(result).toBeUndefined();
+	});
+
 	it("blocks MCP tools for ask-explore subagent prompts", async () => {
 		const handlers = createRegisteredHandlers();
 		await runBeforeAgentStart(handlers, await renderSubagentPrompt("ask-explore"));

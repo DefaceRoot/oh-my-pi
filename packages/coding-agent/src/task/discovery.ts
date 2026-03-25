@@ -118,9 +118,14 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 	return { agents: [...loadedAgents, ...bundledAgents], projectAgentsDir };
 }
 
+/** Historical agent name aliases. Resolved when exact name lookup fails. */
+const AGENT_ALIASES: Record<string, string> = {
+	task: "implement",
+};
+
 /**
  * Get an agent by name from discovered agents.
  */
 export function getAgent(agents: AgentDefinition[], name: string): AgentDefinition | undefined {
-	return agents.find(a => a.name === name);
+	return agents.find(a => a.name === name) ?? agents.find(a => a.name === AGENT_ALIASES[name]);
 }

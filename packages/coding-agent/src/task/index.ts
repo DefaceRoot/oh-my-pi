@@ -28,8 +28,8 @@ import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
-import { formatBytes, formatDuration } from "../tools/render-utils";
 import { runInteractiveBashPty } from "../tools/bash-interactive";
+import { formatBytes, formatDuration } from "../tools/render-utils";
 import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
@@ -42,6 +42,7 @@ import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { PLAN_MODE_PLAN_VERIFIER_TOOLS, PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
+import type { SubagentResumeRequest } from "./subagent-resume-request";
 import { isUserStoppedAbortReason } from "./subagent-stop";
 import { type RenderResult, renderTemplate } from "./template";
 import { buildToonDelegation, type DelegationTask, type ToonDelegationResult } from "./toon-delegation-builder";
@@ -49,13 +50,13 @@ import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	type SudoPtyRequest,
+	type SudoPtyResponse,
 	TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL,
 	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
 	TASK_SUDO_PTY_REQUEST_CHANNEL,
 	TASK_SUDO_PTY_RESPONSE_CHANNEL,
-	type SudoPtyRequest,
-	type SudoPtyResponse,
 	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
@@ -64,7 +65,6 @@ import {
 	taskSchema,
 	taskSchemaNoIsolation,
 } from "./types";
-import type { SubagentResumeRequest } from "./subagent-resume-request";
 import {
 	applyBaseline,
 	applyNestedPatches,
@@ -463,7 +463,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
-		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
+		const selectedAgent = getAgent(this.#discoveredAgents, params.agent);
+		const effectiveAgentName = selectedAgent?.name ?? params.agent;
 		const hasTimeout = "timeout" in params && typeof params.timeout === "number" && params.timeout > 0;
 
 		// Force async when timeout is set (so the orchestrator gets control back on timeout).
@@ -472,9 +473,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
-		if (this.#isBlockedByOrchestratorBoundary(params.agent)) {
+		if (this.#isBlockedByOrchestratorBoundary(effectiveAgentName)) {
 			return {
-				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(params.agent) }],
+				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(effectiveAgentName) }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
@@ -499,11 +500,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const outputManager =
 			this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
-		const fallbackAgentSource =
-			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
+		const fallbackAgentSource = selectedAgent?.source ?? "bundled";
 		const parentImages = this.session.getLastUserImages?.();
 		const renderedTasks = await Promise.all(
-			taskItems.map(taskItem => renderTaskWithDelegationToon(this.session, params.agent, taskItem, params.context)),
+			taskItems.map(taskItem =>
+				renderTaskWithDelegationToon(this.session, effectiveAgentName, taskItem, params.context),
+			),
 		);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
@@ -511,7 +513,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			progressByTaskId.set(uniqueIds[index], {
 				index,
 				id: uniqueIds[index],
-				agent: params.agent,
+				agent: effectiveAgentName,
 				agentSource: fallbackAgentSource,
 				status: "pending",
 				task: renderedTask.task,
@@ -622,16 +624,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
 						);
 						try {
-								const result = await this.#executeSync(
-									_toolCallId,
-									singleParams,
-									runSignal,
-									forwardProgressUpdate,
-									ctx,
-									parentImages,
-									true,
-									[uniqueId],
-								);
+							const result = await this.#executeSync(
+								_toolCallId,
+								singleParams,
+								runSignal,
+								forwardProgressUpdate,
+								ctx,
+								parentImages,
+								true,
+								[uniqueId],
+							);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 							const singleResult = result.details?.results[0];
 							const finalStatus = singleResult?.aborted
@@ -843,7 +845,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			content: [
 				{
 					type: "text",
-					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${effectiveAgentName}.${scheduleFailureSummary} Results will be delivered when complete.`,
 				},
 			],
 			details: {
@@ -868,7 +870,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
-		const { agent: agentName, context, schema: outputSchema } = params;
+		const { agent: requestedAgentName, context, schema: outputSchema } = params;
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -895,14 +897,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		// Validate agent exists
-		const agent = getAgent(agents, agentName);
+		const agent = getAgent(agents, requestedAgentName);
 		if (!agent) {
 			const available = agents.map(a => a.name).join(", ") || "none";
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Unknown agent "${agentName}". Available: ${available}`,
+						text: `Unknown agent "${requestedAgentName}". Available: ${available}`,
 					},
 				],
 				details: {
@@ -912,6 +914,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				},
 			};
 		}
+		const agentName = agent.name;
 
 		// Check if agent is disabled in settings
 		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
@@ -1214,29 +1217,26 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			// overlay on the main session and returns the result via response channel.
 			if (ctx?.ui) {
 				const parentUi = ctx.ui;
-				disposeSudoPtyListener = this.session.eventBus?.on(
-					TASK_SUDO_PTY_REQUEST_CHANNEL,
-					async (data: unknown) => {
-						const request = data as SudoPtyRequest;
-						try {
-							const result = await runInteractiveBashPty(parentUi, {
-								command: request.command,
-								cwd: request.cwd,
-								timeoutMs: request.timeoutMs,
-								env: request.env,
-							});
-							this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
-								requestId: request.requestId,
-								result,
-							} satisfies SudoPtyResponse);
-						} catch (err) {
-							this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
-								requestId: request.requestId,
-								error: err instanceof Error ? err.message : String(err),
-							} satisfies SudoPtyResponse);
-						}
-					},
-				);
+				disposeSudoPtyListener = this.session.eventBus?.on(TASK_SUDO_PTY_REQUEST_CHANNEL, async (data: unknown) => {
+					const request = data as SudoPtyRequest;
+					try {
+						const result = await runInteractiveBashPty(parentUi, {
+							command: request.command,
+							cwd: request.cwd,
+							timeoutMs: request.timeoutMs,
+							env: request.env,
+						});
+						this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
+							requestId: request.requestId,
+							result,
+						} satisfies SudoPtyResponse);
+					} catch (err) {
+						this.session.eventBus?.emit(TASK_SUDO_PTY_RESPONSE_CHANNEL, {
+							requestId: request.requestId,
+							error: err instanceof Error ? err.message : String(err),
+						} satisfies SudoPtyResponse);
+					}
+				});
 			}
 
 			// Write parent conversation context for subagents
@@ -1691,7 +1691,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const commitMsg =
 							commitStyle === "ai" && this.session.modelRegistry
 								? async (diff: string) => {
-
 										return generateCommitMessage(
 											diff,
 											this.session.modelRegistry!,

@@ -37,6 +37,16 @@ describe("implementation worker scope wiring", () => {
 	});
 
 
+	test("task tool only injects scoped file metadata for review agents when worker gating is active", async () => {
+		const source = await readExtensionSource();
+		const toolCallBlock = extractToolCallBlock(source);
+
+		expect(toolCallBlock).toMatch(
+			/\(taskAgent\s*===\s*"code-reviewer"\s*\|\|\s*taskAgent\s*===\s*"verifier"\)\s*&&\s*activeImplementationWorkerGate/,
+		);
+	});
+
+
 	test("task tool canonicalizes coderabbit assignments before execution", async () => {
 		const source = await readExtensionSource();
 		const toolCallBlock = extractToolCallBlock(source);
