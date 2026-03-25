@@ -10,11 +10,11 @@ modelRoles:
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
-  research: anthropic/claude-sonnet-4-6:low
+  research: kimi-code/kimi-k2.5:medium
   verifier: openai-codex/gpt-5.4:high
   worktree-setup: kimi-code/kimi-k2.5:medium
-  code-reviewer: anthropic/claude-opus-4-6:xhigh
-  plan-verifier: openai-codex/gpt-5.4:high
+  code-reviewer: kimi-code/kimi-k2.5:high
+  plan-verifier: openai-codex/gpt-5.4:xhigh
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
   designer: anthropic/claude-opus-4-6:high
