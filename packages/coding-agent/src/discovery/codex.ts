@@ -32,6 +32,7 @@ import { parseFrontmatter } from "../utils/frontmatter";
 import {
 	createSourceMeta,
 	discoverExtensionModulePaths,
+	expandEnvVarsDeep,
 	getExtensionNameFromPath,
 	loadFilesFromDir,
 	SOURCE_PATHS,
@@ -152,6 +153,7 @@ function extractMCPServersFromToml(toml: Record<string, unknown>): Record<string
 		const server: Partial<MCPServer> = {
 			command: config.command,
 			args: config.args,
+			cwd: config.cwd,
 			url: config.url,
 		};
 
@@ -201,6 +203,15 @@ function extractMCPServersFromToml(toml: Record<string, unknown>): Record<string
 		if (typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0) {
 			server.timeout = config.tool_timeout_sec * 1000;
 		}
+
+		// Expand environment variables after building the canonical server object.
+		if (server.command) server.command = expandEnvVarsDeep(server.command);
+		if (server.args) server.args = expandEnvVarsDeep(server.args);
+		if (server.cwd) server.cwd = expandEnvVarsDeep(server.cwd);
+		if (server.env) server.env = expandEnvVarsDeep(server.env);
+		if (server.url) server.url = expandEnvVarsDeep(server.url);
+		if (server.headers) server.headers = expandEnvVarsDeep(server.headers);
+
 		result[name] = server;
 	}
 
