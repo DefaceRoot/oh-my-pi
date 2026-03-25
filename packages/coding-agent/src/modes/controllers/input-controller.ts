@@ -808,6 +808,33 @@ export class InputController {
 				}
 			}
 
+			// Extension commands (pi.registerCommand) must be dispatched here, before
+			// startPendingSubmission(), which would otherwise echo the command text into
+			// the conversation as a user message and start a loading animation that only
+			// agent_end can clear — never fired when no AI turn is needed.
+			if (text.startsWith("/")) {
+				const spaceIdx = text.indexOf(" ");
+				const cmdName = spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx);
+				const extensionCommand = runner?.getCommand(cmdName);
+				if (extensionCommand) {
+					this.ctx.editor.addToHistory(text);
+					this.ctx.editor.setText("");
+					const cmdArgs = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1);
+					const cmdCtx = runner!.createCommandContext();
+					try {
+						await extensionCommand.handler(cmdArgs, cmdCtx);
+					} catch (err) {
+						runner!.emitError({
+							extensionPath: `command:${cmdName}`,
+							event: "command",
+							error: err instanceof Error ? err.message : String(err),
+							stack: err instanceof Error ? err.stack : undefined,
+						});
+					}
+					return;
+				}
+			}
+
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
 				if (this.ctx.pendingImages.length > 0) {

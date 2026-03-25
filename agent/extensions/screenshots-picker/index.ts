@@ -340,7 +340,7 @@ function loadImageBase64(path: string): { data: string; mimeType: string } {
 	const buffer = readFileSync(path);
 	return {
 		data: buffer.toString("base64"),
-		mimeType: getMimeType(path),
+		mimeType: getMimeTypeFromBuffer(buffer) ?? getMimeType(path),
 	};
 }
 
@@ -348,8 +348,34 @@ async function loadImageBase64Async(path: string): Promise<{ data: string; mimeT
 	const buffer = await readFile(path);
 	return {
 		data: buffer.toString("base64"),
-		mimeType: getMimeType(path),
+		mimeType: getMimeTypeFromBuffer(buffer) ?? getMimeType(path),
 	};
+}
+
+// Detect MIME type from file magic bytes, which is reliable regardless of file extension.
+// Returns null when the signature is not recognised (caller should fall back to extension).
+function getMimeTypeFromBuffer(buffer: Buffer): string | null {
+	// PNG: 89 50 4E 47 0D 0A 1A 0A
+	if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+		return "image/png";
+	}
+	// JPEG: FF D8 FF
+	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+		return "image/jpeg";
+	}
+	// WebP: RIFF????WEBP
+	if (
+		buffer.length >= 12 &&
+		buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+		buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+	) {
+		return "image/webp";
+	}
+	// GIF: GIF8
+	if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+		return "image/gif";
+	}
+	return null;
 }
 
 function getMimeType(path: string): string {

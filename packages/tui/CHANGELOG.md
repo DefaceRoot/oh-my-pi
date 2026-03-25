@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tmux-hosted TUI sessions hijacking terminal scroll/selection by defaulting mouse tracking to `auto` (disabled inside tmux unless `PI_TUI_MOUSE=on`).
+
 ## [13.15.0] - 2026-03-23
 
 ### Added

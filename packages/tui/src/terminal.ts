@@ -16,6 +16,19 @@ let terminalEverStarted = false;
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 
+function shouldEnableMouseTracking(): boolean {
+	const raw = ($env.PI_TUI_MOUSE || "").trim().toLowerCase();
+	if (raw === "1" || raw === "true" || raw === "on" || raw === "yes") {
+		return true;
+	}
+	if (raw === "0" || raw === "false" || raw === "off" || raw === "no") {
+		return false;
+	}
+	// Default ("auto"): disable app-side mouse tracking inside tmux so host
+	// scrollback and text selection keep working.
+	return !$env.TMUX;
+}
+
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -111,6 +124,7 @@ export class ProcessTerminal implements Terminal {
 	private stdinDataHandler?: (data: string) => void;
 	private dead = false;
 	private writeLogPath = $env.PI_TUI_WRITE_LOG || "";
+	#mouseTrackingEnabled = shouldEnableMouseTracking();
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
@@ -152,8 +166,10 @@ export class ProcessTerminal implements Terminal {
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.safeWrite("\x1b[?2004h");
-		// Enable mouse reporting (button + all-motion + SGR extended coordinates)
-		this.safeWrite("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
+		if (this.#mouseTrackingEnabled) {
+			// Enable mouse reporting (button + all-motion + SGR extended coordinates)
+			this.safeWrite("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
+		}
 
 		// Set up resize handler immediately
 		process.stdout.on("resize", this.resizeHandler);

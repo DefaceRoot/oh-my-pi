@@ -327,6 +327,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 |---|---|
 | `PI_NOTIFICATIONS` | `off` / `0` / `false` suppress desktop notifications |
 | `PI_TUI_WRITE_LOG` | If set, logs TUI writes to file |
+| `PI_TUI_MOUSE` | Mouse tracking mode for TUI: `on`/`off`; default `auto` disables app mouse tracking when running inside tmux |
 | `PI_HARDWARE_CURSOR` | If `1`, enables hardware cursor mode |
 | `PI_CLEAR_ON_SHRINK` | If `1`, clears empty rows when content shrinks |
 | `PI_DEBUG_REDRAW` | If `1`, enables redraw debug logging |

@@ -4,6 +4,8 @@ import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
+const originalTmuxEnv = Bun.env.TMUX;
+const originalTuiMouseEnv = Bun.env.PI_TUI_MOUSE;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -23,6 +25,10 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+		if (originalTmuxEnv === undefined) delete Bun.env.TMUX;
+		else Bun.env.TMUX = originalTmuxEnv;
+		if (originalTuiMouseEnv === undefined) delete Bun.env.PI_TUI_MOUSE;
+		else Bun.env.PI_TUI_MOUSE = originalTuiMouseEnv;
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
@@ -51,6 +57,24 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 		return { terminal, writes, received, queryCount, sentinelCount };
 	}
+
+	it("disables app mouse tracking by default inside tmux", () => {
+		Bun.env.TMUX = "/tmp/tmux-1000/default,123,0";
+		delete Bun.env.PI_TUI_MOUSE;
+
+		const { terminal, writes } = setupTerminal();
+		expect(writes).not.toContain("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
+		terminal.stop();
+	});
+
+	it("allows forcing app mouse tracking inside tmux via PI_TUI_MOUSE=on", () => {
+		Bun.env.TMUX = "/tmp/tmux-1000/default,123,0";
+		Bun.env.PI_TUI_MOUSE = "on";
+
+		const { terminal, writes } = setupTerminal();
+		expect(writes).toContain("\x1b[?1000h\x1b[?1003h\x1b[?1006h");
+		terminal.stop();
+	});
 
 	it("swallows the DA1 sentinel even when the OSC 11 reply arrives first", () => {
 		const { terminal, writes, received } = setupTerminal();

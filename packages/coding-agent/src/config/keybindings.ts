@@ -179,7 +179,7 @@ export const KEYBINDINGS = {
 		description: "Toggle plan mode",
 	},
 	"app.history.search": {
-		defaultKeys: "alt+r",
+		defaultKeys: "ctrl+r",
 		description: "Search history",
 	},
 	"app.stt.toggle": {

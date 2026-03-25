@@ -6,9 +6,9 @@ modelRoles:
   plan: anthropic/claude-opus-4-6:xhigh
   commit: zai/glm-5:medium
   implement: anthropic/claude-sonnet-4-6:high
-  explore: kilo/minimax/minimax-m2.5:free
+  explore: zai/glm-5:medium
   lint: zai/glm-5:medium
-  merge: anthropic/claude-opus-4-6:xhigh
+  merge: openai-codex/gpt-5.4:xhigh
   curator: kimi-code/kimi-k2.5:medium
   research: anthropic/claude-sonnet-4-6:low
   verifier: openai-codex/gpt-5.4:high
@@ -20,13 +20,15 @@ modelRoles:
   designer: anthropic/claude-opus-4-6:high
   grafana: anthropic/claude-opus-4-6:high
   debug: openai-codex/gpt-5.4:xhigh
+  vision: github-copilot/gemini-3.1-pro-preview:high
+  task: github-copilot/gpt-5.4:high
 defaultThinkingLevel: high
 providers: 
   webSearch: auto
   image: auto
 statusLine: 
   preset: default
-  separator: pipe
+  separator: slash
 disabledExtensions: 
   - extension-module:worktree-policy
   - extension-module:plan-worktree
@@ -39,7 +41,7 @@ task:
     merge: branch
     mode: worktree
 stt: 
-  enabled: true
+  enabled: false
   inputDevice: alsa_input.usb-Cisco_System__Inc._Cisco_Webex_Desk_Camera_ATW25101013-03.analog-stereo
 disabledProviders: 
   - opencode
@@ -93,6 +95,7 @@ symbolPreset: nerd
 compaction: 
   strategy: context-full
   thresholdPercent: 75
+  thresholdTokens: -1
 commands: 
   enableClaudeUser: false
   enableClaudeProject: false
@@ -109,3 +112,9 @@ edit:
   mode: hashline
 todo: 
   eager: true
+startup: 
+  checkUpdate: false
+treeFilterMode: default
+doubleEscapeAction: tree
+display: 
+  showTokenUsage: true
