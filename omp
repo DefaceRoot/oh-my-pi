@@ -7,4 +7,14 @@ FORK_ROOT="$(cd "$(dirname "$(readlink -f "$0")" )" && pwd)"
 
 export PI_CODING_AGENT_DIR="$FORK_ROOT/agent"
 
-exec bun "$FORK_ROOT/packages/coding-agent/src/cli.ts" "$@"
+BUN_BIN="$(command -v bun || true)"
+if [[ -z "$BUN_BIN" && -x "$HOME/.bun/bin/bun" ]]; then
+	BUN_BIN="$HOME/.bun/bin/bun"
+fi
+
+if [[ -z "$BUN_BIN" ]]; then
+	echo "omp: Bun runtime not found. Install Bun or add it to PATH." >&2
+	exit 127
+fi
+
+exec "$BUN_BIN" "$FORK_ROOT/packages/coding-agent/src/cli.ts" "$@"

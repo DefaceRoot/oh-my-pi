@@ -18,7 +18,7 @@ import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Usage } from "@oh-my-pi/pi-ai";
-import { $env, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
 
@@ -36,11 +36,11 @@ import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { collectDelegationContext } from "./delegation-context";
 import { discoverAgents, getAgent } from "./discovery";
-import { resumeSubagent, runSubprocess } from "./executor";
+import { cancelledSubagents, runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
-import { PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
+import { PLAN_MODE_PLAN_VERIFIER_TOOLS, PLAN_MODE_SUBAGENT_TOOLS } from "./plan-mode-tools";
 import { renderCall, renderResult } from "./render";
 import { isUserStoppedAbortReason } from "./subagent-stop";
 import { type RenderResult, renderTemplate } from "./template";
@@ -49,6 +49,7 @@ import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL,
 	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
 	TASK_SUDO_PTY_REQUEST_CHANNEL,
@@ -358,6 +359,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
 
+	/**
+	 * True while an execute() call is active.
+	 * The standalone session-level resume handler bails out when this is set,
+	 * deferring to the per-execute handler that has access to progressMap/results.
+	 */
+	#isExecuting = false;
+
 	/** Dynamic description that reflects current disabled-agent settings */
 	get description(): string {
 		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
@@ -371,6 +379,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			disabledAgents,
 		);
 	}
+
 	private constructor(
 		private readonly session: ToolSession,
 		discoveredAgents: AgentDefinition[],
@@ -379,6 +388,51 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		this.parameters = isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 		this.#blockedAgent = $env.PI_BLOCKED_AGENT;
 		this.#discoveredAgents = discoveredAgents;
+
+		// Session-level resume handler: handles resumes when no execute() is active.
+		// When execute() is active, #isExecuting is true and this handler exits early
+		// so the per-execute listener (with progressMap access) handles it instead.
+		session.eventBus?.on(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, payload => {
+			if (this.#isExecuting) return;
+			this.#handleStandaloneResume(payload);
+		});
+	}
+
+	/**
+	 * Handles a resume request when no execute() is active (standalone mode).
+	 * Runs the subagent to completion using runSubprocess (which restores session history
+	 * via resumeFromSessionFile), then emits TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL so
+	 * interactive-mode can inject the result into the parent agent's conversation.
+	 */
+	#handleStandaloneResume(payload: unknown): void {
+		if (!payload || typeof payload !== "object") return;
+		const request = payload as SubagentResumeRequest;
+
+		const metadata = cancelledSubagents.get(request.id ?? "");
+		const inStore = !!metadata;
+		request.respond?.(inStore);
+		if (!inStore || !metadata) return;
+
+		void (async () => {
+			try {
+				const result = await runSubprocess({
+					...metadata.options,
+					// Use the continuation message as the task prompt
+					task: request.continueMessage?.trim() || "Continue where you left off.",
+					// Restore prior conversation history
+					resumeFromSessionFile: metadata.sessionFile,
+					// New signal; user can stop via the overlay Stop button
+					signal: new AbortController().signal,
+				});
+				// Notify UI/parent session that the standalone resume finished
+				this.session.eventBus?.emit(TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL, result);
+			} catch (err) {
+				logger.error("Standalone subagent resume failed", {
+					id: request.id,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		})();
 	}
 
 	#isBlockedByOrchestratorBoundary(agentName: string): boolean {
@@ -880,12 +934,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const planModeState = this.session.getPlanModeState?.();
 		const effectiveAgent: typeof agent = planModeState?.enabled
-			? {
-					...agent,
-					systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-					tools: [...PLAN_MODE_SUBAGENT_TOOLS],
-					spawns: undefined,
-				}
+			? agent.name === "plan-verifier"
+				? {
+						...agent,
+						tools: [...PLAN_MODE_PLAN_VERIFIER_TOOLS],
+						spawns: undefined,
+					}
+				: {
+						...agent,
+						systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+						tools: [...PLAN_MODE_SUBAGENT_TOOLS],
+						spawns: undefined,
+					}
 			: agent;
 
 		const rolesConfig = new RolesConfig(path.join(this.session.settings.getAgentDir(), "roles.yml"));
@@ -1102,22 +1162,50 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				controller.abort(reason);
 				return true;
 			};
+			// Mark execute as active so the session-level standalone handler defers to us.
+			this.#isExecuting = true;
+
+			// Resumes triggered while this execute() is running: awaited after mapWithConcurrencyLimit.
+			const pendingResumePromises: Promise<SingleResult>[] = [];
+
 			disposeStopListener = this.session.eventBus?.on(TASK_SUBAGENT_STOP_REQUEST_CHANNEL, payload => {
 				if (!payload || typeof payload !== "object") return;
 				const request = payload as TaskSubagentStopRequest;
 				const handled = abortSubtask(request.id, request.reason);
 				request.respond?.(handled);
 			});
-			disposeResumeListener = this.session.eventBus?.on(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, async payload => {
+			disposeResumeListener = this.session.eventBus?.on(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, payload => {
+				// Synchronous eligibility check + respond before any await (caller reads handled synchronously).
 				if (!payload || typeof payload !== "object") return;
 				const request = payload as SubagentResumeRequest;
-				const lookup = { id: request.id, sessionId: request.sessionId, sessionPath: request.sessionPath };
-				let handled = false;
-				try {
-					handled = await resumeSubagent(lookup, request.continueMessage);
-				} finally {
-					request.respond?.(handled);
-				}
+
+				const metadata = cancelledSubagents.get(request.id ?? "");
+				const inStore = !!metadata;
+				request.respond?.(inStore);
+				if (!inStore || !metadata) return;
+
+				// Register a stop controller so the overlay Stop button can abort the re-run.
+				const resumeAbortController = new AbortController();
+				subtaskAbortControllers.set(request.id!, resumeAbortController);
+				const taskSignal = signal
+					? AbortSignal.any([signal, resumeAbortController.signal])
+					: resumeAbortController.signal;
+
+				const originalIndex = metadata.options.index;
+
+				// Run via the full runSubprocess pipeline so we get proper progress tracking,
+				// submit_result handling, output extraction, and a real SingleResult.
+				const resumePromise = runSubprocess({
+					...metadata.options,
+					task: request.continueMessage?.trim() || "Continue where you left off.",
+					resumeFromSessionFile: metadata.sessionFile,
+					signal: taskSignal,
+					onProgress: progress => {
+						progressMap.set(originalIndex, { ...structuredClone(progress) });
+						emitProgress();
+					},
+				});
+				pendingResumePromises.push(resumePromise);
 			});
 
 			// Register handler for subagent sudo PTY escalation requests.
@@ -1399,6 +1487,21 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				runTask,
 				signal,
 			);
+
+			// Await any resumes that were triggered while tasks were running.
+			// These ran via runSubprocess with full history restoration; merge into partialResults.
+			if (pendingResumePromises.length > 0) {
+				const resumeResults = await Promise.all(pendingResumePromises);
+				for (const resumeResult of resumeResults) {
+					// Replace the original failed slot so the parent sees the resumed outcome.
+					const idx = partialResults.findIndex(r => r?.id === resumeResult.id);
+					if (idx >= 0) {
+						partialResults[idx] = resumeResult;
+					} else {
+						partialResults.push(resumeResult);
+					}
+				}
+			}
 
 			// Fill in skipped tasks (undefined entries from abort) with placeholder results
 			const results: SingleResult[] = partialResults.map((result, index) => {
@@ -1689,6 +1792,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			disposeStopListener?.();
 			disposeResumeListener?.();
 			disposeSudoPtyListener?.();
+			this.#isExecuting = false;
 
 			return {
 				content: [{ type: "text", text: summary }],
@@ -1705,6 +1809,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			disposeStopListener?.();
 			disposeResumeListener?.();
 			disposeSudoPtyListener?.();
+			this.#isExecuting = false;
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: {

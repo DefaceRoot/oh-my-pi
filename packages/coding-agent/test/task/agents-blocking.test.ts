@@ -20,7 +20,9 @@ describe("bundled agent frontmatter parsing", () => {
 	it("lets the plan agent spawn research and verification specialists", () => {
 		clearBundledAgentsCache();
 		const plan = getBundledAgent("plan");
+		const planVerifier = getBundledAgent("plan-verifier");
 		expect(plan).toBeDefined();
-		expect(plan?.spawns).toEqual(["explore", "librarian", "oracle"]);
+		expect(planVerifier).toBeDefined();
+		expect(plan?.spawns).toEqual(["explore", "librarian", "oracle", "plan-verifier"]);
 	});
 });

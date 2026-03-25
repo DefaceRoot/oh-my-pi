@@ -5,7 +5,8 @@ const runSubprocessCalls: Array<Record<string, unknown>> = [];
 const liveProgressTimestamp = 1_739_603_401_234;
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
-	resumeSubagent: async () => false,
+	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		runSubprocessCalls.push(opts);
 		const onProgress = opts.onProgress as ((progress: Record<string, unknown>) => void | Promise<void>) | undefined;

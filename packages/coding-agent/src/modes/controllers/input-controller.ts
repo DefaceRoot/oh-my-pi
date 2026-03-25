@@ -490,8 +490,6 @@ export class InputController {
 				return;
 			}
 
-			if (!text) return;
-
 			// Continue shortcuts: "." or "c" sends empty message (agent continues, no visible message)
 			if (text === "." || text === "c") {
 				if (this.ctx.onInputCallback) {
@@ -520,7 +518,8 @@ export class InputController {
 				}
 			}
 
-			if (!text) return;
+			const hasImages = !!inputImages && inputImages.length > 0;
+			if (!text && !hasImages) return;
 
 			// Handle slash commands
 			if (text === "/settings") {
@@ -837,7 +836,7 @@ export class InputController {
 
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
-				if (this.ctx.pendingImages.length > 0) {
+				if (inputImages && inputImages.length > 0) {
 					this.ctx.showStatus("Compaction in progress. Retry after it completes to send images.");
 					return;
 				}
@@ -848,7 +847,7 @@ export class InputController {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(text);
+				if (text) this.ctx.editor.addToHistory(text);
 				this.ctx.editor.setText("");
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
@@ -864,7 +863,7 @@ export class InputController {
 
 			// Generate session title on first message
 			const hasUserMessages = this.ctx.agent.state.messages.some((m: AgentMessage) => m.role === "user");
-			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+				if (text && !hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				const registry = this.ctx.session.modelRegistry;
 				const titleSessionId = this.ctx.session.sessionId;
 				generateSessionTitle(text, registry, this.ctx.settings, titleSessionId, this.ctx.session.model)
@@ -890,7 +889,7 @@ export class InputController {
 
 				this.ctx.onInputCallback(submission);
 			}
-			this.ctx.editor.addToHistory(text);
+			if (text) this.ctx.editor.addToHistory(text);
 		};
 	}
 

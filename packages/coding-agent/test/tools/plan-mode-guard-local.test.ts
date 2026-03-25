@@ -57,7 +57,7 @@ describe("enforcePlanModeWrite", () => {
 		).not.toThrow();
 	});
 
-	it("blocks plan-verifier artifacts, non-markdown files, and paths outside the plans root", () => {
+	it("blocks plan-verifier artifacts for non plan-verifier agents", () => {
 		const session = makePlanModeSession();
 
 		expect(() =>
@@ -67,6 +67,37 @@ describe("enforcePlanModeWrite", () => {
 				{ op: "create" },
 			),
 		).toThrow(/plan mode/i);
+	});
+
+	it("allows plan-verifier agents to write plan-verifier artifacts under the plan directory", () => {
+		const session = {
+			...makePlanModeSession(".omp/sessions/plans/customer-a/plan.md"),
+			getRuntimeRole: () => "plan-verifier",
+		} as ToolSession;
+
+		expect(() =>
+			enforcePlanModeWrite(
+				session,
+				".omp/sessions/plans/customer-a/artifacts/plan-verifier/p1/run1/verification.md",
+				{ op: "create" },
+			),
+		).not.toThrow();
+		expect(() =>
+			enforcePlanModeWrite(
+				session,
+				".omp/sessions/plans/customer-a/artifacts/plan-verifier/p1/run1/findings.json",
+				{ op: "create" },
+			),
+		).not.toThrow();
+
+		expect(() =>
+			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/research.md", { op: "create" }),
+		).toThrow(/plan mode/i);
+	});
+
+	it("blocks non-markdown plan files and paths outside the plans root", () => {
+		const session = makePlanModeSession();
+
 		expect(() =>
 			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/notes/state.json", { op: "create" }),
 		).toThrow(/plan mode/i);

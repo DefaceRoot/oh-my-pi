@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import { PLAN_MODE_SUBAGENT_TOOLS } from "../../src/task/plan-mode-tools";
+import { PLAN_MODE_PLAN_VERIFIER_TOOLS, PLAN_MODE_SUBAGENT_TOOLS } from "../../src/task/plan-mode-tools";
 
 const runSubprocessAgents: string[] = [];
 let lastRunSubprocessAgent: Record<string, unknown> | null = null;
@@ -24,11 +24,12 @@ const availableAgents = [
 	"implement",
 	"debug",
 	"verifier",
+	"plan-verifier",
 	"coderabbit",
 	"lint",
 	"code-reviewer",
 	"commit",
-].map(name => ({
+] .map(name => ({
 	name,
 	description: `${name} test agent`,
 	source: "bundled" as const,
@@ -39,7 +40,8 @@ const availableAgents = [
 }));
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
-	resumeSubagent: async () => false,
+	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async (opts: Record<string, unknown>) => {
 		const agent = opts.agent as { name: string };
 		lastRunSubprocessAgent = opts.agent as Record<string, unknown>;
@@ -212,5 +214,20 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		expect(lastRunSubprocessAgent?.tools).toEqual(PLAN_MODE_SUBAGENT_TOOLS);
 		expect(lastRunSubprocessAgent?.spawns).toBeUndefined();
 		expect(lastRunSubprocessAgent?.systemPrompt).toEqual(expect.stringContaining("You are explore."));
+	});
+
+	test("launches plan-verifier in plan mode with verifier tool allowlist", async () => {
+		await executeWithAgent("plan-verifier", {
+			hasUI: false,
+			getRuntimeRole: () => "implement",
+			getPlanModeState: () => ({ enabled: true, planFilePath: "" }),
+		});
+
+		expect(runSubprocessAgents).toEqual(["plan-verifier"]);
+		expect(lastRunSubprocessAgent).not.toBeNull();
+		expect(lastRunSubprocessAgent?.tools).toEqual(PLAN_MODE_PLAN_VERIFIER_TOOLS);
+		expect(lastRunSubprocessAgent?.spawns).toBeUndefined();
+		expect(lastRunSubprocessAgent?.systemPrompt).toEqual(expect.stringContaining("You are plan-verifier."));
+		expect(lastRunSubprocessAgent?.systemPrompt).not.toEqual(expect.stringContaining("Plan mode active."));
 	});
 });

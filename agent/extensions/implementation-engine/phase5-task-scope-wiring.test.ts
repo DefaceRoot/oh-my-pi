@@ -44,8 +44,8 @@ describe("implementation worker scope wiring", () => {
 
 		expect(toolCallBlock).toMatch(/taskAgent\s*===\s*"coderabbit"/);
 		expect(toolCallBlock).toMatch(/rewriteCodeRabbitTaskInput\(/);
-		expect(toolCallBlock).toMatch(/baseBranch:\s*last\.baseBranch/);
-		expect(toolCallBlock).toMatch(/worktreePath:\s*last\.worktreePath/);
+		expect(toolCallBlock).toMatch(/effectiveBaseBranch[\s\S]*last\.baseBranch/);
+		expect(toolCallBlock).toMatch(/effectiveWorktreePath[\s\S]*last\.worktreePath/);
 	});
 
 

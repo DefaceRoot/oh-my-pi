@@ -126,6 +126,11 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/**
+	 * When set, open this session file to restore full conversation history before resuming.
+	 * The entry is removed from cancelledSubagents and the session continues from the prior context.
+	 */
+	resumeFromSessionFile?: string;
 }
 
 const DEFAULT_SUBAGENT_RESUME_PROMPT = "Continue where you left off.";
@@ -150,6 +155,9 @@ export interface ResumableSubagentMetadata {
 const resumableSubagentsById = new Map<string, ResumableSubagentMetadata>();
 const resumableSubagentIdsBySessionId = new Map<string, string>();
 const resumableSubagentIdsBySessionPath = new Map<string, string>();
+
+export const cancelledSubagents = new Map<string, ResumableSubagentMetadata>();
+
 
 function resolveResumableSubagentId(lookup: SubagentRuntimeLookup): string | undefined {
 	if (lookup.id && resumableSubagentsById.has(lookup.id)) {
@@ -1068,9 +1076,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
 
-			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile)
-				: SessionManager.inMemory(worktree ?? cwd);
+			// When resuming a cancelled subagent, restore history from the prior session file.
+			// Remove from the store before starting to prevent concurrent double-resume.
+			if (options.resumeFromSessionFile) {
+				cancelledSubagents.delete(id);
+			}
+			const sessionManager = options.resumeFromSessionFile
+				? await SessionManager.open(options.resumeFromSessionFile)
+				: sessionFile
+					? await SessionManager.open(sessionFile)
+					: SessionManager.inMemory(worktree ?? cwd);
 
 			const inheritedMcpTools = options.mcpManager?.getTools() ?? [];
 			const enableMCP = !options.mcpManager;
@@ -1389,7 +1404,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			unregisterSubagentRuntime(id);
 			let storedMetadata: ResumableSubagentMetadata | null = null;
-			if (sessionFile) {
+			if ((aborted || exitCode !== 0) && sessionFile) {
 				const { signal: _sig, resumePrompt: _resumePrompt, ...storedOptions } = options;
 				storedMetadata = {
 					id,
@@ -1399,6 +1414,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					storedAt: Date.now(),
 					abortReason: aborted ? abortReasonText : undefined,
 				};
+				cancelledSubagents.set(id, storedMetadata);
 				rememberResumableSubagent(storedMetadata);
 			}
 			resolveStoredMetadata(storedMetadata);

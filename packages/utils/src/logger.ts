@@ -5,73 +5,104 @@
  * Each log entry includes process.pid for traceability.
  */
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { RingBuffer } from "@oh-my-pi/pi-utils/ring";
-import winston from "winston";
-import DailyRotateFile from "winston-daily-rotate-file";
-import { getLogsDir } from "./dirs";
+import { getLogPath } from "./dirs";
+import { isEacces, isEnoent, isEnotdir } from "./fs-error";
 
-/** Ensure logs directory exists */
-function ensureLogsDir(): string {
-	const logsDir = getLogsDir();
-	if (!fs.existsSync(logsDir)) {
-		fs.mkdirSync(logsDir, { recursive: true });
+/** Maximum size of a single daily log file before rolling to numbered suffixes. */
+const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024;
+
+/** Number of rotated log files to retain per day. */
+const MAX_LOG_FILES = 5;
+
+/** Track whether the logger should stop attempting file writes. */
+let fileLoggingDisabled = false;
+
+/** Custom format that includes pid and flattens metadata. */
+function formatEntry(level: string, message: string, context?: Record<string, unknown>): string {
+	const entry: Record<string, unknown> = {
+		timestamp: new Date().toISOString(),
+		level,
+		pid: process.pid,
+		message,
+	};
+	if (context) {
+		for (const [key, value] of Object.entries(context)) {
+			entry[key] = value;
+		}
 	}
-	return logsDir;
-}
-
-/** Custom format that includes pid and flattens metadata */
-const logFormat = winston.format.combine(
-	winston.format.timestamp({ format: "YYYY-MM-DDTHH:mm:ss.SSSZ" }),
-	winston.format.printf(({ timestamp, level, message, ...meta }) => {
-		const entry: Record<string, unknown> = {
-			timestamp,
+	try {
+		return JSON.stringify(entry);
+	} catch {
+		return JSON.stringify({
+			timestamp: entry.timestamp,
 			level,
 			pid: process.pid,
-			message,
-		};
-		// Flatten metadata into entry
-		for (const [key, value] of Object.entries(meta)) {
-			if (key !== "level" && key !== "timestamp" && key !== "message") {
-				entry[key] = value;
+			message: String(message),
+			serializationError: "Failed to serialize log context",
+		});
+	}
+}
+
+function toRotatedPath(logPath: string, index: number): string {
+	const ext = path.extname(logPath);
+	const base = ext.length > 0 ? logPath.slice(0, -ext.length) : logPath;
+	return `${base}.${index}${ext}`;
+}
+
+function rotateLogFiles(logPath: string): void {
+	for (let index = MAX_LOG_FILES - 1; index >= 1; index--) {
+		const source = index === 1 ? logPath : toRotatedPath(logPath, index - 1);
+		const target = toRotatedPath(logPath, index);
+		try {
+			if (fs.existsSync(source)) {
+				fs.renameSync(source, target);
 			}
+		} catch {
+			// Best effort only. Rotation must never break logging.
 		}
-		return JSON.stringify(entry);
-	}),
-);
+	}
+}
 
-/** Size-based rotating file transport */
-const fileTransport = new DailyRotateFile({
-	dirname: ensureLogsDir(),
-	filename: "omp.%DATE%.log",
-	datePattern: "YYYY-MM-DD",
-	maxSize: "10m",
-	maxFiles: 5,
-	zippedArchive: true,
-});
+function ensureParentDir(logPath: string): void {
+	fs.mkdirSync(path.dirname(logPath), { recursive: true });
+}
 
-/** The winston logger instance */
-const winstonLogger = winston.createLogger({
-	level: "debug",
-	format: logFormat,
-	transports: [fileTransport],
-	// Don't exit on error - logging failures shouldn't crash the app
-	exitOnError: false,
-});
+function getLogSize(logPath: string): number {
+	try {
+		return fs.statSync(logPath).size;
+	} catch {
+		return 0;
+	}
+}
+
+function writeEntry(level: string, message: string, context?: Record<string, unknown>): void {
+	if (fileLoggingDisabled) return;
+
+	const logPath = getLogPath();
+
+	try {
+		ensureParentDir(logPath);
+
+		if (getLogSize(logPath) >= MAX_LOG_SIZE_BYTES) {
+			rotateLogFiles(logPath);
+		}
+
+		fs.appendFileSync(logPath, `${formatEntry(level, message, context)}\n`, { encoding: "utf8" });
+	} catch (error) {
+		if (isEacces(error) || isEnoent(error) || isEnotdir(error)) {
+			fileLoggingDisabled = true;
+			return;
+		}
+
+		// Any other filesystem failure is also non-fatal; stop retrying to avoid noisy crashes.
+		fileLoggingDisabled = true;
+	}
+}
 
 /**
- * Centralized logger for omp.
- *
- * Logs to ~/.omp/logs/omp.YYYY-MM-DD.log with size-based rotation.
- * Safe for concurrent access from multiple omp instances.
- *
- * @example
- * ```typescript
- * import { logger } from "@oh-my-pi/pi-utils";
- *
- * logger.error("MCP request failed", { url, method });
- * logger.warn("Theme file invalid, using fallback", { path });
- * logger.debug("LSP fallback triggered", { reason });
- * ```
+ * The logger interface used throughout the repo.
  */
 export interface Logger {
 	error(message: string, context?: Record<string, unknown>): void;
@@ -87,11 +118,7 @@ export interface Logger {
  * @param context - The context to log.
  */
 export function error(message: string, context?: Record<string, unknown>): void {
-	try {
-		winstonLogger.error(message, context);
-	} catch {
-		// Silently ignore logging failures
-	}
+	writeEntry("error", message, context);
 }
 
 /**
@@ -100,11 +127,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
  * @param context - The context to log.
  */
 export function warn(message: string, context?: Record<string, unknown>): void {
-	try {
-		winstonLogger.warn(message, context);
-	} catch {
-		// Silently ignore logging failures
-	}
+	writeEntry("warn", message, context);
 }
 
 /**
@@ -113,11 +136,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
  * @param context - The context to log.
  */
 export function debug(message: string, context?: Record<string, unknown>): void {
-	try {
-		winstonLogger.debug(message, context);
-	} catch {
-		// Silently ignore logging failures
-	}
+	writeEntry("debug", message, context);
 }
 
 const LOGGED_TIMING_THRESHOLD_MS = 5;

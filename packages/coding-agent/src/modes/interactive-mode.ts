@@ -48,10 +48,14 @@ import {
 	SessionManager,
 } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
-import { resumeSubagent } from "../task/executor";
-import { stopSubagentRuntime } from "../task/subagent-runtime-registry";
+import { resumeSubagentRuntime, stopSubagentRuntime } from "../task/subagent-runtime-registry";
 import { buildUserStoppedAbortReason } from "../task/subagent-stop";
-import { TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
+import {
+	TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL,
+	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
+	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
+	type SingleResult,
+} from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
@@ -589,6 +593,41 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Subscribe to agent events
 		this.subscribeToAgent();
 		this.requestSubagentRefresh("bootstrap");
+
+		// Listen for standalone resume completions (subagents resumed after execute() returned).
+		// Refresh the transcript view and deliver the result to the parent agent so it can
+		// incorporate the resumed work and continue normally.
+		this.session.eventBus?.on(TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL, payload => {
+			void (async () => {
+				try {
+					const result = payload as SingleResult;
+					// Refresh the subagent overlay so the user sees the completed transcript.
+					if (this.subagentViewActiveId === result.id) {
+						await this.refreshActiveViewerTranscript();
+					} else {
+						this.requestSubagentRefresh("watch");
+					}
+					// Deliver the result to the parent session so the orchestrator can react.
+					const status = result.exitCode === 0 && !result.aborted ? "completed" : "failed";
+					const lines: string[] = [
+						`Subagent ${result.id} (${result.agent}) was resumed and ${status}.`,
+					];
+					if (result.aborted && result.abortReason) {
+						lines.push(`Abort reason: ${result.abortReason}`);
+					} else if (result.exitCode !== 0 && result.error) {
+						lines.push(`Error: ${result.error}`);
+					}
+					if (result.output?.trim()) {
+						lines.push(`\nOutput:\n${result.output.trim()}`);
+					}
+					await this.session.prompt(lines.join("\n"), { expandPromptTemplates: false });
+				} catch (error) {
+					logger.warn("Failed to process standalone subagent resume completion", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			})();
+		});
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -2093,10 +2132,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		const continueMessage = await this.showHookInput("Continue message (optional)", "Optional message");
 		if (continueMessage === undefined) return;
 
-		const handled = await resumeSubagent(
-			{ id: ref.id, sessionId: ref.sessionId, sessionPath: ref.sessionPath },
-			continueMessage,
-		);
+		let handled = false;
+		this.session.eventBus?.emit(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, {
+			id: ref.id,
+			sessionId: ref.sessionId,
+			sessionPath: ref.sessionPath,
+			continueMessage: continueMessage || undefined,
+			respond: (wasHandled: boolean) => {
+				handled = handled || wasHandled;
+			},
+		});
+		if (!handled) {
+			handled = await resumeSubagentRuntime(
+				{
+					id: ref.id,
+					sessionId: ref.sessionId,
+					sessionPath: ref.sessionPath,
+				},
+				continueMessage || undefined,
+			);
+		}
 		if (!handled) {
 			this.showWarning(`Unable to resume subagent '${ref.id}'.`);
 			return;
@@ -2894,8 +2949,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				abortReason: selected.abortReason,
 				outcome: selected.outcome,
 				canStop: selected.status === "running" || selected.status === "pending",
-				canResume:
-					selected.status !== "running" && selected.status !== "pending" && !!selected.sessionPath,
+				canResume: (selected.status === "cancelled" || selected.status === "user_stopped" || selected.status === "failed") && !!selected.sessionPath,
 				...(transcript.editStats ?? {}),
 			},
 		});

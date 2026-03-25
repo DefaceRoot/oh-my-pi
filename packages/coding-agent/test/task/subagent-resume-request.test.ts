@@ -5,8 +5,18 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 const resultResolvers = new Map<string, (result: SingleResult) => void>();
 const startedTaskIds = new Set<string>();
-const resumeCalls: Array<{ lookup: Record<string, unknown>; continueMessage: string | undefined }> = [];
-let resumeImpl: (lookup: Record<string, unknown>, continueMessage: string | undefined) => Promise<boolean> = async () => false;
+const runSubprocessCalls: Record<string, unknown>[] = [];
+const cancelledSubagents = new Map<
+	string,
+	{
+		id: string;
+		sessionFile: string;
+		sessionId?: string;
+		options: Record<string, unknown>;
+		storedAt: number;
+		abortReason?: string;
+	}
+>();
 
 function createDeferredResult(id: string): Promise<SingleResult> {
 	const { promise, resolve } = Promise.withResolvers<SingleResult>();
@@ -15,14 +25,12 @@ function createDeferredResult(id: string): Promise<SingleResult> {
 }
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
+	cancelledSubagents,
 	runSubprocess: (opts: Record<string, unknown>) => {
+		runSubprocessCalls.push(opts);
 		const id = String(opts.id);
 		startedTaskIds.add(id);
 		return createDeferredResult(id);
-	},
-	resumeSubagent: async (lookup: Record<string, unknown>, continueMessage?: string) => {
-		resumeCalls.push({ lookup, continueMessage });
-		return await resumeImpl(lookup, continueMessage);
 	},
 }));
 
@@ -84,26 +92,21 @@ describe("TaskTool targeted subagent resume requests", () => {
 	beforeEach(() => {
 		resultResolvers.clear();
 		startedTaskIds.clear();
-		resumeCalls.length = 0;
-		resumeImpl = async () => false;
+		runSubprocessCalls.length = 0;
+		cancelledSubagents.clear();
 	});
 
-	test("passes the continuation message to resumeSubagent and reports success asynchronously", async () => {
-		resumeImpl = async () => {
-			await Promise.resolve();
-			return true;
-		};
-
+	test("starts a stored subagent resume with the continuation message", async () => {
 		const bus = new EventBus();
-		const tool = await TaskTool.create(createMinimalSession({ eventBus: bus }));
-		const executePromise = tool.execute("call-resume", {
-			agent: "explore",
-			tasks: [{ id: "ResumeMe", description: "resume me", assignment: "one" }],
+		await TaskTool.create(createMinimalSession({ eventBus: bus }));
+		cancelledSubagents.set("ResumeMe", {
+			id: "ResumeMe",
+			sessionFile: "/tmp/ResumeMe.jsonl",
+			sessionId: "omp-session-1497",
+			options: { id: "ResumeMe", index: 0, agent: "explore", assignment: "one" },
+			storedAt: Date.now(),
+			abortReason: "Resume requested",
 		});
-
-		while (!startedTaskIds.has("ResumeMe")) {
-			await Bun.sleep(1);
-		}
 
 		const response = Promise.withResolvers<boolean>();
 		bus.emit(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, {
@@ -115,37 +118,22 @@ describe("TaskTool targeted subagent resume requests", () => {
 		});
 
 		await expect(response.promise).resolves.toBe(true);
-		expect(resumeCalls).toEqual([
-			{
-				lookup: {
-					id: "ResumeMe",
-					sessionId: "omp-session-1497",
-					sessionPath: "/tmp/ResumeMe.jsonl",
-				},
-				continueMessage: "Continue from the saved session",
-			},
-		]);
-
-		resolveTask("ResumeMe");
-		await executePromise;
-	});
-
-	test("always responds false when resumeSubagent fails", async () => {
-		resumeImpl = async () => {
-			await Promise.resolve();
-			throw new Error("resume failed");
-		};
-
-		const bus = new EventBus();
-		const tool = await TaskTool.create(createMinimalSession({ eventBus: bus }));
-		const executePromise = tool.execute("call-resume-fail", {
-			agent: "explore",
-			tasks: [{ id: "ResumeFail", description: "resume fail", assignment: "one" }],
-		});
-
-		while (!startedTaskIds.has("ResumeFail")) {
+		while (!startedTaskIds.has("ResumeMe")) {
 			await Bun.sleep(1);
 		}
+		expect(runSubprocessCalls).toHaveLength(1);
+		expect(runSubprocessCalls[0]).toMatchObject({
+			id: "ResumeMe",
+			task: "Continue from the saved session",
+			resumeFromSessionFile: "/tmp/ResumeMe.jsonl",
+		});
+
+		resolveTask("ResumeMe");
+	});
+
+	test("responds false when no stored resume metadata exists", async () => {
+		const bus = new EventBus();
+		await TaskTool.create(createMinimalSession({ eventBus: bus }));
 
 		const response = Promise.withResolvers<boolean>();
 		bus.emit(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, {
@@ -157,16 +145,6 @@ describe("TaskTool targeted subagent resume requests", () => {
 		});
 
 		await expect(response.promise).resolves.toBe(false);
-		expect(resumeCalls[0]).toMatchObject({
-			lookup: {
-				id: "ResumeFail",
-				sessionId: "omp-session-1498",
-				sessionPath: "/tmp/ResumeFail.jsonl",
-			},
-			continueMessage: "Try again",
-		});
-
-		resolveTask("ResumeFail");
-		await executePromise;
+		expect(runSubprocessCalls).toHaveLength(0);
 	});
 });

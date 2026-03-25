@@ -2310,8 +2310,11 @@ export class AgentSession {
 
 		const eagerTodoPrelude = !options?.synthetic ? this.#createEagerTodoPrelude() : undefined;
 
-		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (options?.images) {
+		const userContent: (TextContent | ImageContent)[] = [];
+		if (expandedText || !options?.images || options.images.length === 0) {
+			userContent.push({ type: "text", text: expandedText });
+		}
+		if (options?.images && options.images.length > 0) {
 			userContent.push(...options.images);
 		}
 
@@ -2664,7 +2667,10 @@ export class AgentSession {
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#steeringMessages.push(displayText);
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent)[] = [];
+		if (text || !images || images.length === 0) {
+			content.push({ type: "text", text });
+		}
 		if (images && images.length > 0) {
 			content.push(...images);
 		}
@@ -2682,7 +2688,10 @@ export class AgentSession {
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#followUpMessages.push(displayText);
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent)[] = [];
+		if (text || !images || images.length === 0) {
+			content.push({ type: "text", text });
+		}
 		if (images && images.length > 0) {
 			content.push(...images);
 		}

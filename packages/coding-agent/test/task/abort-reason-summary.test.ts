@@ -25,7 +25,8 @@ function buildResult(overrides: Partial<SingleResult> = {}): SingleResult {
 let runResult: SingleResult = buildResult();
 
 mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
-	resumeSubagent: async () => false,
+	resumeCancelledSubagent: async () => null,
+	cancelledSubagents: new Map(),
 	runSubprocess: async () => runResult,
 }));
 

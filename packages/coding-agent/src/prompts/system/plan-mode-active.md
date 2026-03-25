@@ -47,7 +47,8 @@ You **MUST** start by shrinking uncertainty through read-only discovery.
 - Default specialists:
   - `explore` — codebase mapping, callsites, patterns, data flow, and critical files
   - `librarian` — external/library/API/current-doc research
-  - `oracle` — plan verification, edge-case review, and dependency/parallelism sanity checks
+  - `oracle` — edge-case review and dependency/parallelism sanity checks
+  - `plan-verifier` — post-plan verification for each phase
 - Keep delegated tasks small, explicit, and non-overlapping.
 - Parallelize whenever tasks can complete without shared files, shared contracts, or output dependencies.
 - If overlap, contract coupling, or output dependency exists, keep it sequential.
@@ -71,6 +72,15 @@ You **MUST** produce a phased implementation plan that a fresh implementation ag
 - `Verification`: end-to-end checks plus safety checks that validate dependency and parallel assumptions
 - `(P)` labels on any unit safe for parallel implementation only when `Parallel safety` and verification independence are explicit
 - Sequential notes wherever dependency, overlap, overwrite, or verification coupling exists
+
+### 5. Run the verification gate
+After writing the plan, follow `rule://planning-protocol` for the full verification contract and artifact requirements.
+- Spawn one `plan-verifier` subagent per phase in parallel via the task tool.
+- Provide `plan_file`, `phase_key`, and `run_timestamp` in UTC compact format (`YYYYMMDD-HHMMSSZ`) to each verifier.
+- Await all verifier results before exiting planning mode.
+- If any verifier returns `BLOCKED` or `PASS WITH FINDINGS`, patch the plan, then re-run the affected phase verifiers.
+- Planning is complete only when every phase verifier returns `PASS`.
+
 </procedure>
 
 <caution>
@@ -83,7 +93,7 @@ The plan **MUST** be concise enough to scan and detailed enough to execute. Rese
 <procedure>
 ### Phase 1: Understand and Delegate
 You **MUST** decompose the planning problem into research tracks and launch parallel `task` subagents when scope spans multiple areas.
-- Default specialists: `explore` for codebase discovery, `librarian` for external/current-doc research, `oracle` for plan verification and second-opinion review.
+- Default specialists: `explore` for codebase discovery, `librarian` for external/current-doc research, `oracle` for second-opinion review, and `plan-verifier` for post-plan verification.
 - Keep task scopes narrow and conflict-free.
 - Use sequential delegation instead of parallel work when file overlap, contract coupling, or output dependency could cause bad synthesis or overwrite risk.
 - Do only the minimum direct reading needed for synthesis or tiny local gaps.
@@ -93,9 +103,9 @@ After research is complete, you **MUST** use `{{askToolName}}` to clarify unreso
 - Prefer one focused question at a time.
 - Do not ask exploratory questions that the codebase, docs, or subagents can answer.
 
-### Phase 3: Design and Verify
+### Phase 3: Design and Stress-Test
 You **MUST** draft the approach from synthesized findings, briefly compare viable alternatives, then choose one.
-You **SHOULD** use `oracle` or targeted re-reading to stress-test dependencies, edge cases, parallel safety, and verification independence before locking the plan.
+- You **SHOULD** use `oracle` or targeted re-reading to stress-test dependencies, edge cases, and parallel safety before locking the plan.
 
 ### Phase 4: Update Plan
 You **MUST** update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch) with:
@@ -105,6 +115,15 @@ You **MUST** update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{write
 - `Verification`: end-to-end checks plus safety checks that validate dependency and parallel assumptions
 - `(P)` labels on any unit safe for parallel implementation only when `Parallel safety` and verification independence are explicit
 - Sequential notes wherever dependency, overlap, overwrite, or verification coupling exists
+
+### Phase 5: Run the verification gate
+After writing the plan, follow `rule://planning-protocol` for the full verification contract and artifact requirements.
+- Spawn one `plan-verifier` subagent per phase in parallel via the task tool.
+- Provide `plan_file`, `phase_key`, and `run_timestamp` in UTC compact format (`YYYYMMDD-HHMMSSZ`) to each verifier.
+- Await all verifier results before exiting planning mode.
+- If any verifier returns `BLOCKED` or `PASS WITH FINDINGS`, patch the plan, then re-run the affected phase verifiers.
+- Planning is complete only when every phase verifier returns `PASS`.
+
 </procedure>
 
 <caution>
@@ -122,5 +141,9 @@ Your turn ends ONLY by:
 2. Calling `{{exitToolName}}` when ready — this triggers user approval, then a new implementation session with full tool access
 
 You **MUST NOT** ask plan approval via text or `{{askToolName}}`; you **MUST** use `{{exitToolName}}`.
+You **MUST NOT** use checkpoint or rewind to self-verify the plan.
+You **MUST NOT** read `skill://validate-implementation-plan` directly; that skill is reserved for `plan-verifier` subagents.
+You **MUST NOT** claim plan verification is complete unless `plan-verifier` subagents have run and returned `PASS` for every phase.
+All plan verification **MUST** be delegated to `plan-verifier` subagents via the task tool.
 You **MUST** keep going until complete.
 </critical>
