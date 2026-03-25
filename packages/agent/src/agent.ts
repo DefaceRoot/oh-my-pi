@@ -246,6 +246,9 @@ export class Agent {
 	streamFn: StreamFn;
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 
+	/** Async hook invoked before the agent decides it is idle. */
+	beforeIdle?: (signal?: AbortSignal) => Promise<void>;
+
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
 		this.#convertToLlm = opts.convertToLlm || defaultConvertToLlm;
@@ -770,7 +773,15 @@ export class Agent {
 				}
 				return this.#dequeueSteeringMessages();
 			},
-			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			getFollowUpMessages: async () => {
+				const messages = this.#dequeueFollowUpMessages();
+				if (messages.length > 0) return messages;
+				if (this.beforeIdle) {
+					await this.beforeIdle(this.#abortController?.signal);
+					return this.#dequeueFollowUpMessages();
+				}
+				return [];
+			},
 		};
 
 		let partial: AgentMessage | null = null;

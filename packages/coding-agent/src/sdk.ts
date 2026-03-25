@@ -915,6 +915,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					const formattedResult = await formatAsyncResultForFollowUp(result);
 					const message = renderPromptTemplate(asyncResultTemplate, { jobId, result: formattedResult });
 					const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
+					const shouldDeliverAsFollowUp = session.isStreaming || session.isDrainingBeforeIdle;
 					await session.sendCustomMessage(
 						{
 							customType: "async-result",
@@ -928,7 +929,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 								durationMs,
 							},
 						},
-						{ deliverAs: "followUp", triggerTurn: true },
+						{
+							deliverAs: shouldDeliverAsFollowUp ? "followUp" : "nextTurn",
+							triggerTurn: shouldDeliverAsFollowUp,
+						},
 					);
 				},
 			})

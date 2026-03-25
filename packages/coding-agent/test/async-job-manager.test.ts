@@ -212,6 +212,57 @@ describe("AsyncJobManager", () => {
 		expect(attempts).toBe(attemptsAfterAck);
 	});
 
+	test("acknowledging an in-flight delivery does not drop later completions", async () => {
+		const completions: string[] = [];
+		let resolveFirstDeliveryStarted: (() => void) | undefined;
+		const firstDeliveryStarted = new Promise<void>(resolve => {
+			resolveFirstDeliveryStarted = resolve;
+		});
+		let releaseFirstDelivery: (() => void) | undefined;
+		const blockFirstDelivery = new Promise<void>(resolve => {
+			releaseFirstDelivery = resolve;
+		});
+		let firstJobId = "";
+		let secondJobId = "";
+		const manager = new AsyncJobManager({
+			onJobComplete: async jobId => {
+				completions.push(`start:${jobId}`);
+				if (jobId === firstJobId) {
+					resolveFirstDeliveryStarted?.();
+					await blockFirstDelivery;
+				}
+				completions.push(`done:${jobId}`);
+			},
+		});
+
+
+		firstJobId = manager.register("task", "first", async () => "one");
+		secondJobId = manager.register("task", "second", async () => "two");
+		await manager.waitForAll();
+		await firstDeliveryStarted;
+
+
+		expect(manager.getDeliveryState().pendingJobIds).toEqual([firstJobId, secondJobId]);
+		expect(manager.acknowledgeDeliveries([firstJobId])).toBe(1);
+		releaseFirstDelivery?.();
+
+
+		const drained = await manager.drainDeliveries({ timeoutMs: 2_000 });
+		expect(drained).toBe(true);
+		expect(completions).toEqual([
+			`start:${firstJobId}`,
+
+			`done:${firstJobId}`,
+
+			`start:${secondJobId}`,
+
+			`done:${secondJobId}`,
+
+		]);
+		expect(manager.hasPendingDeliveries()).toBe(false);
+	});
+
+
 	test("dispose clears jobs and pending deliveries", async () => {
 		const manager = new AsyncJobManager({
 			onJobComplete: async () => {

@@ -364,6 +364,44 @@ const noOpUIContext: ExtensionUIContext = {
 // AgentSession Class
 // ============================================================================
 
+const BEFORE_IDLE_WAIT_FOR_JOBS_TIMEOUT_MS = 5_000;
+const BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS = 2_000;
+
+async function waitForCompletionWithTimeout(
+	promise: Promise<unknown>,
+	timeoutMs: number,
+	signal?: AbortSignal,
+	): Promise<boolean> {
+	if (timeoutMs <= 0 || signal?.aborted) return false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let detachAbortListener: (() => void) | undefined;
+	try {
+		return await Promise.race<boolean>([
+			promise.then(() => true),
+			new Promise<boolean>(resolve => {
+				timeout = setTimeout(() => resolve(false), timeoutMs);
+				timeout?.unref?.();
+			}),
+			new Promise<boolean>(resolve => {
+				if (!signal) return;
+				if (signal.aborted) {
+					resolve(false);
+					return;
+				}
+				const onAbort = () => resolve(false);
+				signal.addEventListener("abort", onAbort, { once: true });
+				detachAbortListener = () => signal.removeEventListener("abort", onAbort);
+			}),
+		]);
+	} finally {
+		detachAbortListener?.();
+		if (timeout) {
+			clearTimeout(timeout);
+		}
+	}
+}
+
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -481,6 +519,7 @@ export class AgentSession {
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
+	#beforeIdleAsyncDrainActive = false;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -488,6 +527,56 @@ export class AgentSession {
 		this.settings = config.settings;
 		this.eventBus = config.eventBus;
 		this.#asyncJobManager = config.asyncJobManager;
+		this.agent.beforeIdle = this.#asyncJobManager
+			? async signal => {
+				const manager = this.#asyncJobManager;
+				if (!manager || signal?.aborted) return;
+				const running = manager.getRunningJobs();
+				if (running.length === 0 && !manager.hasPendingDeliveries()) {
+					return;
+				}
+
+
+				this.#beforeIdleAsyncDrainActive = true;
+				try {
+					if (running.length > 0) {
+						await waitForCompletionWithTimeout(
+							manager.waitForAll(),
+							BEFORE_IDLE_WAIT_FOR_JOBS_TIMEOUT_MS,
+							signal,
+						);
+						if (signal?.aborted) return;
+					}
+
+
+					if (manager.hasPendingDeliveries()) {
+						await waitForCompletionWithTimeout(
+							manager.drainDeliveries({ timeoutMs: BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS }),
+							BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS,
+							signal,
+						);
+						if (signal?.aborted) return;
+					}
+
+
+					// Suppress still-running jobs before the final delivery snapshot so any job that
+					// completes between these reads stays suppressed when it enqueues its result.
+					const stillRunning = manager.getRunningJobs();
+					if (stillRunning.length > 0) {
+						manager.acknowledgeDeliveries(stillRunning.map(job => job.id));
+					}
+
+
+					const remaining = manager.getDeliveryState();
+					if (remaining.pendingJobIds.length > 0) {
+						manager.acknowledgeDeliveries(remaining.pendingJobIds);
+					}
+				} finally {
+					this.#beforeIdleAsyncDrainActive = false;
+				}
+			}
+			: undefined;
+
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
 		this.#promptTemplates = config.promptTemplates ?? [];
@@ -1720,6 +1809,11 @@ export class AgentSession {
 	/** Whether agent is currently streaming a response */
 	get isStreaming(): boolean {
 		return this.agent.state.isStreaming || this.#promptInFlightCount > 0;
+	}
+
+	/** Whether the current prompt is draining async jobs before yielding. */
+	get isDrainingBeforeIdle(): boolean {
+		return this.#beforeIdleAsyncDrainActive;
 	}
 
 	/** Wait until streaming and deferred recovery work are fully settled. */

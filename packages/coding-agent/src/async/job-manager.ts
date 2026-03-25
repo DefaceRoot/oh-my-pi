@@ -314,6 +314,13 @@ export class AsyncJobManager {
 		return this.#suppressedDeliveries.has(jobId);
 	}
 
+	#removeDelivery(delivery: AsyncJobDelivery): boolean {
+		const index = this.#deliveries.indexOf(delivery);
+		if (index === -1) return false;
+		this.#deliveries.splice(index, 1);
+		return true;
+	}
+
 	#enqueueDelivery(jobId: string, text: string): void {
 		if (this.#isDeliverySuppressed(jobId)) {
 			return;
@@ -348,7 +355,7 @@ export class AsyncJobManager {
 		while (this.#deliveries.length > 0) {
 			const delivery = this.#deliveries[0];
 			if (this.#isDeliverySuppressed(delivery.jobId)) {
-				this.#deliveries.shift();
+				this.#removeDelivery(delivery);
 				continue;
 			}
 			const waitMs = delivery.nextAttemptAt - Date.now();
@@ -359,19 +366,20 @@ export class AsyncJobManager {
 				continue;
 			}
 			if (this.#isDeliverySuppressed(delivery.jobId)) {
-				this.#deliveries.shift();
+				this.#removeDelivery(delivery);
 				continue;
 			}
 
+
 			try {
 				await this.#onJobComplete(delivery.jobId, delivery.text, this.#jobs.get(delivery.jobId));
-				this.#deliveries.shift();
+				this.#removeDelivery(delivery);
 			} catch (error) {
 				delivery.attempt += 1;
 				delivery.lastError = error instanceof Error ? error.message : String(error);
 				delivery.nextAttemptAt = Date.now() + this.#getRetryDelay(delivery.attempt);
-				this.#deliveries.shift();
-				if (!this.#isDeliverySuppressed(delivery.jobId)) {
+				const removed = this.#removeDelivery(delivery);
+				if (removed && !this.#isDeliverySuppressed(delivery.jobId)) {
 					this.#deliveries.push(delivery);
 				}
 				logger.warn("Async job completion delivery failed", {
