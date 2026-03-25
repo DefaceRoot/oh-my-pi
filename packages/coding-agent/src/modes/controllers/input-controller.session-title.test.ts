@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, mock, vi } from "bun:test";
 import type { InteractiveModeContext } from "../../modes/types";
 
 const generateSessionTitleMock = vi.fn();
-const setTerminalTitleMock = vi.fn();
+const setSessionTerminalTitleMock = vi.fn();
 
 mock.module("../../utils/title-generator", () => ({
 	generateSessionTitle: generateSessionTitleMock,
-	setTerminalTitle: setTerminalTitleMock,
+	setSessionTerminalTitle: setSessionTerminalTitleMock,
 }));
 
 mock.module("../action-buttons", () => ({
@@ -65,12 +65,14 @@ function createSessionTitleFixture(initial: { sessionId: string; title?: string 
 			isBashRunning: false,
 			isPythonRunning: false,
 			sessionId: currentSessionId,
+			model: undefined,
 			modelRegistry: {},
 			extensionRunner: undefined,
 		},
 		sessionManager: {
 			getSessionName: vi.fn(() => currentTitle),
 			setSessionName: setSessionNameSpy,
+			getCwd: vi.fn(() => undefined),
 		},
 		settings: {
 			getModelRole: vi.fn(() => undefined),
@@ -109,7 +111,7 @@ async function flushMicrotasks(): Promise<void> {
 
 afterEach(() => {
 	generateSessionTitleMock.mockReset();
-	setTerminalTitleMock.mockReset();
+	setSessionTerminalTitleMock.mockReset();
 	vi.restoreAllMocks();
 });
 
@@ -120,14 +122,20 @@ describe("InputController session title generation", () => {
 		const fixture = createSessionTitleFixture({ sessionId: "source-session" });
 
 		await fixture.submit("resume modal component");
-		expect(generateSessionTitleMock).toHaveBeenCalledWith("resume modal component", {}, undefined, "source-session");
+		expect(generateSessionTitleMock).toHaveBeenCalledWith(
+			"resume modal component",
+			{},
+			expect.objectContaining({ getModelRole: expect.any(Function) }),
+			"source-session",
+			undefined,
+		);
 
 		fixture.setCurrentSession({ sessionId: "resumed-session", title: "Original Session" });
 		deferred.resolve("Resume Modal Component");
 		await flushMicrotasks();
 
 		expect(fixture.setSessionNameSpy).not.toHaveBeenCalled();
-		expect(setTerminalTitleMock).not.toHaveBeenCalled();
+		expect(setSessionTerminalTitleMock).not.toHaveBeenCalled();
 		expect(fixture.getCurrentTitle()).toBe("Original Session");
 		expect(fixture.editorAddToHistorySpy).toHaveBeenCalledWith("resume modal component");
 	});
@@ -142,7 +150,7 @@ describe("InputController session title generation", () => {
 		await flushMicrotasks();
 
 		expect(fixture.setSessionNameSpy).toHaveBeenCalledWith("Build UI Component");
-		expect(setTerminalTitleMock).toHaveBeenCalledWith("π: Build UI Component");
+		expect(setSessionTerminalTitleMock).toHaveBeenCalledWith("Build UI Component", undefined);
 		expect(fixture.getCurrentTitle()).toBe("Build UI Component");
 	});
 });

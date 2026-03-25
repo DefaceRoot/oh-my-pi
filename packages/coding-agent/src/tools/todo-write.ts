@@ -37,6 +37,7 @@ export interface TodoTaskInput {
 	content: string;
 	status?: TodoStatus;
 	notes?: string;
+	details?: string;
 }
 
 export interface TodoPhaseInput {

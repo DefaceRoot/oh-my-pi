@@ -39,7 +39,7 @@ describe("EventController auto compaction rendering", () => {
 		});
 
 		expect(ctx.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
-		expect(ctx.addMessageToChat).toHaveBeenCalledTimes(1);
+		expect(ctx.addMessageToChat).not.toHaveBeenCalled();
 		expect(ctx.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
 	});
 
@@ -53,11 +53,30 @@ describe("EventController auto compaction rendering", () => {
 			result: undefined,
 			aborted: false,
 			willRetry: false,
-			noOpReason: "nothing_to_compact",
+			skipped: true,
 		});
 
-		expect(ctx.showStatus).toHaveBeenCalledWith("Auto context-full maintenance skipped (nothing to compact)");
+		expect(ctx.showStatus).toHaveBeenCalledWith("Auto context-full maintenance skipped");
 		expect(ctx.showWarning).not.toHaveBeenCalled();
+		expect(ctx.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
+	});
+
+	it("shows a neutral status for skipped auto-handoff", async () => {
+		const ctx = createContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({
+			type: "auto_compaction_end",
+			action: "handoff",
+			result: undefined,
+			aborted: false,
+			willRetry: false,
+			skipped: true,
+		});
+
+		expect(ctx.showStatus).toHaveBeenCalledWith("Auto-handoff skipped");
+		expect(ctx.showWarning).not.toHaveBeenCalled();
+		expect(ctx.reloadTodos).not.toHaveBeenCalled();
 		expect(ctx.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
 	});
 

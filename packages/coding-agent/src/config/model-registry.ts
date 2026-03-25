@@ -803,7 +803,7 @@ export class ModelRegistry {
 		const cachedDiscoveries = this.#loadCachedDiscoverableModels();
 		const combined = this.#mergeCustomModels(builtInModels, [...customModels, ...cachedDiscoveries]);
 
-		this.#models = combined;
+		this.#models = this.#applyHardcodedModelPolicies(combined);
 	}
 
 	/** Load built-in models, applying provider and per-model overrides */
@@ -811,28 +811,30 @@ export class ModelRegistry {
 		overrides: Map<string, ProviderOverride>,
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
-		return getBundledProviders().flatMap(provider => {
-			const models = getBundledModels(provider as Parameters<typeof getBundledModels>[0]) as Model<Api>[];
-			const providerOverride = overrides.get(provider);
-			const perModelOverrides = modelOverrides.get(provider);
+		return this.#applyHardcodedModelPolicies(
+			getBundledProviders().flatMap(provider => {
+				const models = getBundledModels(provider as Parameters<typeof getBundledModels>[0]) as Model<Api>[];
+				const providerOverride = overrides.get(provider);
+				const perModelOverrides = modelOverrides.get(provider);
 
-			return models.map(m => {
-				let model = m;
-				if (providerOverride) {
-					model = {
-						...model,
-						baseUrl: providerOverride.baseUrl ?? model.baseUrl,
-						headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
-						compat: mergeCompat(model.compat, providerOverride.compat),
-					};
-				}
-				const modelOverride = perModelOverrides?.get(m.id);
-				if (modelOverride) {
-					model = applyModelOverride(model, modelOverride);
-				}
-				return model;
-			});
-		});
+				return models.map(m => {
+					let model = m;
+					if (providerOverride) {
+						model = {
+							...model,
+							baseUrl: providerOverride.baseUrl ?? model.baseUrl,
+							headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
+							compat: mergeCompat(model.compat, providerOverride.compat),
+						};
+					}
+					const modelOverride = perModelOverrides?.get(m.id);
+					if (modelOverride) {
+						model = applyModelOverride(model, modelOverride);
+					}
+					return model;
+				});
+			}),
+		);
 	}
 
 	/** Merge custom models with built-in, replacing by provider+id match */
@@ -1043,7 +1045,7 @@ export class ModelRegistry {
 					: model;
 			}),
 		);
-		this.#models = this.#applyModelOverrides(merged, this.#modelOverrides);
+		this.#models = this.#applyHardcodedModelPolicies(this.#applyModelOverrides(merged, this.#modelOverrides));
 	}
 
 	async #discoverProviderModels(
@@ -1539,12 +1541,10 @@ export class ModelRegistry {
 			}
 			const overrides = this.#modelOverrides.get(model.provider)?.get(model.id);
 			if (!overrides) {
-				return applyModelOverride(model, { contextWindow: 1_000_000 });
+				return { ...model, contextWindow: 1_000_000 };
 			}
-			return applyModelOverride(model, {
-				contextWindow: overrides.contextWindow ?? 1_000_000,
-				...overrides,
-			});
+			const merged = applyModelOverride(model, overrides);
+			return { ...merged, contextWindow: overrides.contextWindow ?? 1_000_000 };
 		});
 	}
 	#parseModels(config: ModelsConfig): Model<Api>[] {

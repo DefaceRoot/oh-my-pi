@@ -311,15 +311,6 @@ export class InputController {
 			}
 		};
 
-		this.ctx.editor.onCtrlC = () => this.handleCtrlC();
-		this.ctx.editor.onCtrlD = () => this.handleCtrlD();
-		this.ctx.editor.onCtrlZ = () => this.handleCtrlZ();
-		this.ctx.editor.onShiftTab = () => {
-			this.cycleThinkingLevel();
-		};
-		this.ctx.editor.onCtrlP = () => this.cycleRoleModel();
-		this.ctx.editor.onShiftCtrlP = () => this.cycleRoleModel({ temporary: true });
-		this.ctx.editor.onAltP = () => this.ctx.showModelSelector({ temporaryOnly: true });
 		this.ctx.editor.setActionKeys("app.clear", this.ctx.keybindings.getKeys("app.clear"));
 		this.ctx.editor.onClear = () => this.handleCtrlC();
 		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
@@ -336,20 +327,6 @@ export class InputController {
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
-		this.ctx.editor.onCtrlL = () => this.ctx.showModelSelector();
-		this.ctx.editor.onCtrlR = undefined;
-		this.ctx.editor.onCtrlT = () => this.ctx.toggleTodoExpansion();
-		for (const key of this.ctx.keybindings.getKeys("lazygit")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.openLazygit());
-		}
-		for (const key of this.ctx.keybindings.getKeys("externalEditor")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.openExternalEditor());
-		}
-		for (const key of this.ctx.keybindings.getKeys("historySearch")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showHistorySearch(); return undefined; });
-		}
-		this.ctx.editor.onQuestionMark = () => this.ctx.handleHotkeysCommand();
-		this.ctx.editor.onCtrlV = () => this.handleImagePaste();
 		this.ctx.editor.setActionKeys("app.model.select", this.ctx.keybindings.getKeys("app.model.select"));
 		this.ctx.editor.onSelectModel = () => this.ctx.showModelSelector();
 		this.ctx.editor.setActionKeys("app.history.search", this.ctx.keybindings.getKeys("app.history.search"));
@@ -378,57 +355,58 @@ export class InputController {
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
 
-		const expandToolsKeys = this.ctx.keybindings.getKeys("expandTools");
-		this.ctx.editor.onCtrlO = expandToolsKeys.includes("ctrl+o") ? () => this.toggleToolOutputExpansion() : undefined;
-		for (const key of expandToolsKeys) {
-			if (key === "ctrl+o") continue;
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.toggleToolOutputExpansion());
+		for (const key of this.ctx.keybindings.getKeys("app.lazygit")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.openLazygit());
 		}
 
-		const dequeueKeys = this.ctx.keybindings.getKeys("dequeue");
-		this.ctx.editor.onAltUp = dequeueKeys.includes("alt+up") ? () => this.handleDequeue() : undefined;
-		for (const key of dequeueKeys) {
-			if (key === "alt+up") continue;
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleDequeue());
-		}
-
-		const planModeKeys = this.ctx.keybindings.getKeys("togglePlanMode");
+		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
 		}
-		for (const key of this.ctx.keybindings.getKeys("toggleAskMode")) {
+		for (const key of this.ctx.keybindings.getKeys("app.ask.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.#toggleAskMode());
 		}
-
-		for (const key of this.ctx.keybindings.getKeys("toggleSTT")) {
+		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.toggleSTT());
 		}
-
-		for (const key of this.ctx.keybindings.getKeys("newSession")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => { void this.ctx.handleClearCommand(); return undefined; });
+		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				void this.ctx.handleClearCommand();
+				return undefined;
+			});
 		}
-		for (const key of this.ctx.keybindings.getKeys("tree")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showTreeSelector(); return undefined; });
+		for (const key of this.ctx.keybindings.getKeys("app.session.tree")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showTreeSelector();
+				return undefined;
+			});
 		}
-		for (const key of this.ctx.keybindings.getKeys("fork")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.showUserMessageSelector(); return undefined; });
+		for (const key of this.ctx.keybindings.getKeys("app.session.fork")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showUserMessageSelector();
+				return undefined;
+			});
 		}
-		for (const menu of WORKFLOW_MENUS) {
-			for (const key of this.ctx.keybindings.getKeys(
-				menu.hotkeyAction as import("../../config/keybindings").AppAction,
-			)) {
-				this.ctx.editor.setCustomKeyHandler(key, () => { this.ctx.statusLine.toggleMenu(menu.id); this.ctx.ui.requestRender(); return undefined; });
-			}
-		}
-
-		for (const key of this.ctx.keybindings.getKeys("resume")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => { void this.ctx.openResumeModal(); return undefined; });
+		for (const key of this.ctx.keybindings.getKeys("app.session.resume")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				void this.ctx.openResumeModal();
+				return undefined;
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
-		for (const key of this.ctx.keybindings.getKeys("cycleAgentMode")) {
+		for (const key of this.ctx.keybindings.getKeys("app.agent.cycleMode")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.cycleAgentMode());
+		}
+		for (const menu of WORKFLOW_MENUS) {
+			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction)) {
+				this.ctx.editor.setCustomKeyHandler(key, () => {
+					this.ctx.statusLine.toggleMenu(menu.id);
+					this.ctx.ui.requestRender();
+					return undefined;
+				});
+			}
 		}
 		this.ctx.editor.setCustomKeyHandler("left", () => {
 			if (this.ctx.statusLine.getActiveMenu()) {
@@ -468,7 +446,10 @@ export class InputController {
 			return this.#handleChordInput(data);
 		});
 		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.handleCopyCurrentLine();
+				return undefined;
+			});
 		}
 
 		this.ctx.editor.onChange = (text: string) => {
@@ -858,9 +839,8 @@ export class InputController {
 			const hasUserMessages = this.ctx.agent.state.messages.some((m: AgentMessage) => m.role === "user");
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				const registry = this.ctx.session.modelRegistry;
-				const curatorModel = this.ctx.settings.getModelRole("curator");
 				const titleSessionId = this.ctx.session.sessionId;
-				generateSessionTitle(text, registry, curatorModel, titleSessionId)
+				generateSessionTitle(text, registry, this.ctx.settings, titleSessionId, this.ctx.session.model)
 					.then(async title => {
 						if (!title) return;
 						if (this.ctx.session.sessionId !== titleSessionId) return;

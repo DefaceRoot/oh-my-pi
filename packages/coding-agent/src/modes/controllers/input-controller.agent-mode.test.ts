@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { DEFAULT_APP_KEYBINDINGS } from "../../config/keybindings";
+import { KeybindingsManager } from "../../config/keybindings";
 import { _resetSettingsForTest, Settings } from "../../config/settings";
 import { initTheme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
@@ -38,6 +38,7 @@ function createAgentModeFixture(initialRole: MainAgentRole): AgentModeFixture {
 	};
 	let lastRole: MainAgentRole | "custom" = initialRole;
 	let currentModel = models[initialRole];
+	let sessionModel = currentModel;
 	const invalidateSpy = vi.fn();
 	const showStatusSpy = vi.fn();
 	const showWarningSpy = vi.fn();
@@ -45,11 +46,13 @@ function createAgentModeFixture(initialRole: MainAgentRole): AgentModeFixture {
 	const updateEditorBorderColorSpy = vi.fn();
 	const setModelTemporarySpy = vi.fn(async (model: Model) => {
 		currentModel = model;
-		session.model = model;
+		sessionModel = model;
 	});
 	const session = {
 		isStreaming: false,
-		model: currentModel,
+		get model() {
+			return sessionModel;
+		},
 		resolveRoleModel: (role: string) => {
 			if (role === "default" || role === "ask" || role === "orchestrator" || role === "plan") {
 				return models[role];
@@ -100,8 +103,9 @@ describe("InputController agent mode cycling", () => {
 	});
 
 	it("binds Alt+A to main-agent cycling instead of ask-only toggle by default", () => {
-		expect(DEFAULT_APP_KEYBINDINGS.cycleAgentMode).toBe("alt+a");
-		expect(DEFAULT_APP_KEYBINDINGS.toggleAskMode).toEqual([]);
+		const keybindings = KeybindingsManager.inMemory();
+		expect(keybindings.getKeys("app.agent.cycleMode")).toEqual(["alt+a"]);
+		expect(keybindings.getKeys("app.ask.toggle")).toEqual([]);
 	});
 
 	it("cycles default -> orchestrator -> plan -> ask -> default and updates session role state", async () => {

@@ -27,7 +27,6 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import { resolveOmpCommand } from "../../task/omp-command";
@@ -44,7 +43,6 @@ class BreakingChangeInspectionCancelledError extends Error {
 		this.name = "BreakingChangeInspectionCancelledError";
 	}
 }
-
 
 export class CommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
@@ -884,7 +882,10 @@ export class CommandController {
 		}
 	}
 
-	private async detectUpstreamBreakingChanges(worktreePath: string, upstreamRef: string): Promise<{
+	private async detectUpstreamBreakingChanges(
+		worktreePath: string,
+		upstreamRef: string,
+	): Promise<{
 		breakingCommits: Array<{ hash: string; subject: string; body: string }>;
 		significantFileChanges: Array<{ file: string; changeType: string }>;
 	}> {
@@ -896,7 +897,8 @@ export class CommandController {
 			significantFileChanges: [],
 		};
 
-		const breakingChangeWarning = "Could not inspect upstream commit messages for breaking changes. Continuing merge setup.";
+		const breakingChangeWarning =
+			"Could not inspect upstream commit messages for breaking changes. Continuing merge setup.";
 
 		const upstreamLog = await this.runBashCommand(
 			`cd ${worktreePath} && git log --pretty=format:"%H|||%s|||%b" HEAD..${upstreamRef}`,
@@ -1010,8 +1012,7 @@ export class CommandController {
 				: ["Conflicting files: none detected by git merge."];
 
 		const hasBreakingChanges =
-			params.breakingChanges.breakingCommits.length > 0 ||
-			params.breakingChanges.significantFileChanges.length > 0;
+			params.breakingChanges.breakingCommits.length > 0 || params.breakingChanges.significantFileChanges.length > 0;
 		const displayedBreakingCommits = params.breakingChanges.breakingCommits.slice(0, 10);
 		const breakingCommitLines = displayedBreakingCommits.flatMap(commit => {
 			const lines = [`- ${commit.hash.slice(0, 7)}: ${commit.subject}`];

@@ -15,6 +15,8 @@ export class EventController {
 	private lastThinkingCount = 0;
 	private renderedCustomMessages = new Set<string>();
 
+	#lastAssistantComponent: AssistantMessageComponent | null = null;
+
 	constructor(private ctx: InteractiveModeContext) {}
 
 	private resetReadGroup(): void {
@@ -338,10 +340,10 @@ export class EventController {
 					this.ctx.rebuildChatFromMessages();
 					this.ctx.statusLine.invalidate();
 					this.ctx.updateEditorTopBorder();
-				} else if (event.noOpReason === "nothing_to_compact") {
-					this.ctx.showStatus("Auto context-full maintenance skipped (nothing to compact)");
 				} else if (event.errorMessage) {
 					this.ctx.showWarning(event.errorMessage);
+				} else if (event.skipped) {
+					this.ctx.showStatus(isHandoffAction ? "Auto-handoff skipped" : "Auto context-full maintenance skipped");
 				} else if (isHandoffAction) {
 					this.ctx.chatContainer.clear();
 					this.ctx.rebuildChatFromMessages();
@@ -349,9 +351,6 @@ export class EventController {
 					this.ctx.updateEditorTopBorder();
 					await this.ctx.reloadTodos();
 					this.ctx.showStatus("Auto-handoff completed");
-				} else if (event.skipped) {
-					// Benign skip: no model selected, no candidate models available, or nothing
-					// to compact yet. Not a failure — suppress the warning.
 				} else {
 					this.ctx.showWarning("Auto context-full maintenance failed; continuing without maintenance");
 				}

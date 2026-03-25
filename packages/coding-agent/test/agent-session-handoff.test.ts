@@ -620,7 +620,7 @@ describe("AgentSession handoff", () => {
 			action: "context-full",
 			aborted: false,
 			willRetry: false,
-			noOpReason: "nothing_to_compact",
+			skipped: true,
 		});
 		expect(endEvents[0]).not.toMatchObject({
 			errorMessage: expect.any(String),

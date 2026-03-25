@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { MODEL_ROLE_IDS } from "../config/model-registry";
-import { parseModelPattern, resolveModelRoleValue } from "../config/model-resolver";
+import { resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 
 export interface ResolvedCommitModel {
@@ -68,12 +68,10 @@ export async function resolveCommitRoleModel(
 		if (apiKey) return { model: resolvedCommit.model, apiKey, thinkingLevel: resolvedCommit.thinkingLevel };
 	}
 
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
-	for (const pattern of MODEL_PRIO.smol) {
-		const candidate = parseModelPattern(pattern, available, matchPreferences).model;
-		if (!candidate) continue;
-		const apiKey = await modelRegistry.getApiKey(candidate);
-		if (apiKey) return { model: candidate, apiKey };
+	const resolvedExplore = resolveRoleSelection(["explore"], settings, available);
+	if (resolvedExplore?.model) {
+		const apiKey = await modelRegistry.getApiKey(resolvedExplore.model);
+		if (apiKey) return { model: resolvedExplore.model, apiKey, thinkingLevel: resolvedExplore.thinkingLevel };
 	}
 
 	return { model: fallbackModel, apiKey: fallbackApiKey };

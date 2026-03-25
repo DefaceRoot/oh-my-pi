@@ -414,7 +414,7 @@ export class ModelSelectorComponent extends Container {
 			this.#applyTabFilter();
 			void this.#refreshSelectedProvider().catch(error => {
 				this.#errorMessage = error instanceof Error ? error.message : String(error);
-				this.#updateList();
+				this.#updateView();
 				this.#tui.requestRender();
 			});
 		};
@@ -995,15 +995,8 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		if (getKeybindings().matches(keyData, "tui.select.cancel")) {
-			if (this.#menuStep === "thinking" && this.#menuSelectedRole !== null) {
-				this.#menuStep = "role";
-				const roleIndex = MENU_ROLE_ACTIONS.findIndex(action => action.role === this.#menuSelectedRole);
-				this.#menuSelectedRole = null;
-				this.#menuSelectedIndex = roleIndex >= 0 ? roleIndex : 0;
-				this.#updateMenu();
-				return;
-			}
-			this.#closeMenu();
+			this.#closeThinkingMenu();
+			this.#updateView();
 			return;
 		}
 	}

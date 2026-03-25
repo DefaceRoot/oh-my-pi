@@ -22,7 +22,7 @@ export default class Commit extends Command {
 	async run(): Promise<void> {
 		const { flags } = await this.parse(Commit);
 		const lastPushFlag = [...this.argv].reverse().find(arg => arg === "--push" || arg === "--no-push");
-		const push = lastPushFlag === "--no-push" ? false : true;
+		const push = lastPushFlag !== "--no-push";
 
 		const cmd: CommitCommandArgs = {
 			push,

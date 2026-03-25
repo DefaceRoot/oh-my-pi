@@ -291,10 +291,7 @@ export class SubagentSessionViewerComponent implements Component {
 		const maxOffset = Math.max(0, bodyRows.length - transcriptViewportHeight);
 		this.#scrollOffset = this.#followTail ? maxOffset : Math.max(0, Math.min(this.#scrollOffset, maxOffset));
 		const footerRows = this.#footerLines(bodyRows.length, transcriptViewportHeight, innerWidth);
-		const visibleTranscriptRows = bodyRows.slice(
-			this.#scrollOffset,
-			this.#scrollOffset + transcriptViewportHeight,
-		);
+		const visibleTranscriptRows = bodyRows.slice(this.#scrollOffset, this.#scrollOffset + transcriptViewportHeight);
 		const visibleBodyRows: string[] = [];
 		for (let index = 0; index < bodyHeight; index += 1) {
 			const transcriptRow = visibleTranscriptRows[index] ?? "";
@@ -443,7 +440,9 @@ export class SubagentSessionViewerComponent implements Component {
 				detailParts.push(`${theme.fg("dim", "MCP")} ${theme.fg("text", formatList(usedMcpServers))}`);
 			}
 			if (configuredMcpAllowlist.length > 0) {
-				detailParts.push(`${theme.fg("dim", "Allowed MCP")} ${theme.fg("text", formatList(configuredMcpAllowlist))}`);
+				detailParts.push(
+					`${theme.fg("dim", "Allowed MCP")} ${theme.fg("text", formatList(configuredMcpAllowlist))}`,
+				);
 			}
 			lines.push(` ${detailParts.join(dotSep)}`);
 		}
@@ -576,7 +575,8 @@ export class SubagentSessionViewerComponent implements Component {
 		const innerWidth = Math.max(1, Math.max(MIN_WIDTH, width) - 2);
 		const resolvedTitleRows = titleRows ?? this.#wrapLines(this.#buildTitleLines(), innerWidth).length;
 		const resolvedMetadataRows = metadataRows ?? this.#wrapLines(this.#buildMetadataLines(), innerWidth).length;
-		const resolvedHeaderRows = headerRows ?? (this.#contextExpanded ? this.#wrapLines(this.#content.headerLines, innerWidth).length : 0);
+		const resolvedHeaderRows =
+			headerRows ?? (this.#contextExpanded ? this.#wrapLines(this.#content.headerLines, innerWidth).length : 0);
 		const resolvedFooterRows = footerRows ?? 2;
 		const headerSectionRows = this.#contextExpanded ? resolvedHeaderRows + 1 : 0;
 		return Math.max(

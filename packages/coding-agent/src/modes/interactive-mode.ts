@@ -47,13 +47,19 @@ import {
 	type SessionInitEntry,
 	SessionManager,
 } from "../session/session-manager";
+import { STTController, type SttState } from "../stt";
 import { resumeSubagentRuntime, stopSubagentRuntime } from "../task/subagent-runtime-registry";
 import { buildUserStoppedAbortReason } from "../task/subagent-stop";
 import { TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
-import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle, setTerminalTitle } from "../utils/title-generator";
+import {
+	popTerminalTitle,
+	pushTerminalTitle,
+	setSessionTerminalTitle,
+	setTerminalTitle,
+} from "../utils/title-generator";
 import { getTotalUsageTokens } from "../utils/usage-tokens";
 import {
 	ACTION_BUTTONS,
@@ -79,7 +85,6 @@ import { SubagentSessionViewerComponent } from "./components/subagent-session-vi
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
 import { BtwController } from "./controllers/btw-controller";
-import { STTController, type SttState } from "../stt";
 import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
@@ -351,7 +356,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#voiceHue = 0;
 	#voicePreviousShowHardwareCursor: boolean | null = null;
 	#voicePreviousUseTerminalCursor: boolean | null = null;
-	#resizeHandler?: () => void;
 
 	constructor(
 		session: AgentSession,
@@ -1567,6 +1571,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.commandController.handleDumpCommand();
 	}
 
+	handleDebugTranscriptCommand(): Promise<void> {
+		return this.commandController.handleDebugTranscriptCommand();
+	}
+
 	handleShareCommand(): Promise<void> {
 		return this.commandController.handleShareCommand();
 	}
@@ -1583,8 +1591,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.commandController.handleUsageCommand(reports);
 	}
 
-	async handleChangelogCommand(): Promise<void> {
-		await this.commandController.handleChangelogCommand();
+	handleJobsCommand(): Promise<void> {
+		return this.commandController.handleJobsCommand();
+	}
+
+	handleChangelogCommand(showFull?: boolean): Promise<void> {
+		return this.commandController.handleChangelogCommand(showFull);
 	}
 
 	handleHotkeysCommand(): void {
@@ -1743,6 +1755,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.selectorController.showExtensionsDashboard();
 	}
 
+	showAgentsDashboard(): void {
+		void this.selectorController.showAgentsDashboard();
+	}
+
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		this.selectorController.showModelSelector(options);
 	}
@@ -1803,10 +1819,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.resumeModalComponent = undefined;
 	}
 
-	private async handleResumeModalSelection(
-		sessionPath: string,
-		sessionCwd: string,
-	): Promise<void> {
+	private async handleResumeModalSelection(sessionPath: string, sessionCwd: string): Promise<void> {
 		const previousCwd = process.cwd();
 		let switchedCwd = false;
 
@@ -2484,7 +2497,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			.start()
 			.then(() => {
 				if (manager.state === "degraded") {
-					const hint = this.keybindings?.getDisplayString("cycleSubagentForward") ?? "Ctrl+X";
+					const hint = this.keybindings?.getDisplayString("app.subagent.cycleForward") ?? "Ctrl+X";
 					try {
 						this.showWarning(`Watch unavailable. Use ${hint} then Ctrl+R to manually refresh subagent data.`);
 					} catch {
@@ -2748,7 +2761,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		transcript: LoadedSubagentTranscript,
 		groups: SubagentViewGroup[],
 	): Promise<void> {
-		const leaderKey = this.keybindings.getDisplayString("cycleSubagentForward") || "Ctrl+X";
+		const leaderKey = this.keybindings.getDisplayString("app.subagent.cycleForward") || "Ctrl+X";
 		const currentGroup = groups[this.subagentCycleIndex] ?? groups[0]!;
 		const currentRefs = currentGroup.refs;
 		const nestedRefs = this.getSubagentNestedRefs(currentGroup);
@@ -2891,7 +2904,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				abortReason: selected.abortReason,
 				outcome: selected.outcome,
 				canStop: selected.status === "running" || selected.status === "pending",
-				canResume: (selected.status === "cancelled" || selected.status === "user_stopped") && !!selected.sessionPath,
+				canResume:
+					(selected.status === "cancelled" || selected.status === "user_stopped") && !!selected.sessionPath,
 				...(transcript.editStats ?? {}),
 			},
 		});
@@ -2977,8 +2991,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 			if (msg.role !== "toolResult") continue;
 			if (msg.toolName !== "edit" && msg.toolName !== "write") continue;
-			const textContent =
-				(msg.content ?? []).find(c => c.type === "text")?.text ?? "";
+			const textContent = (msg.content ?? []).find(c => c.type === "text")?.text ?? "";
 			if (msg.toolName === "edit") {
 				const pathMatch = /^Updated\s+(.+?)$/m.exec(textContent);
 				if (pathMatch?.[1]) filePaths.add(pathMatch[1].trim());
@@ -2996,15 +3009,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		return { filesChanged: filePaths.size, linesAdded, linesDeleted };
 	}
 
-	private extractUsedSkillNamesFromEntries(entries: SessionEntry[]): string[] | undefined {
+	private extractUsedSkillNamesFromEntries(entries: ReadonlyArray<unknown>): string[] | undefined {
 		const explicitNames = new Set<string>();
 		for (const entry of entries) {
-			const skillPromptName = this.extractSkillPromptName(entry);
+			if (!entry || typeof entry !== "object") continue;
+			const record = entry as Record<string, unknown>;
+			const skillPromptName = this.extractSkillPromptName(record);
 			if (skillPromptName) {
 				explicitNames.add(skillPromptName);
 			}
-			if (entry.type !== "message") continue;
-			for (const skill of this.extractToolReferencedSkillNames(entry.message)) {
+			if (record.type !== "message") continue;
+			for (const skill of this.extractToolReferencedSkillNames(record.message)) {
 				explicitNames.add(skill);
 			}
 		}
@@ -3210,6 +3225,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			thinkingLevel,
 			models: model ? { default: model } : {},
 			injectedTtsrRules: [],
+			selectedMCPToolNames: [],
+			hasPersistedMCPToolSelection: false,
 			mode,
 			modeData,
 		};
@@ -3272,10 +3289,10 @@ export class InteractiveMode implements InteractiveModeContext {
 							mcpServers: sessionInitEntry?.mcpServers ?? fallback.mcpServers,
 							mcpAllowlist: sessionInitEntry?.mcpAllowlist ?? fallback.mcpAllowlist,
 							contextFilePath: contextFilePath ?? fallback.contextFilePath,
-						parentContext: parentContext ?? (await this.readSubagentContextFile(fallback.contextFilePath)),
-						...(editStats ? { editStats } : {}),
-					};
-				}
+							parentContext: parentContext ?? (await this.readSubagentContextFile(fallback.contextFilePath)),
+							...(editStats ? { editStats } : {}),
+						};
+					}
 
 					return {
 						source: ref.sessionPath,
@@ -3293,10 +3310,10 @@ export class InteractiveMode implements InteractiveModeContext {
 						mcpServers: sessionInitEntry?.mcpServers,
 						mcpAllowlist: sessionInitEntry?.mcpAllowlist,
 						contextFilePath,
-					parentContext,
-					...(editStats ? { editStats } : {}),
-				};
-			} catch {
+						parentContext,
+						...(editStats ? { editStats } : {}),
+					};
+				} catch {
 					const fallback = this.buildFallbackSubagentSessionContext(rawTranscript);
 					return {
 						source: ref.sessionPath,
@@ -3396,15 +3413,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleBtwCommand(question: string): Promise<void> {
-		return this.#btwController.start(question);
+		return this.btwController.start(question);
 	}
 
 	hasActiveBtw(): boolean {
-		return this.#btwController.hasActiveRequest();
+		return this.btwController.hasActiveRequest();
 	}
 
 	handleBtwEscape(): boolean {
-		return this.#btwController.handleEscape();
+		return this.btwController.handleEscape();
 	}
 
 	cycleThinkingLevel(): void {

@@ -171,7 +171,8 @@ export interface InteractiveModeContext {
 	handleCopyCommand(sub?: string): void;
 	handleSessionCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
-	handleChangelogCommand(): Promise<void>;
+	handleJobsCommand(): Promise<void>;
+	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleDumpCommand(): void;
 	handleClearCommand(): Promise<void>;
@@ -179,6 +180,10 @@ export interface InteractiveModeContext {
 	mergeUpstreamFork(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
+	handleMoveCommand(targetPath: string): Promise<void>;
+	handleMemoryCommand(text: string): Promise<void>;
+	handleMCPCommand(text: string): Promise<void>;
+	handleSSHCommand(text: string): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void>;
@@ -188,6 +193,7 @@ export interface InteractiveModeContext {
 	showSettingsSelector(): void;
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
+	showAgentsDashboard(): void;
 	showModelSelector(options?: { temporaryOnly?: boolean }): void;
 	showUserMessageSelector(): void;
 	showTreeSelector(): void;
@@ -214,6 +220,7 @@ export interface InteractiveModeContext {
 	ingestTaskToolResult(results: unknown[]): void;
 	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
+	handleDebugTranscriptCommand(): Promise<void>;
 	handleBtwCommand(question: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;

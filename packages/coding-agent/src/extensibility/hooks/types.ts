@@ -406,7 +406,6 @@ export interface AutoCompactionEndEvent {
 	aborted: boolean;
 	willRetry: boolean;
 	errorMessage?: string;
-	noOpReason?: "nothing_to_compact";
 	/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
 	skipped?: boolean;
 }

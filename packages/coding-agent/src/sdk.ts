@@ -97,7 +97,8 @@ import {
 	FindTool,
 	filterToolNamesByRoleAllowlist,
 	GrepTool,
-	getSearchTools,
+	researcherTools,
+	searchTools,
 	HIDDEN_TOOLS,
 	isCodeSearchProviderId,
 	isSearchProviderPreference,
@@ -510,7 +511,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 					aborted: event.aborted,
 					willRetry: event.willRetry,
 					errorMessage: event.errorMessage,
-					noOpReason: event.noOpReason,
+					skipped: event.skipped,
 				},
 				ctx,
 			),
@@ -1098,17 +1099,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		customTools.push(...(geminiImageTools as unknown as CustomTool[]));
 	}
 
-	// Add specialized Exa web search tools if EXA_API_KEY is available
+	// Add Exa search and researcher tools when enabled
+
 	const exaSettings = settings.getGroup("exa");
-	if (hasWebSearchBuiltin && exaSettings.enabled && exaSettings.enableSearch) {
-		const exaSearchTools = await logger.timeAsync("getSearchTools", getSearchTools, {
-			enableLinkedin: exaSettings.enableLinkedin as boolean,
-			enableCompany: exaSettings.enableCompany as boolean,
-		});
-		// Filter out the base web_search (already in built-in tools), add specialized Exa tools
-		const specializedTools = exaSearchTools.filter(t => t.name !== "web_search");
-		if (specializedTools.length > 0) {
-			customTools.push(...specializedTools);
+	if (hasWebSearchBuiltin && exaSettings.enabled) {
+		const exaSpecializedTools = [
+			...(exaSettings.enableSearch ? searchTools : []),
+			...(exaSettings.enableResearcher ? researcherTools : []),
+		];
+		if (exaSpecializedTools.length > 0) {
+			customTools.push(...exaSpecializedTools);
 		}
 	}
 
@@ -1674,6 +1674,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel,
 		sessionManager,
 		settings,
+		eventBus,
 		scopedModels: options.scopedModels,
 		promptTemplates,
 		slashCommands,

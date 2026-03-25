@@ -387,6 +387,11 @@ function isSessionInheritedAgentPattern(value: string): boolean {
 	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
 }
 
+export function isDefaultModelAlias(value: string | string[] | undefined): boolean {
+	const patterns = normalizeModelPatternList(value);
+	return patterns.length === 1 && isSessionInheritedAgentPattern(patterns[0]);
+}
+
 function resolveConfiguredRolePattern(value: string, settings?: Settings): string | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;

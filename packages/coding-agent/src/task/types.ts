@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { BashInteractiveResult } from "../tools/bash-interactive";
 import type { SubagentOutcome } from "./subagent-outcome";
 import type { SubagentResumeRequest } from "./subagent-resume-request";
 import type { TaskSubagentStopRequest } from "./subagent-stop-request";

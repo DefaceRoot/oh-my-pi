@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
+import { relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
@@ -87,6 +87,7 @@ function resolveAgentModeLabel(ctx: SegmentContext): "default" | "ask" | "orches
 	}
 
 	return "custom";
+}
 function stripDisplayRoot(pwd: string): string {
 	for (const root of ["/work", path.join(os.homedir(), "Projects")]) {
 		const relative = relativePathWithinRoot(root, pwd);
@@ -95,7 +96,7 @@ function stripDisplayRoot(pwd: string): string {
 	return pwd;
 }
 
-function normalizePremiumRequests(value: number): number {
+function _normalizePremiumRequests(value: number): number {
 	return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
@@ -186,7 +187,6 @@ const pathSegment: StatusLineSegment = {
 		if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);
 		}
-
 
 		const maxLen = opts.maxLength ?? 40;
 		if (pwd.length > maxLen) {
@@ -420,16 +420,39 @@ const cacheWriteSegment: StatusLineSegment = {
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
 
+const prSegment: StatusLineSegment = {
+	id: "pr",
+	render(ctx) {
+		const pr = ctx.git.pr;
+		if (!pr) return { content: "", visible: false };
+		const content = withIcon(theme.icon.pr, `#${pr.number}`);
+		return { content: theme.fg("statusLineGitClean", content), visible: true };
+	},
+};
+
+const tokenRateSegment: StatusLineSegment = {
+	id: "token_rate",
+	render(ctx) {
+		const rate = ctx.usageStats.tokensPerSecond;
+		if (rate === null || rate <= 0) return { content: "", visible: false };
+		const displayRate = rate >= 10 ? Math.round(rate).toString() : rate.toFixed(1).replace(/\.0$/, "");
+		const content = withIcon(theme.icon.tokens, `${displayRate}/s`);
+		return { content: theme.fg("statusLineOutput", content), visible: true };
+	},
+};
+
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
 	plan_mode: planModeSegment,
 	path: pathSegment,
 	git: gitSegment,
+	pr: prSegment,
 	subagents: subagentsSegment,
 	token_in: tokenInSegment,
 	token_out: tokenOutSegment,
 	token_total: tokenTotalSegment,
+	token_rate: tokenRateSegment,
 	cost: costSegment,
 	context_pct: contextPctSegment,
 	context_total: contextTotalSegment,

@@ -8,6 +8,8 @@ function createContext(options: {
 	lastRole?: string;
 	model?: { provider: string; id: string; name?: string; reasoning?: boolean };
 	roles?: Partial<Record<"default" | "ask" | "orchestrator" | "plan", string>>;
+	tokenRate?: number | null;
+	pr?: { number: number; url: string } | null;
 }): SegmentContext {
 	const model = options.model ?? {
 		provider: "anthropic",
@@ -49,7 +51,7 @@ function createContext(options: {
 			cacheWrite: 0,
 			premiumRequests: 0,
 			cost: 0,
-			tokensPerSecond: null,
+			tokensPerSecond: options.tokenRate ?? null,
 		},
 		contextPercent: 0,
 		contextWindow: 0,
@@ -59,7 +61,7 @@ function createContext(options: {
 		git: {
 			branch: null,
 			status: null,
-			pr: null,
+			pr: options.pr ?? null,
 		},
 	};
 }
@@ -124,5 +126,20 @@ describe("status-line model segment agent modes", () => {
 			expect(rendered.content).toContain(testCase.label);
 			expect(rendered.content).toContain(testCase.style);
 		}
+	});
+
+	it("renders PR and token rate segments when data is available", () => {
+		const ctx = createContext({
+			pr: { number: 42, url: "https://example.test/pr/42" },
+			tokenRate: 12.4,
+		});
+
+		const pr = renderSegment("pr", ctx);
+		expect(pr.visible).toBe(true);
+		expect(pr.content).toContain("#42");
+
+		const tokenRate = renderSegment("token_rate", ctx);
+		expect(tokenRate.visible).toBe(true);
+		expect(tokenRate.content).toContain("12.4/s");
 	});
 });

@@ -103,10 +103,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	{
 		name: "plan",
 		description: `Toggle plan mode (planned artifacts stay in ${SESSION_ARTIFACT_DIR_TEMPLATES.planned})`,
-		inlineHint: "[prompt]",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handlePlanModeCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},

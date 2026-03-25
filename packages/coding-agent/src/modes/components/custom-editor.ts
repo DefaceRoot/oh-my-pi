@@ -85,7 +85,6 @@ export class CustomEditor extends Editor {
 		return false;
 	}
 
-
 	/**
 	 * Register a custom key handler. Extensions use this for shortcuts.
 	 */

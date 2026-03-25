@@ -9,13 +9,13 @@ import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } 
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
-import { findGitHeadPathSync, sanitizeStatusText } from "../shared";
 import {
 	type FlattenedWorkflowMenuAction,
 	flattenWorkflowMenuActions,
 	WORKFLOW_MENUS,
 	type WorkflowMenu,
 } from "../action-buttons";
+import { sanitizeStatusText } from "../shared";
 import { getPreset } from "./status-line/presets";
 import { renderSegment, type SegmentContext } from "./status-line/segments";
 import { getSeparator } from "./status-line/separators";
@@ -49,14 +49,6 @@ const ANSI_RESET = "\x1b[0m";
 // ═══════════════════════════════════════════════════════════════════════════
 // Rendering Helpers
 // ═══════════════════════════════════════════════════════════════════════════
-
-/** Sanitize text for display in a single-line status */
-function sanitizeStatusText(text: string): string {
-	return text
-		.replace(/[\r\n\t]/g, " ")
-		.replace(/ +/g, " ")
-		.trim();
-}
 
 function readWorktreeHeadPath(gitFilePath: string): string | null {
 	try {

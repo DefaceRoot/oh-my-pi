@@ -32,19 +32,25 @@ function createSimpleContext(options?: { runningJobs?: number; loadingAnimation?
 	};
 	const editor = {
 		onEscape: undefined as (() => void) | undefined,
-		onCtrlC: undefined as (() => void) | undefined,
-		onCtrlD: undefined as (() => void) | undefined,
-		onCtrlZ: undefined as (() => void) | undefined,
-		onShiftTab: undefined as (() => void) | undefined,
-		onCtrlP: undefined as (() => void) | undefined,
-		onShiftCtrlP: undefined as (() => void) | undefined,
-		onAltP: undefined as (() => void) | undefined,
-		onCtrlL: undefined as (() => void) | undefined,
-		onCtrlR: undefined as (() => void) | undefined,
-		onCtrlT: undefined as (() => void) | undefined,
-		onQuestionMark: undefined as (() => void) | undefined,
-		onCtrlV: undefined as (() => void) | undefined,
-		onAltUp: undefined as (() => void) | undefined,
+		shouldBypassAutocompleteOnEscape: undefined as (() => boolean) | undefined,
+		onClear: undefined as (() => void) | undefined,
+		onExit: undefined as (() => void) | undefined,
+		onSuspend: undefined as (() => void) | undefined,
+		onCycleThinkingLevel: undefined as (() => void) | undefined,
+		onCycleModelForward: undefined as (() => void) | undefined,
+		onCycleModelBackward: undefined as (() => void) | undefined,
+		onQuickSelectModel: undefined as (() => void) | undefined,
+		onSelectModel: undefined as (() => void) | undefined,
+		onHistorySearch: undefined as (() => void) | undefined,
+		onShowHotkeys: undefined as (() => void) | undefined,
+		onPasteImage: undefined as (() => void) | undefined,
+		onCopyPrompt: undefined as (() => void) | undefined,
+		onExpandTools: undefined as (() => void) | undefined,
+		onToggleThinking: undefined as (() => void) | undefined,
+		onExternalEditor: undefined as (() => void) | undefined,
+		onDequeue: undefined as (() => void) | undefined,
+		setActionKeys: vi.fn(),
+		clearCustomKeyHandlers: vi.fn(),
 		setCustomKeyHandler: vi.fn(),
 		getText: vi.fn(() => options?.editorText ?? ""),
 		setText: vi.fn(),
@@ -54,6 +60,9 @@ function createSimpleContext(options?: { runningJobs?: number; loadingAnimation?
 		statusLine: {
 			getActiveMenu: vi.fn(() => undefined),
 			closeMenu: vi.fn(),
+			toggleMenu: vi.fn(),
+			navigateMenu: vi.fn(),
+			executeSelectedMenuAction: vi.fn(),
 		},
 		ui: {
 			requestRender: vi.fn(),
@@ -72,6 +81,9 @@ function createSimpleContext(options?: { runningJobs?: number; loadingAnimation?
 		},
 		isSubagentViewActive: vi.fn(() => false),
 		exitSubagentView: vi.fn(),
+		hasActiveBtw: vi.fn(() => false),
+		handleBtwEscape: vi.fn(() => false),
+		cancelPendingSubmission: vi.fn(() => false),
 		loadingAnimation: options?.loadingAnimation,
 		isBashMode: false,
 		isPythonMode: false,
@@ -150,6 +162,7 @@ function createContext(): {
 		ensureLoadingAnimation: ReturnType<typeof vi.fn>;
 		handleBtwCommand: ReturnType<typeof vi.fn>;
 		handleBtwEscape: ReturnType<typeof vi.fn>;
+		handleHotkeysCommand: ReturnType<typeof vi.fn>;
 		hasActiveBtw: ReturnType<typeof vi.fn>;
 		onInputCallback: ReturnType<typeof vi.fn>;
 		prompt: ReturnType<typeof vi.fn>;
@@ -170,10 +183,12 @@ function createContext(): {
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
 	const hasActiveBtw = vi.fn(() => false);
+	const handleHotkeysCommand = vi.fn();
 	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => {
 		ensureLoadingAnimation();
 		return createSubmission(input);
 	});
+	const defaultModel = { provider: "anthropic", id: "default-model", name: "Default Model" };
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -194,7 +209,14 @@ function createContext(): {
 
 	ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
+		statusLine: {
+			getActiveMenu: vi.fn(() => null),
+			closeMenu: vi.fn(),
+			toggleMenu: vi.fn(),
+			navigateMenu: vi.fn(),
+			executeSelectedMenuAction: vi.fn(),
+		} as unknown as InteractiveModeContext["statusLine"],
+		ui: { requestRender, addInputListener: vi.fn(() => vi.fn()) } as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -208,7 +230,11 @@ function createContext(): {
 			isPythonRunning: false,
 			queuedMessageCount: 0,
 			messages: [],
+			cancelRunningAsyncJobs: vi.fn(() => 0),
+			getAsyncJobSnapshot: vi.fn(() => ({ running: [], recent: [] })),
 			extensionRunner: undefined,
+			model: defaultModel,
+			resolveRoleModel: vi.fn(() => defaultModel),
 			abort,
 			abortBash,
 			abortPython,
@@ -217,6 +243,7 @@ function createContext(): {
 		} as unknown as InteractiveModeContext["session"],
 		sessionManager: {
 			getSessionName: () => "existing session",
+			getLastModelChangeRole: () => "default",
 		} as unknown as InteractiveModeContext["sessionManager"],
 		keybindings: {
 			getKeys: () => [],
@@ -236,15 +263,24 @@ function createContext(): {
 		updatePendingMessagesDisplay: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
 		showDebugSelector: vi.fn(),
+		showStatus: vi.fn(),
+		showWarning: vi.fn(),
+		showError: vi.fn(),
 		toggleTodoExpansion: vi.fn(),
-		handleHotkeysCommand: vi.fn(),
+		handleHotkeysCommand,
 		handleSTTToggle: vi.fn(),
 		handleBtwEscape,
 		handleBtwCommand,
 		hasActiveBtw,
+		isSubagentViewActive: vi.fn(() => false),
+		exitSubagentView: vi.fn(),
 		showTreeSelector: vi.fn(),
 		showUserMessageSelector: vi.fn(),
 		showSessionSelector: vi.fn(),
+		agent: {
+			abort,
+			state: { messages: [] },
+		},
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -260,6 +296,7 @@ function createContext(): {
 			ensureLoadingAnimation,
 			handleBtwCommand,
 			handleBtwEscape,
+			handleHotkeysCommand,
 			hasActiveBtw,
 			onInputCallback,
 			prompt,
@@ -315,16 +352,16 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("runs /btw as a builtin side request instead of steering the active stream", async () => {
+	it("runs /hotkeys as a builtin side request instead of steering the active stream", async () => {
 		const { ctx, editor, spies } = createContext();
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;
 		const controller = new InputController(ctx);
 
 		controller.setupEditorSubmitHandler();
-		editor.setText("/btw why is it doing that?");
-		await editor.onSubmit?.("/btw why is it doing that?");
+		editor.setText("/hotkeys");
+		await editor.onSubmit?.("/hotkeys");
 
-		expect(spies.handleBtwCommand).toHaveBeenCalledWith("why is it doing that?");
+		expect(spies.handleHotkeysCommand).toHaveBeenCalledTimes(1);
 		expect(spies.prompt).not.toHaveBeenCalled();
 		expect(editor.addToHistory).not.toHaveBeenCalled();
 		expect(editor.getText()).toBe("");

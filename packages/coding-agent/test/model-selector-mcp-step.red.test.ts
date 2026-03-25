@@ -47,6 +47,12 @@ async function createSelectorFixture(options?: { agentDir?: string; projectDir?:
 
 	const modelRegistry = {
 		getAll: () => [defaultModel, planModel],
+		getDiscoverableProviders: () => [],
+		getProviderDiscoveryState: () => undefined,
+		getError: () => undefined,
+		getAvailable: () => [defaultModel, planModel],
+		refresh: async () => {},
+		refreshProvider: async () => {},
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn() } as unknown as TUI;
 	const onSelect = vi.fn();
@@ -76,7 +82,7 @@ function openMcpMenu(selector: ModelSelectorComponent): void {
 	selector.handleInput("\n");
 }
 
-describe("Phase 3 RED: /model MCP step", () => {
+describe("model selector MCP step", () => {
 	beforeAll(() => {
 		initTheme();
 	});
@@ -103,6 +109,25 @@ describe("Phase 3 RED: /model MCP step", () => {
 		const afterThinkingRendered = normalizeRenderedText(selector.render(220).join("\n"));
 
 		expect(afterThinkingRendered).toContain("MCP");
+		expect(setModelRoleSpy).not.toHaveBeenCalled();
+		expect(onSelect).toHaveBeenCalledTimes(0);
+	});
+
+	test("returns to the model browser when canceling the thinking menu", async () => {
+		const { selector, onSelect, setModelRoleSpy } = await createSelectorFixture();
+
+		selector.handleInput("\n");
+		selector.handleInput("\x1b[B");
+		selector.handleInput("\n");
+		expect(normalizeRenderedText(selector.render(220).join("\n"))).toContain(
+			"Thinking for: Default (claude-sonnet-4-6)",
+		);
+
+		selector.handleInput("\x1b");
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+
+		expect(rendered).not.toContain("Thinking for:");
+		expect(rendered).not.toContain("MCP");
 		expect(setModelRoleSpy).not.toHaveBeenCalled();
 		expect(onSelect).toHaveBeenCalledTimes(0);
 	});

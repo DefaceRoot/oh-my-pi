@@ -130,19 +130,22 @@ function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: stri
 	const setCustomKeyHandlerSpy = vi.fn((key: string, handler: () => unknown) => {
 		customHandlers.set(key, handler);
 	});
+	const setActionKeysSpy = vi.fn();
 	const getKeysSpy = vi.fn((action: string) => {
-		if (action === "lazygit") return lazygitKeys;
-		if (action === "externalEditor") return externalEditorKeys;
-		if (action === "toggleSTT") return sttKeys;
+		if (action === "app.lazygit") return lazygitKeys;
+		if (action === "app.editor.external") return externalEditorKeys;
+		if (action === "app.stt.toggle") return sttKeys;
 		return [];
 	});
 	const editor = {
+		setActionKeys: setActionKeysSpy,
+		clearCustomKeyHandlers: vi.fn(),
 		setCustomKeyHandler: setCustomKeyHandlerSpy,
 		setText: vi.fn(),
 		getText: vi.fn(() => ""),
 		addToHistory: vi.fn(),
 		insertText: vi.fn(),
-	} as unknown as InteractiveModeContext["editor"];
+	} as unknown as InteractiveModeContext["editor"] & { onExternalEditor?: () => void };
 	const ctx = {
 		editor,
 		keybindings: { getKeys: getKeysSpy },
@@ -178,7 +181,9 @@ function createKeyHandlerFixture(lazygitKeys: string[], externalEditorKeys: stri
 	return {
 		controller,
 		customHandlers,
+		editor,
 		getKeysSpy,
+		setActionKeysSpy,
 		setCustomKeyHandlerSpy,
 		openLazygitSpy,
 		openExternalEditorSpy,
@@ -446,27 +451,26 @@ describe("detectLazygitInstallCommand", () => {
 });
 
 describe("InputController shortcut and submit wiring", () => {
-	it("registers custom handlers for each configured lazygit, external editor, and speech-to-text key", () => {
+	it("registers lazygit custom handlers, external-editor action keys, and speech-to-text shortcuts", () => {
 		const lazygitKeys = ["alt+g", "alt+shift+g"];
 		const externalEditorKeys = ["alt+e", "alt+shift+e"];
 		const sttKeys = ["alt+h"];
 		const fixture = createKeyHandlerFixture(lazygitKeys, externalEditorKeys, sttKeys);
 		fixture.controller.setupKeyHandlers();
 
-		expect(fixture.getKeysSpy).toHaveBeenCalledWith("lazygit");
-		expect(fixture.getKeysSpy).toHaveBeenCalledWith("externalEditor");
-		expect(fixture.getKeysSpy).toHaveBeenCalledWith("toggleSTT");
+		expect(fixture.getKeysSpy).toHaveBeenCalledWith("app.lazygit");
+		expect(fixture.getKeysSpy).toHaveBeenCalledWith("app.editor.external");
+		expect(fixture.getKeysSpy).toHaveBeenCalledWith("app.stt.toggle");
+		expect(fixture.setActionKeysSpy).toHaveBeenCalledWith("app.editor.external", externalEditorKeys);
 
 		for (const key of lazygitKeys) {
 			const handler = fixture.customHandlers.get(key);
 			expect(handler).toBeTypeOf("function");
 			(handler as () => unknown)();
 		}
-		for (const key of externalEditorKeys) {
-			const handler = fixture.customHandlers.get(key);
-			expect(handler).toBeTypeOf("function");
-			(handler as () => unknown)();
-		}
+		const externalEditorHandler = fixture.editor.onExternalEditor;
+		expect(externalEditorHandler).toBeTypeOf("function");
+		externalEditorHandler?.();
 		for (const key of sttKeys) {
 			const handler = fixture.customHandlers.get(key);
 			expect(handler).toBeTypeOf("function");
@@ -474,7 +478,7 @@ describe("InputController shortcut and submit wiring", () => {
 		}
 
 		expect(fixture.openLazygitSpy).toHaveBeenCalledTimes(lazygitKeys.length);
-		expect(fixture.openExternalEditorSpy).toHaveBeenCalledTimes(externalEditorKeys.length);
+		expect(fixture.openExternalEditorSpy).toHaveBeenCalledTimes(1);
 		expect(fixture.toggleSTTSpy).toHaveBeenCalledTimes(sttKeys.length);
 	});
 

@@ -1310,11 +1310,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								const commitMsg =
 									commitStyle === "ai" && this.session.modelRegistry
 										? async (diff: string) => {
-												const commitModel = this.session.settings.getModelRole("commit");
 												return generateCommitMessage(
 													diff,
 													this.session.modelRegistry!,
-													commitModel,
+													this.session.settings,
 													this.session.getSessionId?.() ?? undefined,
 												);
 											}

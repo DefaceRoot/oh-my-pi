@@ -113,6 +113,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { collectDelegationContext } from "../task/delegation-context";
+import type { EventBus } from "../utils/event-bus";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
@@ -202,6 +203,8 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** Event bus shared with tools and interactive mode */
+	eventBus?: EventBus;
 	/** Async background jobs launched by tools */
 	asyncJobManager?: AsyncJobManager;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
@@ -365,6 +368,7 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	readonly eventBus: EventBus | undefined;
 
 	#asyncJobManager: AsyncJobManager | undefined = undefined;
 	#scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
@@ -482,6 +486,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.eventBus = config.eventBus;
 		this.#asyncJobManager = config.asyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
@@ -3884,9 +3889,8 @@ export class AgentSession {
 			this.#syncTodoPhasesFromBranch();
 
 			if (!this.sessionManager.getSessionName() && !Bun.env.PI_NO_TITLE) {
-				const curatorModel = this.settings.getModelRole("curator");
 				const titleSessionId = this.sessionId;
-				generateSessionTitle(handoffText, this.modelRegistry, curatorModel, titleSessionId)
+				generateSessionTitle(handoffText, this.modelRegistry, this.settings, titleSessionId)
 					.then(async title => {
 						if (!title) return;
 						if (this.sessionId !== titleSessionId) return;

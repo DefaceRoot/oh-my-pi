@@ -1,4 +1,5 @@
 import { visibleWidth } from "@oh-my-pi/pi-tui";
+import type { AppKeybinding } from "../config/keybindings";
 
 export const LAZYGIT_STATUS_KEY = "000-lazygit";
 export const WORKTREE_MENU_STATUS_KEY = "050-worktree-menu";
@@ -31,7 +32,7 @@ export type WorkflowMenuEntry = WorkflowMenuAction | WorkflowMenuActionGroup;
 
 export interface WorkflowMenu {
 	id: string;
-	hotkeyAction: string;
+	hotkeyAction: AppKeybinding;
 	label: string;
 	actions: WorkflowMenuEntry[];
 }
@@ -71,7 +72,7 @@ export const ACTION_BUTTONS: ActionButtonUi[] = [LAZYGIT_BUTTON, WORKTREE_MENU_B
 export const WORKFLOW_MENUS: WorkflowMenu[] = [
 	{
 		id: "worktree",
-		hotkeyAction: "toggleWorktreeMenu",
+		hotkeyAction: "app.worktree.toggle",
 		label: "Worktree",
 		actions: [
 			{
