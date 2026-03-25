@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	FORK_REINSTALL_COMMAND,
 	_buildForkReinstallGuidanceForTest,
 	_resolveUpdateMethodForTest,
 	_runUpdateCommandForTest,
@@ -34,7 +35,7 @@ describe("update-cli install target detection", () => {
 		const guidance = _buildForkReinstallGuidanceForTest();
 
 		expect(guidance).toContain(
-			"Refresh dependencies with: bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi install",
+			`Refresh dependencies with: ${FORK_REINSTALL_COMMAND}`,
 		);
 		expect(guidance).toContain("Then verify PATH precedence with: command -v omp && bun pm bin -g");
 	});
@@ -102,7 +103,7 @@ describe("update-cli install target detection", () => {
 		expect(events).not.toContain("binary");
 		expect(
 			events.some(event =>
-				event.includes("Refresh dependencies with: bun --cwd=/home/colin/devpod-repos/DefaceRoot/oh-my-pi install"),
+				event.includes(`Refresh dependencies with: ${FORK_REINSTALL_COMMAND}`),
 			),
 		).toBeTrue();
 	});

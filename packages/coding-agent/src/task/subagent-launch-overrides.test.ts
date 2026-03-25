@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
 import { Settings } from "../config/settings";
 import { parseAgentFields } from "../discovery/helpers";
@@ -6,7 +7,7 @@ import { loadBundledAgents } from "./agents";
 import { resolveSubagentLaunchOverrides } from "./launch-overrides";
 
 function loadProjectAgent(fileName: string) {
-	const source = Bun.file(`/home/colin/devpod-repos/DefaceRoot/oh-my-pi/agent/agents/${fileName}`);
+	const source = Bun.file(path.resolve(import.meta.dirname, "../../../../agent/agents", fileName));
 	return source.text().then(text => {
 		const parsed = parseAgentFields(parseFrontmatter(text).frontmatter);
 		if (!parsed) throw new Error(`Expected ${fileName} agent to parse`);

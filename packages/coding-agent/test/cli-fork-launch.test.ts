@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import process from "node:process";
 import { OMP_FORK_BUILD_ID } from "../src/build-info";
-import { FORK_REPO_ROOT } from "../src/cli/update-cli";
+import { FORK_DIRECT_ENTRY, FORK_REPO_ROOT } from "../src/cli/update-cli";
 
 // Import the actual module to test its current behavior
 // We need to test resolveOmpCommand() directly
@@ -131,8 +131,8 @@ describe("Launcher handoff contract [SPECIFICATION]", () => {
 		// Document the expected fork entry point for handoff
 		const expectedForkEntry = path.join(FORK_REPO_ROOT, "packages/coding-agent/src/cli.ts");
 
-		expect(expectedForkEntry).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi/packages/coding-agent/src/cli.ts");
-		expect(FORK_REPO_ROOT).toBe("/home/colin/devpod-repos/DefaceRoot/oh-my-pi");
+		expect(expectedForkEntry).toBe(FORK_DIRECT_ENTRY);
+		expect(path.isAbsolute(FORK_REPO_ROOT)).toBe(true);
 	});
 
 	it("specifies build ID for fork detection", () => {

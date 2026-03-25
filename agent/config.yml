@@ -107,3 +107,5 @@ checkpoint:
   enabled: true
 edit: 
   mode: hashline
+todo: 
+  eager: true
