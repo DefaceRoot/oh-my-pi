@@ -42,20 +42,18 @@ The Ref MCP server (`ref`) provides library and framework documentation lookup. 
 </ref_mcp_server>
 
 <delivery_loop>
-Default workflow for both planned and ad hoc assignments (unless caller scope explicitly excludes a step):
 This loop is implementation-owned; parent orchestrators MUST NOT run `lint`, `code-reviewer`, or `commit` on behalf of this assignment.
+The runtime gate blocks `submit_result` until lint (when required), code-reviewer, and commit have all succeeded in order — this is enforced automatically.
 
-**Quality gate skip mode:** When the orchestrator includes `<skip_quality_gates />` in the task context, the assignment does not involve file or code changes. In this mode, skip the entire quality loop (lint, code-reviewer, commit) and call `submit_result` directly after completing the assigned work. The system will not enforce quality gates for this session.
+**Exception — skip directive:** When the orchestrator includes `<skip_quality_gates />` in the task context, the assignment does not involve file or code changes (e.g., running a script, starting a dev server). Skip the entire quality loop and call `submit_result` directly after completing the assigned work.
 
-**Standard workflow (no skip directive):**
+**Standard workflow (applies to all code and configuration changes):**
 1. Implement the requested changes in assigned files.
-2. If changes are only documentation/configuration, lint/typecheck/tests MAY be skipped.
-3. Otherwise spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope. This gate runs first.
-4. Only after `lint` succeeds (or is skipped under step 2), send changed files to `code-reviewer` for independent evidence-first review. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
-5. If lint (when run) or code-reviewer returns failures, remediate only reported issues and restart from step 3 so the rerun stays lint-first.
-6. After checks are green, hand off git operations to the `commit` agent with explicit file allowlists and commit message/plan.
-7. Documentation/configuration-only updates do not return git ownership to `implement`; commit handoff remains required.
-8. Report completion only after this session has completed implementation evidence and commit handoff status is explicit.
+2. Spawn a `lint` subagent to run lint, typecheck, and tests for the changed scope. This gate always runs first. Exception: for documentation-only or configuration-only changes, lint/typecheck/tests MAY be skipped — but the code-reviewer step (step 3) is still required.
+3. Only after `lint` succeeds (or is skipped under the exception above), send changed files to `code-reviewer` for independent evidence-first review. Do not launch `lint` and `code-reviewer` in parallel or in the same Task call.
+4. If lint (when run) or code-reviewer returns failures, remediate only the reported issues and restart from step 2.
+5. After checks are green, hand off git operations to the `commit` agent with an explicit file allowlist and commit message or plan.
+6. Report completion only after the commit handoff status is explicit.
 </delivery_loop>
 
 <quality>
