@@ -36,8 +36,7 @@ import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { collectDelegationContext } from "./delegation-context";
 import { discoverAgents, getAgent } from "./discovery";
-import { resumeCancelledSubagent, runSubprocess } from "./executor";
-import { resumeSubagentRuntime } from "./subagent-runtime-registry";
+import { resumeSubagent, runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
@@ -1113,11 +1112,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				if (!payload || typeof payload !== "object") return;
 				const request = payload as SubagentResumeRequest;
 				const lookup = { id: request.id, sessionId: request.sessionId, sessionPath: request.sessionPath };
-				let handled = await resumeSubagentRuntime(lookup);
-				if (!handled && request.id) {
-					handled = (await resumeCancelledSubagent(request.id)) !== null;
+				let handled = false;
+				try {
+					handled = await resumeSubagent(lookup, request.continueMessage);
+				} finally {
+					request.respond?.(handled);
 				}
-				request.respond?.(handled);
 			});
 
 			// Register handler for subagent sudo PTY escalation requests.

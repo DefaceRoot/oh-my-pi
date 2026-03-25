@@ -85,7 +85,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 			tokens: 1,
 		} as SingleResult;
 	},
-	resumeCancelledSubagent: async () => null,
+	resumeSubagent: async () => false,
 }));
 
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({

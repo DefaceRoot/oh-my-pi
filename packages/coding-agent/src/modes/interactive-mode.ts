@@ -48,9 +48,10 @@ import {
 	SessionManager,
 } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
-import { resumeSubagentRuntime, stopSubagentRuntime } from "../task/subagent-runtime-registry";
+import { resumeSubagent } from "../task/executor";
+import { stopSubagentRuntime } from "../task/subagent-runtime-registry";
 import { buildUserStoppedAbortReason } from "../task/subagent-stop";
-import { TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
+import { TASK_SUBAGENT_STOP_REQUEST_CHANNEL } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
 import { getModifiedFiles } from "../utils/git-diff-summary";
@@ -2092,26 +2093,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const continueMessage = await this.showHookInput("Continue message (optional)", "Optional message");
 		if (continueMessage === undefined) return;
 
-		let handled = false;
-		this.session.eventBus?.emit(TASK_SUBAGENT_RESUME_REQUEST_CHANNEL, {
-			id: ref.id,
-			sessionId: ref.sessionId,
-			sessionPath: ref.sessionPath,
-			respond: (wasHandled: boolean) => {
-				handled = handled || wasHandled;
-			},
-		});
-		if (!handled) {
-			handled = await resumeSubagentRuntime({
-				id: ref.id,
-				sessionId: ref.sessionId,
-				sessionPath: ref.sessionPath,
-			});
-		}
+		const handled = await resumeSubagent(
+			{ id: ref.id, sessionId: ref.sessionId, sessionPath: ref.sessionPath },
+			continueMessage,
+		);
 		if (!handled) {
 			this.showWarning(`Unable to resume subagent '${ref.id}'.`);
 			return;
 		}
+
 
 		this.showStatus(`Resuming subagent ${ref.id}...`);
 		if (this.subagentViewActiveId === ref.id) {
@@ -2905,7 +2895,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				outcome: selected.outcome,
 				canStop: selected.status === "running" || selected.status === "pending",
 				canResume:
-					(selected.status === "cancelled" || selected.status === "user_stopped") && !!selected.sessionPath,
+					selected.status !== "running" && selected.status !== "pending" && !!selected.sessionPath,
 				...(transcript.editStats ?? {}),
 			},
 		});

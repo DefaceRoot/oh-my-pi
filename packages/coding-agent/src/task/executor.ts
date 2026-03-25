@@ -28,7 +28,12 @@ import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getTotalUsageTokens } from "../utils/usage-tokens";
 import { deriveSubagentOutcomeFromReviewData, type SubagentOutcome } from "./subagent-outcome";
-import { registerSubagentRuntime, unregisterSubagentRuntime } from "./subagent-runtime-registry";
+import {
+	registerSubagentRuntime,
+	resumeSubagentRuntime,
+	type SubagentRuntimeLookup,
+	unregisterSubagentRuntime,
+} from "./subagent-runtime-registry";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { validateSuccessToolRequirements } from "./success-evidence";
@@ -106,6 +111,7 @@ export interface ExecutorOptions {
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	sessionFile?: string | null;
+	resumePrompt?: string;
 	persistArtifacts?: boolean;
 	artifactsDir?: string;
 	/** Path to parent conversation context file */
@@ -122,27 +128,112 @@ export interface ExecutorOptions {
 	settings?: Settings;
 }
 
-/** Metadata stored for a subagent that was aborted before completion. */
-export interface CancelledSubagentMetadata {
+const DEFAULT_SUBAGENT_RESUME_PROMPT = "Continue where you left off.";
+const SUBAGENT_RESUME_ABORT_REASON = "Resume requested";
+
+/** Metadata stored for a subagent session that can be resumed later. */
+export interface ResumableSubagentMetadata {
 	/** Subagent runtime id. */
 	id: string;
 	/** Path to the persisted session file. */
 	sessionFile: string;
-	/** OMP session id at time of cancellation. */
+	/** OMP session id at time of storage. */
 	sessionId: string | undefined;
-	/** Original executor options, minus the (now-aborted) abort signal. */
-	options: Omit<ExecutorOptions, "signal">;
-	/** Timestamp (ms) when the subagent was cancelled. */
-	cancelledAt: number;
+	/** Original executor options, minus transient runtime-only fields. */
+	options: Omit<ExecutorOptions, "signal" | "resumePrompt">;
+	/** Timestamp (ms) when this resumable session was recorded. */
+	storedAt: number;
 	/** Human-readable abort reason, if available. */
 	abortReason: string | undefined;
 }
 
-/**
- * Active record of aborted subagents eligible for resume.
- * Keyed by subagent id. Cleared only by explicit consumer action.
- */
-export const cancelledSubagents = new Map<string, CancelledSubagentMetadata>();
+const resumableSubagentsById = new Map<string, ResumableSubagentMetadata>();
+const resumableSubagentIdsBySessionId = new Map<string, string>();
+const resumableSubagentIdsBySessionPath = new Map<string, string>();
+
+function resolveResumableSubagentId(lookup: SubagentRuntimeLookup): string | undefined {
+	if (lookup.id && resumableSubagentsById.has(lookup.id)) {
+		return lookup.id;
+	}
+	if (lookup.sessionId) {
+		const id = resumableSubagentIdsBySessionId.get(lookup.sessionId);
+		if (id) return id;
+	}
+	if (lookup.sessionPath) {
+		const id = resumableSubagentIdsBySessionPath.get(lookup.sessionPath);
+		if (id) return id;
+	}
+	return undefined;
+}
+
+function rememberResumableSubagent(metadata: ResumableSubagentMetadata): void {
+	deleteResumableSubagent(metadata.id);
+	resumableSubagentsById.set(metadata.id, metadata);
+	if (metadata.sessionId) {
+		resumableSubagentIdsBySessionId.set(metadata.sessionId, metadata.id);
+	}
+	resumableSubagentIdsBySessionPath.set(metadata.sessionFile, metadata.id);
+}
+
+function deleteResumableSubagent(id: string): void {
+	const existing = resumableSubagentsById.get(id);
+	if (!existing) return;
+	resumableSubagentsById.delete(id);
+	if (existing.sessionId) {
+		resumableSubagentIdsBySessionId.delete(existing.sessionId);
+	}
+	resumableSubagentIdsBySessionPath.delete(existing.sessionFile);
+}
+
+export function getResumableSubagentMetadata(
+	lookup: SubagentRuntimeLookup,
+): ResumableSubagentMetadata | undefined {
+	const resumableId = resolveResumableSubagentId(lookup);
+	return resumableId ? resumableSubagentsById.get(resumableId) : undefined;
+}
+
+export function clearResumableSubagentRegistry(): void {
+	resumableSubagentsById.clear();
+	resumableSubagentIdsBySessionId.clear();
+	resumableSubagentIdsBySessionPath.clear();
+}
+
+function buildSubagentResumePrompt(continueMessage?: string): string {
+	const trimmed = continueMessage?.trim();
+	return trimmed || DEFAULT_SUBAGENT_RESUME_PROMPT;
+}
+
+async function launchResumedSubagent(
+	metadata: ResumableSubagentMetadata,
+	continueMessage?: string,
+): Promise<boolean> {
+	deleteResumableSubagent(metadata.id);
+	const resumeOptions: ExecutorOptions = {
+		...metadata.options,
+		sessionFile: metadata.sessionFile,
+		resumePrompt: buildSubagentResumePrompt(continueMessage),
+	};
+	void runSubprocess(resumeOptions).catch(err => {
+		rememberResumableSubagent(metadata);
+		logger.error("Failed to restart resumable subagent", {
+			id: metadata.id,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	});
+	return true;
+}
+
+export async function resumeSubagent(
+	lookup: SubagentRuntimeLookup,
+	continueMessage?: string,
+): Promise<boolean> {
+	if (await resumeSubagentRuntime(lookup, continueMessage)) {
+		return true;
+	}
+	const metadata = getResumableSubagentMetadata(lookup);
+	if (!metadata) return false;
+	return await launchResumedSubagent(metadata, continueMessage);
+}
 
 function parseStringifiedJson(value: unknown): unknown {
 	if (typeof value !== "string") return value;
@@ -491,6 +582,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
+	const initialPrompt = options.resumePrompt?.trim() || task;
+	deleteResumableSubagent(id);
 	const spawnsEnv = atMaxDepth
 		? ""
 		: agent.spawns === undefined
@@ -928,6 +1021,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		scheduleProgress(flushProgress);
 	};
 
+	let resumeRequested = false;
+	let resolveStoredMetadata: (metadata: ResumableSubagentMetadata | null) => void = () => {};
+	const storedMetadataReady = new Promise<ResumableSubagentMetadata | null>(resolve => {
+		resolveStoredMetadata = resolve;
+	});
+
+
 	const runSubagent = async (): Promise<{
 		exitCode: number;
 		error?: string;
@@ -1045,14 +1145,24 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					requestAbort("signal", reason);
 					return true;
 				},
-				resume: async () => false,
+				resume: async continueMessage => {
+					if (resumeRequested) return false;
+					resumeRequested = true;
+					requestAbort("signal", SUBAGENT_RESUME_ABORT_REASON);
+					const storedMetadata = await storedMetadataReady;
+					if (!storedMetadata) {
+						resumeRequested = false;
+						return false;
+					}
+					return await launchResumedSubagent(storedMetadata, continueMessage);
+				},
 			});
 
 			const sessionInitExtra = { agentName: agent.name };
 			session.sessionManager.appendSessionInit({
 				...sessionInitExtra,
 				systemPrompt: session.agent.state.systemPrompt,
-				task,
+				task: initialPrompt,
 				tools: activeToolNames,
 				contextFile: options.contextFile,
 				sessionId: session.sessionId,
@@ -1148,7 +1258,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			});
 
-			await session.prompt(task, { expandPromptTemplates: false, images, attribution: "agent" });
+			await session.prompt(initialPrompt, { expandPromptTemplates: false, images, attribution: "agent" });
 			await session.waitForIdle();
 
 			let abortedContinueCount = 0;
@@ -1278,17 +1388,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 			unregisterSubagentRuntime(id);
-			if (aborted && sessionFile) {
-				const { signal: _sig, ...storedOptions } = options;
-				cancelledSubagents.set(id, {
+			let storedMetadata: ResumableSubagentMetadata | null = null;
+			if (sessionFile) {
+				const { signal: _sig, resumePrompt: _resumePrompt, ...storedOptions } = options;
+				storedMetadata = {
 					id,
 					sessionFile,
 					sessionId: progress.sessionId,
 					options: storedOptions,
-					cancelledAt: Date.now(),
-					abortReason: abortReasonText,
-				});
+					storedAt: Date.now(),
+					abortReason: aborted ? abortReasonText : undefined,
+				};
+				rememberResumableSubagent(storedMetadata);
 			}
+			resolveStoredMetadata(storedMetadata);
 		}
 
 		return {
@@ -1438,52 +1551,3 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	};
 }
 
-/**
- * Resume a previously cancelled subagent by opening its persisted session file
- * and creating a new AgentSession restored to the point of cancellation.
- *
- * The returned session has its conversation history intact; callers should send
- * a continuation prompt (e.g. "Continue where you left off.") to restart work.
- *
- * Returns null when no cancelled subagent with the given id is on record.
- */
-export async function resumeCancelledSubagent(id: string): Promise<AgentSession | null> {
-	const metadata = cancelledSubagents.get(id);
-	if (!metadata) return null;
-
-	const { options: opts } = metadata;
-	const authStorage = opts.authStorage ?? (await discoverAuthStorage());
-	const modelRegistry = opts.modelRegistry ?? new ModelRegistry(authStorage);
-	await modelRegistry.refresh();
-
-	const sessionManager = await SessionManager.open(metadata.sessionFile);
-
-	const { session } = await createAgentSession({
-		cwd: opts.worktree ?? opts.cwd,
-		authStorage,
-		modelRegistry,
-		settings: opts.settings,
-		sessionManager,
-		role: opts.runtimeRole ?? opts.agent.name,
-		thinkingLevel: opts.thinkingLevel,
-		skills: opts.skills,
-		contextFiles: opts.contextFiles,
-		promptTemplates: opts.promptTemplates,
-		systemPrompt: defaultPrompt =>
-			renderPromptTemplate(subagentSystemPromptTemplate, {
-				base: defaultPrompt,
-				agent: opts.agent.systemPrompt,
-				worktree: opts.worktree ?? "",
-				outputSchema: "",
-				contextFile: opts.contextFile,
-			}),
-		outputSchema: opts.outputSchema,
-		requireSubmitResultTool: true,
-		hasUI: false,
-		eventBus: opts.eventBus,
-		mcpAllowlist: opts.mcpAllowlist,
-		mcpManager: opts.mcpManager,
-	});
-
-	return session;
-}

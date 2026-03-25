@@ -6,8 +6,12 @@ import type { CreateAgentSessionResult } from "../../src/sdk";
 import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
-import { runSubprocess, SUBAGENT_WARNING_MISSING_SUBMIT_RESULT } from "../../src/task/executor";
+import { clearResumableSubagentRegistry, getResumableSubagentMetadata, runSubprocess } from "../../src/task/executor";
 import type { AgentDefinition } from "../../src/task/types";
+
+const missingSubmitResultWarning =
+	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
+
 
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
@@ -98,6 +102,7 @@ function mockCreateAgentSession(session: AgentSession) {
 
 describe("runSubprocess submit_result reminders", () => {
 	afterEach(() => {
+		clearResumableSubagentRegistry();
 		vi.restoreAllMocks();
 	});
 
@@ -122,7 +127,7 @@ describe("runSubprocess submit_result reminders", () => {
 
 	it("passes images through to the first task prompt", async () => {
 		const images: ImageContent[] = [{ type: "image", data: "Zm9v", mimeType: "image/png" }];
-		const promptOptions: Array<{ expandPromptTemplates?: boolean; images?: ImageContent[] }> = [];
+		const promptOptions: Array<Pick<PromptOptions, "expandPromptTemplates" | "images" | "attribution">> = [];
 		const session = createMockSession(({ text, options, promptIndex, emit, state }) => {
 			promptOptions.push(options ?? {});
 			if (promptIndex !== 1) return;
@@ -141,14 +146,10 @@ describe("runSubprocess submit_result reminders", () => {
 				isError: false,
 			});
 		});
-		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-			session,
-			extensionsResult: {} as unknown as LoadExtensionsResult,
-			setToolUIContext: () => {},
-		});
+		mockCreateAgentSession(session);
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-images", images });
 		expect(result.exitCode).toBe(0);
-		expect(promptOptions).toEqual([{ expandPromptTemplates: false, images }]);
+		expect(promptOptions).toEqual([{ expandPromptTemplates: false, images, attribution: "agent" }]);
 	});
 
 	it("sends reminder prompt when subagent stops without submit_result", async () => {
@@ -225,11 +226,7 @@ describe("runSubprocess submit_result reminders", () => {
 			});
 		});
 
-		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-			session,
-			extensionsResult: {} as unknown as LoadExtensionsResult,
-			setToolUIContext: () => {},
-		});
+		mockCreateAgentSession(session);
 
 		const result = await runSubprocess({
 			...baseOptions,
@@ -335,11 +332,7 @@ describe("runSubprocess submit_result reminders", () => {
 			}
 		});
 
-		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-			session,
-			extensionsResult: {} as unknown as LoadExtensionsResult,
-			setToolUIContext: () => {},
-		});
+		mockCreateAgentSession(session);
 
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-submit-loop" });
 		expect(prompts).toHaveLength(2);
@@ -397,11 +390,7 @@ describe("runSubprocess submit_result reminders", () => {
 			});
 		});
 
-		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-			session,
-			extensionsResult: {} as unknown as LoadExtensionsResult,
-			setToolUIContext: () => {},
-		});
+		mockCreateAgentSession(session);
 
 		const parentSettings = Settings.isolated({
 			"compaction.strategy": "handoff",
@@ -480,11 +469,7 @@ describe("runSubprocess submit_result reminders", () => {
 			emit({ type: "message_end", message: assistant });
 		});
 
-		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
-			session,
-			extensionsResult: {} as unknown as LoadExtensionsResult,
-			setToolUIContext: () => {},
-		});
+		mockCreateAgentSession(session);
 
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-assistant-error" });
 
@@ -515,8 +500,8 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts).toHaveLength(4);
 		expect(result.exitCode).toBe(1);
 		expect(result.aborted).toBe(true);
-		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.abortReason).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.stderr).toBe(missingSubmitResultWarning);
+		expect(result.abortReason).toBe(missingSubmitResultWarning);
 	});
 
 	it("continues in place after compaction-aborted assistant turn instead of terminal abort", async () => {
@@ -552,13 +537,7 @@ describe("runSubprocess submit_result reminders", () => {
 			});
 			session.waitForIdle = waitForIdle;
 
-			(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue(
-				{
-					session,
-					extensionsResult: {} as unknown as LoadExtensionsResult,
-					setToolUIContext: () => {},
-				},
-			);
+			mockCreateAgentSession(session);
 
 			const result = await runSubprocess({
 				...baseOptions,
@@ -599,6 +578,95 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toBe("blocked by permissions");
 	});
+
+	it("uses a continuation prompt instead of replaying the original task when resuming", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			if (promptIndex !== 1) return;
+			const assistant = createAssistantStopMessage("done");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-resume-prompt",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { resumed: true } },
+				},
+				isError: false,
+			});
+		});
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-resume-prompt",
+			resumePrompt: "Continue from the stored session",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(prompts[0]).toBe("Continue from the stored session");
+		expect(prompts[0]).not.toBe(baseOptions.task);
+	});
+
+	it("records completed subagents as resumable when a session file exists", async () => {
+		const id = "subagent-resumable-completed";
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex !== 1) return;
+			const assistant = createAssistantStopMessage("done");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-resumable-completed",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id, artifactsDir: "/tmp" });
+
+		expect(result.exitCode).toBe(0);
+		expect(getResumableSubagentMetadata({ id })).toMatchObject({
+			id,
+			sessionFile: `/tmp/${id}.jsonl`,
+			abortReason: undefined,
+		});
+	});
+
+	it("records user-stopped subagents as resumable after they abort", async () => {
+		const controller = new AbortController();
+		const id = "subagent-resumable-user-stop";
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex !== 1) return;
+			controller.abort("User stopped: pause and resume later");
+			const assistant = {
+				...createAssistantStopMessage("waiting for follow-up"),
+				stopReason: "aborted" as const,
+			};
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id, artifactsDir: "/tmp", signal: controller.signal });
+
+		expect(result.aborted).toBe(true);
+		expect(result.abortReason).toBe("User stopped: pause and resume later");
+		expect(getResumableSubagentMetadata({ id })).toMatchObject({
+			id,
+			sessionFile: `/tmp/${id}.jsonl`,
+			abortReason: "User stopped: pause and resume later",
+		});
+	});
+
 
 	it("marks pre-aborted subprocess with a concrete reason", async () => {
 		const abortController = new AbortController();
