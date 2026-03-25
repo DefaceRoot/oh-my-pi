@@ -281,7 +281,7 @@ describe("overlay live-update: navigator", () => {
 		const selectedIds = mode.statusLine.setHookStatus.mock.calls
 			.map((call: [string, string | undefined]) => call[1])
 			.filter((value: string | undefined): value is string => typeof value === "string" && value.includes("task "))
-			.map(value =>
+			.map((value: string) =>
 				value.includes("1-Research") ? "1-Research" : value.includes("0-Explore") ? "0-Explore" : value,
 			);
 

@@ -5,7 +5,7 @@ describe("Action Buttons Model", () => {
 	test("keeps Worktree as a stable top-level workflow menu", () => {
 		const worktreeMenu = WORKFLOW_MENUS.find(menu => menu.id === "worktree");
 		expect(worktreeMenu).toBeDefined();
-		expect(worktreeMenu?.hotkeyAction).toBe("toggleWorktreeMenu");
+		expect(worktreeMenu?.hotkeyAction).toBe("app.worktree.toggle");
 	});
 
 	test("groups create actions under Worktree with explicit group model", () => {

@@ -82,7 +82,7 @@ function captureAnthropicPayload(
 		isOAuth: options?.isOAuth ?? true,
 		signal: createAbortedSignal(),
 		metadata: options?.metadata,
-		reasoning: options?.reasoning,
+		reasoning: options?.reasoning as import("../src/model-thinking").Effort | undefined,
 		thinkingEnabled: options?.thinkingEnabled,
 		onPayload: payload => resolve(payload),
 	});

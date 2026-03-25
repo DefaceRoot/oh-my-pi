@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { _testExports as askModePolicy } from "../../../agent/extensions/ask-mode/index.ts";
+import { _testExports as askModePolicy } from "../../../agent/extensions/ask-mode/index";
 
 type RolesConfigContract = {
 	getMcpForRole(role: string): string[] | Promise<string[]>;

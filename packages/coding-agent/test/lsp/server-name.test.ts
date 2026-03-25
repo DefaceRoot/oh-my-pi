@@ -30,7 +30,7 @@ describe("lsp serverName propagation", () => {
 			const config = loadConfig(tempDir.path());
 			const loaded = config.servers[serverName];
 			expect(loaded).toBeDefined();
-			expect((loaded as Record<string, unknown> | undefined)?.serverName).toBe(serverName);
+			expect((loaded as unknown as Record<string, unknown> | undefined)?.serverName).toBe(serverName);
 		} finally {
 			tempDir.removeSync();
 		}

@@ -50,7 +50,7 @@ describe("resolveSubagentLaunchOverrides", () => {
 		});
 
 		expect(result.modelOverride).toBe("openai-codex/gpt-5.3-codex:high");
-		expect(result.thinkingLevelOverride).toBe("high");
+		expect(result.thinkingLevelOverride as string).toBe("high");
 	});
 
 	it("lets configured default thinking flow through for plan-verifier when role omits a thinking suffix", async () => {
@@ -87,6 +87,6 @@ describe("resolveSubagentLaunchOverrides", () => {
 		});
 
 		expect(result.modelOverride).toBe("zai/glm-5:medium");
-		expect(result.thinkingLevelOverride).toBe("medium");
+		expect(result.thinkingLevelOverride as string).toBe("medium");
 	});
 });

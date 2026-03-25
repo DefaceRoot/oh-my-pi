@@ -204,7 +204,7 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		await executeWithAgent("explore", {
 			hasUI: false,
 			getRuntimeRole: () => "implement",
-			getPlanModeState: () => ({ enabled: true }),
+			getPlanModeState: () => ({ enabled: true, planFilePath: "" }),
 		});
 
 		expect(runSubprocessAgents).toEqual(["explore"]);

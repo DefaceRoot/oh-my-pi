@@ -95,7 +95,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
 		taskDepth: 0,
 		mcpManager: parentMcpManager,
 		...overrides,
-	} as Parameters<typeof TaskTool.create>[0];
+	} as unknown as Parameters<typeof TaskTool.create>[0];
 }
 
 function managerToolNames(value: unknown): string[] {

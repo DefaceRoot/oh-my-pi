@@ -1,4 +1,4 @@
 {
-  "resume": "alt+r",
-  "cycleAgentMode": "alt+a"
+  "app.session.resume": "alt+r",
+  "app.agent.cycleMode": "alt+a"
 }

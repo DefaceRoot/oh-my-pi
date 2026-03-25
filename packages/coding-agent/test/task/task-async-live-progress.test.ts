@@ -119,7 +119,7 @@ function createSession(asyncJobManager: FakeAsyncJobManager) {
 		agentOutputManager: {
 			allocateBatch: async (ids: string[]) => ids.map((id, index) => `${index}-${id}`),
 		},
-	} as Parameters<typeof TaskTool.create>[0];
+	} as unknown as Parameters<typeof TaskTool.create>[0];
 }
 
 describe("TaskTool async live progress", () => {
@@ -151,10 +151,10 @@ describe("TaskTool async live progress", () => {
 		const liveDetail = updates.find(
 			detail =>
 				Array.isArray(detail.progress) &&
-				detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 321),
+				detail.progress.some(progress => (progress as unknown as Record<string, unknown>).tokens === 321),
 		);
 		expect(liveDetail).toBeDefined();
-		expect((liveDetail?.progress?.[0] as Record<string, unknown>) ?? {}).toMatchObject({
+		expect((liveDetail?.progress?.[0] as unknown as Record<string, unknown>) ?? {}).toMatchObject({
 			id: "0-LiveTask",
 			status: "running",
 			tokens: 321,
@@ -166,10 +166,10 @@ describe("TaskTool async live progress", () => {
 		const completedDetail = updates.find(
 			detail =>
 				Array.isArray(detail.progress) &&
-				detail.progress.some(progress => (progress as Record<string, unknown>).tokens === 654),
+				detail.progress.some(progress => (progress as unknown as Record<string, unknown>).tokens === 654),
 		);
 		expect(completedDetail).toBeDefined();
-		expect((completedDetail?.progress?.[0] as Record<string, unknown>) ?? {}).toMatchObject({
+		expect((completedDetail?.progress?.[0] as unknown as Record<string, unknown>) ?? {}).toMatchObject({
 			status: "completed",
 			tokens: 654,
 			provider: "anthropic",

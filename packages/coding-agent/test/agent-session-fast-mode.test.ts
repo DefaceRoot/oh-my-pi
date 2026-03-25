@@ -35,7 +35,7 @@ describe("AgentSession fast mode restrictions", () => {
 		modelId: string;
 		serviceTier?: ServiceTier;
 	}): Promise<void> {
-		const model = getModelOrThrow(options.provider, options.modelId);
+		const model = getModelOrThrow(options.provider as Parameters<typeof getModelOrThrow>[0], options.modelId);
 		const agent = new Agent({
 			initialState: {
 				model,

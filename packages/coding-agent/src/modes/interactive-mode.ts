@@ -3141,7 +3141,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		let mcpServers: string[] | undefined;
 		let mcpAllowlist: string[] | undefined;
 		let contextFilePath: string | undefined;
-		const skillsUsed = this.extractUsedSkillNamesFromEntries(entries as SessionEntry[]);
+		const skillsUsed = this.extractUsedSkillNamesFromEntries(entries as unknown as SessionEntry[]);
 		const tokens = this.getLatestAssistantMessageUsageTokens(entries);
 
 		for (const entry of entries) {

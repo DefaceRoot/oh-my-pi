@@ -12,21 +12,10 @@ const FULL_MODEL: SidebarModel = {
 		{ name: "better-context", connected: true },
 		{ name: "chrome-devtools", connected: false },
 	],
-	languages: [
-		{
-			id: "typescript",
-			name: "TypeScript",
-			status: "active",
-			servers: [{ name: "typescript", status: "ready" }],
-		},
-		{
-			id: "eslint",
-			name: "ESLint",
-			status: "unavailable",
-			servers: [{ name: "eslint", status: "not-installed" }],
-		},
+	lspServers: [
+		{ name: "typescript", active: true },
+		{ name: "eslint", active: false },
 	],
-	expandedLanguages: new Set(["typescript"]),
 	todos: [
 		{ id: "1", content: "Add unit tests", status: "completed" },
 		{ id: "2", content: "Fix the thing", status: "in_progress" },
@@ -34,8 +23,8 @@ const FULL_MODEL: SidebarModel = {
 		{ id: "4", content: "Old task", status: "abandoned" },
 	],
 	subagents: [
-		{ id: "a1", agentName: "implement", status: "completed", description: "Add sidebar" },
-		{ id: "a2", agentName: "lint", status: "running", description: "Run lint" },
+		{ id: "a1", kind: "parent" as const, agentName: "implement", status: "completed" },
+		{ id: "a2", kind: "parent" as const, agentName: "lint", status: "running" },
 	],
 	modifiedFiles: [
 		{ path: "packages/coding-agent/src/modes/interactive-mode.ts", status: "M" },

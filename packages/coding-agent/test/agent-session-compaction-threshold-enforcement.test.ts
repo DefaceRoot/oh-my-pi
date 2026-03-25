@@ -256,6 +256,7 @@ describe("AgentSession compaction threshold enforcement", () => {
 			const toolResult = {
 				role: "toolResult" as const,
 				toolName: "read",
+				toolCallId: "test-call-id",
 				content: [{ type: "text" as const, text: "x".repeat(500_000) }],
 				isError: false,
 				timestamp: Date.now(),
