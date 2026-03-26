@@ -18,6 +18,7 @@ import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry, RolesConfig } from "./config/model-registry";
+import type { SkillConfig } from "./config/roles-config";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
 import {
 	loadPromptTemplates as loadPromptTemplatesInternal,
@@ -51,7 +52,7 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
+import { loadSkills as loadSkillsInternal, loadSkillsWithConfig, type Skill, type SkillWarning } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
 	AgentProtocolHandler,
@@ -212,6 +213,8 @@ export interface CreateAgentSessionOptions {
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
 
+	/** V2 skill configuration — when provided, uses loadSkillsWithConfig instead of category-based loading */
+	skillConfig?: SkillConfig;
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
 }
@@ -842,6 +845,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skillWarnings = discovered.warnings;
 	}
 
+	// Apply V2 skill config filtering if provided — overrides category-based loading
+	if (options.skillConfig) {
+		skills = await loadSkillsWithConfig(skills, options.skillConfig);
+	}
 	// Discover rules
 	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await logger.timeAsync(
 		"discoverTtsrRules",

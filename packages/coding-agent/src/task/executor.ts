@@ -8,6 +8,7 @@ import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import Ajv, { type ValidateFunction } from "ajv";
+import type { SkillConfig } from "../config/roles-config";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverride } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
@@ -126,6 +127,8 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/** V2 skill configuration for this agent from roles.yml */
+	skillConfig?: SkillConfig;
 	/**
 	 * When set, open this session file to restore full conversation history before resuming.
 	 * The entry is removed from cancelledSubagents and the session continues from the prior context.
@@ -1094,6 +1097,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				outputSchema,
 				requireSubmitResultTool: true,
 				contextFiles: options.contextFiles,
+				// Pass caller-supplied skills directly; loadSkillsWithConfig in createAgentSession will
+				// filter this inventory when skillConfig is set. In the normal flow the parent session holds
+				// the full discovered skill set, so the filter has the complete inventory to work from.
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
 				systemPrompt: defaultPrompt =>
@@ -1116,6 +1122,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				mcpAllowlist: options.mcpAllowlist,
 				mcpManager: options.mcpManager,
 				customTools: inheritedMcpTools.length > 0 ? inheritedMcpTools : undefined,
+				skillConfig: options.skillConfig,
 			});
 
 			activeSession = session;
