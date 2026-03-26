@@ -127,6 +127,14 @@ You **MUST** use the following skills, to save you time, when working in their d
 {{description}}
 {{/each}}
 {{/if}}
+{{#if availableSkills.length}}
+# Available Skills
+These skills are available on demand. Read the full skill with `read skill://<name>` when working in its domain.
+{{#each availableSkills}}
+## {{name}}
+{{description}}
+{{/each}}
+{{/if}}
 
 {{#if rules.length}}
 # Rules

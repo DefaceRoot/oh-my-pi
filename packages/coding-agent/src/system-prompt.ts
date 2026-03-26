@@ -591,6 +591,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const hasRead = tools?.has("read");
 	const filteredSkills = hasRead ? skillsForMode : [];
 
+	// Separate by mode if skills carry mode info (backward compat: skills without mode field → auto)
+	const autoSkills = filteredSkills.filter(s => !("mode" in s) || s.mode === "auto");
+	const frontmatterSkills = filteredSkills.filter(s => "mode" in s && s.mode === "frontmatter");
+
 	const environment = await logger.timeAsync("getEnvironmentInfo", getEnvironmentInfo);
 	const data = {
 		// Explicit custom prompts replace discovered SYSTEM.md content rather than layering it twice.
@@ -603,7 +607,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		environment,
 		contextFiles,
 		agentsMdSearch,
-		skills: filteredSkills,
+		skills: autoSkills,
+		availableSkills: frontmatterSkills,
 		rules: rules ?? [],
 		date,
 		dateTime,

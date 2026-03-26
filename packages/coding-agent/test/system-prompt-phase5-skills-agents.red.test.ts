@@ -140,3 +140,105 @@ describe("Phase 5 RED: mode-specific AGENTS segmentation", () => {
 		expect(prompt.includes(PLAN_AGENTS_SENTINEL)).toBe(false);
 	});
 });
+
+describe("Phase 5 RED: dual skill sections (auto vs frontmatter mode)", () => {
+	const MIXED_SKILLS: Skill[] = [
+		{
+			name: "brainstorming",
+			description: "Auto planning skill",
+			filePath: "/tmp/skills/brainstorming/SKILL.md",
+			baseDir: "/tmp/skills/brainstorming",
+			source: "test",
+			mode: "auto" as const,
+			content: "",
+		},
+		{
+			name: "commit-hygiene",
+			description: "Frontmatter workflow skill",
+			filePath: "/tmp/skills/commit-hygiene/SKILL.md",
+			baseDir: "/tmp/skills/commit-hygiene",
+			source: "test",
+			mode: "frontmatter" as const,
+			content: "",
+		},
+	];
+
+	it("auto skills appear in '# Skills' section (before Available Skills)", async () => {
+		const prompt = await renderPromptForRole("default", {
+			cwd: os.tmpdir(),
+			skills: MIXED_SKILLS,
+		});
+
+		// auto skill must appear in the Skills section, before any Available Skills header
+		const skillsIdx = prompt.indexOf("# Skills");
+		const availableIdx = prompt.indexOf("# Available Skills");
+		const skillsSection = availableIdx > 0 ? prompt.slice(skillsIdx, availableIdx) : prompt.slice(skillsIdx);
+		expect(skillsSection.includes("## brainstorming")).toBe(true);
+	});
+
+	it("frontmatter skills appear in '# Available Skills' section", async () => {
+		const prompt = await renderPromptForRole("default", {
+			cwd: os.tmpdir(),
+			skills: MIXED_SKILLS,
+		});
+
+		// frontmatter skill must appear after the Available Skills header
+		const availableIdx = prompt.indexOf("# Available Skills");
+		expect(availableIdx).toBeGreaterThan(0);
+		const afterAvailable = prompt.slice(availableIdx);
+		expect(afterAvailable.includes("## commit-hygiene")).toBe(true);
+		// and NOT in the primary Skills section before it
+		const beforeAvailable = prompt.slice(0, availableIdx);
+		expect(beforeAvailable.includes("## commit-hygiene")).toBe(false);
+	});
+
+	it("auto skill does not appear in '# Available Skills' section", async () => {
+		const prompt = await renderPromptForRole("default", {
+			cwd: os.tmpdir(),
+			skills: MIXED_SKILLS,
+		});
+
+		// brainstorming is auto — only in Skills, not Available Skills
+		// Verify Available Skills section exists but doesn't contain brainstorming
+		const availableIdx = prompt.indexOf("# Available Skills");
+		const afterAvailable = availableIdx >= 0 ? prompt.slice(availableIdx) : "";
+		expect(afterAvailable.includes("## brainstorming")).toBe(false);
+	});
+
+	it("no frontmatter skills means no Available Skills section", async () => {
+		const allAutoSkills: Skill[] = [
+			{
+				name: "brainstorming",
+				description: "Auto skill",
+				filePath: "/tmp/skills/brainstorming/SKILL.md",
+				baseDir: "/tmp/skills/brainstorming",
+				source: "test",
+				mode: "auto" as const,
+				content: "",
+			},
+		];
+		const prompt = await renderPromptForRole("default", {
+			cwd: os.tmpdir(),
+			skills: allAutoSkills,
+		});
+
+		expect(prompt.includes("# Available Skills")).toBe(false);
+	});
+
+	it("frontmatter skills render in custom-prompt path", async () => {
+		const tools = createRoleTools("default");
+		const prompt = await buildSystemPrompt({
+			mode: "default",
+			customPrompt: "Base prompt",
+			cwd: os.tmpdir(),
+			tools,
+			skills: MIXED_SKILLS,
+			rules: [],
+		});
+
+		// Both auto and frontmatter skills must appear in custom prompt output
+		expect(prompt.includes("brainstorming")).toBe(true);
+		expect(prompt.includes("commit-hygiene")).toBe(true);
+	});
+});
+
