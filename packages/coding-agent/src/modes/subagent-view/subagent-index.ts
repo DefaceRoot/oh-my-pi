@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString } from "../../config/model-resolver";
-import { type SubagentOutcome, deriveSubagentOutcomeFromReviewData, normalizeSubagentOutcome } from "../../task/subagent-outcome";
+import {
+	deriveSubagentOutcomeFromReviewData,
+	normalizeSubagentOutcome,
+	type SubagentOutcome,
+} from "../../task/subagent-outcome";
 import { isUserStoppedAbortReason } from "../../task/subagent-stop";
 import type { SingleResult } from "../../task/types";
 import { getTotalUsageTokens } from "../../utils/usage-tokens";
@@ -899,7 +903,7 @@ export class SubagentIndex {
 		return sidecarsInDir.find(sc => sc.taskId === taskItemId);
 	}
 
-/** Compute and cache edit stats and outcome for all completed sessions not yet scanned.
+	/** Compute and cache edit stats and outcome for all completed sessions not yet scanned.
 	 * Returns true if any sessions were updated.
 	 */
 	async computeAllEditStats(): Promise<boolean> {
@@ -927,9 +931,7 @@ export class SubagentIndex {
 		}
 	}
 
-	async #scanSessionFileMetadata(
-		sessionPath: string,
-	): Promise<{
+	async #scanSessionFileMetadata(sessionPath: string): Promise<{
 		editStats: { filesChanged: number; linesAdded: number; linesDeleted: number };
 		outcome?: SubagentOutcome;
 	}> {
@@ -941,12 +943,8 @@ export class SubagentIndex {
 			const content = await Bun.file(sessionPath).text();
 			for (const rawLine of content.split("\n")) {
 				if (!rawLine.includes('"toolResult"')) continue;
-				const isEdit =
-					rawLine.includes('"edit"') && /"toolName"\s*:\s*"edit"/.test(rawLine);
-				const isWrite =
-					!isEdit &&
-					rawLine.includes('"write"') &&
-					/"toolName"\s*:\s*"write"/.test(rawLine);
+				const isEdit = rawLine.includes('"edit"') && /"toolName"\s*:\s*"edit"/.test(rawLine);
+				const isWrite = !isEdit && rawLine.includes('"write"') && /"toolName"\s*:\s*"write"/.test(rawLine);
 				const isSubmitResult =
 					!isEdit &&
 					!isWrite &&
@@ -989,38 +987,75 @@ export class SubagentIndex {
 	}
 
 	/**
-	 * Extract outcome from a submit_result toolResult JSONL line.
-	 * The details object contains { data, status, outcome? } and/or the data
-	 * itself may contain review fields (passed, verdict, overall_correctness).
+	 * Extract a JSON object value for a given key from a raw JSONL line.
+	 * Uses a balanced-brace scanner to handle arbitrary nesting depth.
+	 * Returns the parsed object or undefined on failure.
 	 */
-	#extractOutcomeFromToolResultLine(rawLine: string): SubagentOutcome | undefined {
-		// Try to extract outcome from the details.outcome field
-		const outcomeStatusMatch = /"outcome"\s*:\s*\{[^}]*"status"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(rawLine);
-		if (outcomeStatusMatch) {
-			try {
-				const status = JSON.parse(`"${outcomeStatusMatch[1]}"`) as unknown;
-				const result = normalizeSubagentOutcome({ status });
-				if (result) return result;
-			} catch {
-				// fall through
+	#extractJsonObject(source: string, key: string): Record<string, unknown> | undefined {
+		const prefix = `"${key}":`;
+		const keyIdx = source.indexOf(prefix);
+		if (keyIdx === -1) return undefined;
+		const startIdx = source.indexOf("{", keyIdx + prefix.length);
+		if (startIdx === -1) return undefined;
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		let endIdx = -1;
+		for (let i = startIdx; i < source.length; i++) {
+			const ch = source[i];
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (ch === "\\" && inString) {
+				escaped = true;
+				continue;
+			}
+			if (ch === '"') {
+				inString = !inString;
+				continue;
+			}
+			if (!inString) {
+				if (ch === "{") depth++;
+				else if (ch === "}") {
+					depth--;
+					if (depth === 0) {
+						endIdx = i;
+						break;
+					}
+				}
 			}
 		}
-
-		// Fallback: try to parse the details block to derive outcome from review data
-		// Look for the details JSON object in the line
-		const detailsMatch = /"details"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})/.exec(rawLine);
-		if (detailsMatch?.[1]) {
-			try {
-				const details = JSON.parse(detailsMatch[1]) as Record<string, unknown>;
-				// Try explicit outcome first
-				const explicit = normalizeSubagentOutcome(details.outcome);
-				if (explicit) return explicit;
-				// Try deriving from the data field (passed, verdict, etc.)
-				const derived = deriveSubagentOutcomeFromReviewData(details.data);
-				if (derived) return derived;
-			} catch {
-				// Malformed JSON, fall through
+		if (endIdx === -1) return undefined;
+		try {
+			const parsed = JSON.parse(source.slice(startIdx, endIdx + 1)) as unknown;
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
 			}
+		} catch {
+			// Malformed JSON
+		}
+		return undefined;
+	}
+
+	/**
+	 * Extract outcome from a submit_result toolResult JSONL line.
+	 * The details object contains { data, status, outcome? } and/or the data
+	 * itself may contain review fields (passed, verdict, overall_correctness, success).
+	 *
+	 * Uses a balanced-brace scanner to handle arbitrarily nested data payloads
+	 * (e.g. code-reviewer findings arrays with nested objects).
+	 */
+	#extractOutcomeFromToolResultLine(rawLine: string): SubagentOutcome | undefined {
+		// Parse the details object with a balanced-brace scanner — handles arbitrary nesting.
+		const details = this.#extractJsonObject(rawLine, "details");
+		if (details) {
+			// Prefer explicit outcome set by the agent.
+			const explicit = normalizeSubagentOutcome(details.outcome);
+			if (explicit) return explicit;
+			// Fall back to deriving from the data payload.
+			const derived = deriveSubagentOutcomeFromReviewData(details.data);
+			if (derived) return derived;
 		}
 		return undefined;
 	}

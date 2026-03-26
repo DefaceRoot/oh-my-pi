@@ -85,6 +85,15 @@ export function deriveSubagentOutcomeFromReviewData(value: unknown): SubagentOut
 		};
 	}
 
+	// Commit agent reports success: boolean
+	if (typeof record.success === "boolean") {
+		return {
+			status: record.success ? "pass" : "fail",
+			label: "commit",
+			summary: normalizeOptionalText(record.summary),
+		};
+	}
+
 	const correctness = normalizeOptionalText(record.overall_correctness)?.toLowerCase();
 	if (correctness === "correct") {
 		return {
