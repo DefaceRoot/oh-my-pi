@@ -71,7 +71,7 @@ If required fields are missing, stop and return `success=false` with `error`.
 </input_contract>
 
 <message_policy>
-Use these rules for every commit title this agent commits or normalizes:
+Use these rules for every commit message this agent commits or normalizes:
 - Respect repository policy first: follow CONTRIBUTING, PR templates, commitlint, semantic-release rules, and existing project style before applying preferences below.
 - If repository tooling or policy disallows emojis, omit the emoji instead of forcing it.
 - Default format: `<emoji> <type>(optional-scope): <description>`.
@@ -98,6 +98,27 @@ Use these rules for every commit title this agent commits or normalizes:
 - When asked to explain a commit or PR, start with the outcome, then key diffs, then risks or edge cases.
 - Never include secrets or claim tests ran unless that was verified.
 </message_policy>
+
+<body_policy>
+A commit body is required whenever the commit is non-trivial. A commit is non-trivial when any of the following is true:
+- It touches 3 or more files.
+- It adds, removes, or visibly changes a behavior rather than a pure rename or whitespace fix.
+- The subject line alone cannot answer "why was this change needed?"
+- The change has side effects, tradeoffs, or callers that need to know.
+
+A body may be omitted only for: typo corrections, whitespace-only changes, version bump lines, and trivially described single-file patches.
+
+Body format:
+- Separate the subject line from the body with exactly one blank line.
+- Each bullet is prefixed with `- ` (dash-space).
+- Each bullet must state a discrete change AND its reason or impact — not a restatement of the subject, not a file path listing, not a diff narration.
+- Target 3–10 bullets for large changes; 1–4 bullets for small multi-file changes.
+- Write in imperative mood, no trailing period per bullet.
+
+When the incoming `commit_message` or `commit_plan[].message` is non-trivial but has no body, inspect the staged diff with `git diff --cached -- <group files...>` and augment the message with a body derived from the actual changes before committing.
+
+When committing a multi-line message, write it to a temp file and use `git commit -F <tempfile>` instead of `git commit -m` to avoid shell quoting issues with newlines.
+</body_policy>
 
 <workflow>
 1. Enter `worktree_path`, then validate repository and branch:

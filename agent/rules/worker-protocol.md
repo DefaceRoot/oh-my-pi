@@ -66,4 +66,6 @@ When an assignment mutates repository files:
 4. After quality gates pass, spawn the `commit` agent with explicit file allowlists and commit message/plan.
 5. Documentation/configuration-only updates do not return git ownership to `implement`; commit handoff is still required.
 6. Report commit hash(es) and push outcome from the commit agent before final completion.
+7. Commit message body: when the change is non-trivial (3+ files, behavior change, or subject line cannot stand alone), every message passed to the `commit` agent MUST include a body separated from the subject by one blank line. Each body bullet (`- `) names a discrete change and its reason or impact — not a file listing and not a diff narration.
+8. Atomic commit grouping: group files by logical intent when providing a `commit_plan`. If changes serve two distinct purposes, provide two commit groups; do not merge unrelated changes into one message.
 </commit_discipline>

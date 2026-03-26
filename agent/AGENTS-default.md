@@ -49,6 +49,8 @@ When spawning subagents, default-mode sessions use the `omp-delegation/v1` struc
 - Use the Task tool to spawn the dedicated `commit` agent in the current workspace.
 - Pass an explicit allowlist containing only the files modified in this default-mode session.
 - Provide either one atomic `commit_message` or an ordered atomic `commit_plan`.
+- Commit body requirement: when the change is non-trivial (touches 3+ files, changes behavior, or the subject alone cannot explain why), include a body in every `commit_message` or `commit_plan[].message`. Separate the subject from the body with one blank line. Each body bullet (`- `) must name a discrete change and its reason or impact — not a file listing, not a diff narration, not a restatement of the subject.
+- Atomic commit criterion: one logical intent per commit, not one file. When changed files serve distinct purposes, provide a `commit_plan` that groups them by logical unit rather than one catch-all message.
 - Run any relevant verification for the changed scope before the commit handoff.
 - Start the commit handoff only after the edited scope is stable; do not overlap it with ongoing file edits.
 - If this session made no file edits, do not spawn the `commit` agent.

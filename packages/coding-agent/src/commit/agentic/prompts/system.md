@@ -17,7 +17,7 @@ Commit requirements:
 - Avoid filler words: comprehensive, various, several, improved, enhanced, better.
 - Avoid meta phrases: "this commit", "this change", "updated code", "modified files".
 - Scope: lowercase, max two segments; only letters, digits, hyphens, underscores.
-- Detail lines optional (0-6). Each sentence ending in period, ≤ 120 chars.
+- Detail lines required for non-trivial changes; omit only for single-file trivial edits (typo, whitespace, version bump). Target 3–8 bullets for large diffs, 1–3 for small ones. Each bullet ends in a period, ≤ 120 chars. Explain why changes were made and what impact they have — do not narrate the diff line by line or list file names.
 
 Conventional commit types:
 {{types_description}}
