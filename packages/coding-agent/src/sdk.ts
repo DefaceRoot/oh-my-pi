@@ -86,6 +86,7 @@ import {
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
+	type PromptPersonality,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
@@ -369,6 +370,7 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	cwd?: string;
 	appendPrompt?: string;
+	personality?: PromptPersonality;
 	repeatToolDescriptions?: boolean;
 	mode?: "default" | "orchestrator" | "plan" | "ask";
 }
@@ -382,6 +384,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skills: options.skills,
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
+		personality: options.personality,
 		repeatToolDescriptions: options.repeatToolDescriptions,
 		mode: options.mode,
 	});
@@ -1382,6 +1385,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const currentMode = normalizePromptRole(currentRole);
 		const promptMcpAllowlist = options.mcpAllowlist ?? getRoleMcpAllowlist(currentRole);
 
+		const personality = settings.get("personality");
+
 		// Build combined append prompt: memory instructions + MCP server instructions
 		const serverInstructions = mcpManager?.getServerInstructions(promptMcpAllowlist);
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
@@ -1410,6 +1415,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			rules: rulebookRules,
 			skillsSettings: settings.getGroup("skills"),
 			appendSystemPrompt: appendPrompt,
+			personality,
 			repeatToolDescriptions,
 			intentField,
 			mode: currentMode,
@@ -1432,6 +1438,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				skillsSettings: settings.getGroup("skills"),
 				customPrompt: options.systemPrompt,
 				appendSystemPrompt: appendPrompt,
+				personality,
 				repeatToolDescriptions,
 				intentField,
 				mode: currentMode,

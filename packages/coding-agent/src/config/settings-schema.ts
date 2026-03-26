@@ -229,6 +229,18 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "appearance", label: "Symbol Preset", description: "Icon/symbol style", submenu: true },
 	},
 
+	personality: {
+		type: "enum",
+		values: ["plain-english", "technical"] as const,
+		default: "plain-english",
+		ui: {
+			tab: "appearance",
+			label: "Output Personality",
+			description: "Controls how responses are formatted for the user",
+			submenu: true,
+		},
+	},
+
 	colorBlindMode: {
 		type: "boolean",
 		default: false,

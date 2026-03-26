@@ -17,6 +17,9 @@ import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile
 import { filterSkillsByCategories, loadSkills, type Skill } from "./extensibility/skills";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
+import plainEnglishPersonalityPrompt from "./prompts/personalities/plain-english.md" with { type: "text" };
+import technicalPersonalityPrompt from "./prompts/personalities/technical.md" with { type: "text" };
+
 
 function firstNonEmpty(...values: (string | undefined | null)[]): string | null {
 	for (const value of values) {
@@ -42,6 +45,18 @@ const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 const AGENTS_MD_EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
 
 type MainPromptMode = "default" | "orchestrator" | "plan" | "ask";
+
+export type PromptPersonality = "plain-english" | "technical";
+
+function joinPromptSections(...sections: Array<string | undefined | null>): string {
+	return sections.map(section => section?.trim()).filter(Boolean).join("\n\n");
+}
+
+function getPersonalityPrompt(personality: PromptPersonality | undefined): string | undefined {
+	if (personality === "plain-english") return plainEnglishPersonalityPrompt;
+	if (personality === "technical") return technicalPersonalityPrompt;
+	return undefined;
+}
 
 function getSkillCategoriesForMode(mode: MainPromptMode): string[] | null {
 	const roleSkills = DEFAULT_ROLES_CONFIG.roles[mode].skills;
@@ -402,6 +417,8 @@ export interface BuildSystemPromptOptions {
 	toolNames?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
+	/** Final-response personality instructions for the primary agent. */
+	personality?: PromptPersonality;
 	/** Repeat full tool descriptions in system prompt. Default: false */
 	repeatToolDescriptions?: boolean;
 	/** Skills settings for discovery. */
@@ -447,6 +464,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryMode = false,
 		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
+		personality,
 		mode = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -574,7 +592,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		// Explicit custom prompts replace discovered SYSTEM.md content rather than layering it twice.
 		systemPromptCustomization: resolvedCustomPrompt ? "" : (systemPromptCustomization ?? ""),
 		customPrompt: resolvedCustomPrompt,
-		appendPrompt: resolvedAppendPrompt ?? "",
+		appendPrompt: joinPromptSections(getPersonalityPrompt(personality), resolvedAppendPrompt),
 		tools: toolNames,
 		toolInfo,
 		repeatToolDescriptions,
