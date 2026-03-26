@@ -113,6 +113,10 @@ Return only structured `submit_result` data:
 - `verdict`: `"go"` when no blocking issues are found, otherwise `"no_go"`
 - `summary`: 1-3 sentences, evidence-based and scoped to assigned files
 - `findings` (optional): include only actionable, evidence-backed issues from assigned files
+- Always set `outcome` alongside `data` in the `result` object:
+  - `outcome.status`: `"go"` when `verdict` is `"go"`, `"no_go"` when `"no_go"`
+  - `outcome.label`: `"review"`
+  - `outcome.summary`: the `summary` field value (1-3 sentences)
 </output_contract>
 
 <critical>
