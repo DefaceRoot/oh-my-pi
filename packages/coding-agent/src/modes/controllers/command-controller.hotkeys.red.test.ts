@@ -53,7 +53,7 @@ mock.module("../../modes/theme/theme", () => ({
 import { CommandController } from "./command-controller";
 
 type HotkeyMap = Partial<
-	Record<"lazygit" | "externalEditor" | "expandTools" | "cycleAgentMode" | "togglePlanMode" | "toggleSTT", string>
+	Record<"app.lazygit" | "app.editor.external" | "app.tools.expand" | "app.agent.cycleMode" | "app.plan.toggle" | "app.stt.toggle", string>
 >;
 
 function renderHotkeys(bindings: HotkeyMap): string {
@@ -82,14 +82,14 @@ function renderHotkeys(bindings: HotkeyMap): string {
 
 describe("CommandController hotkeys viewer lazygit rows", () => {
 	it("shows lazygit row and omits external editor row when only lazygit is bound", () => {
-		const hotkeysMarkdown = renderHotkeys({ lazygit: "Ctrl+G", externalEditor: "" });
+		const hotkeysMarkdown = renderHotkeys({ "app.lazygit": "Ctrl+G", "app.editor.external": "" });
 
 		expect(hotkeysMarkdown).toContain("| `Ctrl+G` | Open Lazygit |");
 		expect(hotkeysMarkdown).not.toContain("Edit message in external editor");
 	});
 
 	it("shows external editor row only when external editor action is bound", () => {
-		const hotkeysMarkdown = renderHotkeys({ lazygit: "", externalEditor: "Ctrl+E" });
+		const hotkeysMarkdown = renderHotkeys({ "app.lazygit": "", "app.editor.external": "Ctrl+E" });
 
 		expect(hotkeysMarkdown).toContain("| `Ctrl+E` | Edit message in external editor |");
 		expect(hotkeysMarkdown).not.toContain("Open Lazygit");
@@ -97,14 +97,14 @@ describe("CommandController hotkeys viewer lazygit rows", () => {
 	});
 
 	it("shows both lazygit and external editor rows when both actions are bound", () => {
-		const hotkeysMarkdown = renderHotkeys({ lazygit: "Ctrl+G", externalEditor: "Ctrl+E" });
+		const hotkeysMarkdown = renderHotkeys({ "app.lazygit": "Ctrl+G", "app.editor.external": "Ctrl+E" });
 
 		expect(hotkeysMarkdown).toContain("| `Ctrl+G` | Open Lazygit |");
 		expect(hotkeysMarkdown).toContain("| `Ctrl+E` | Edit message in external editor |");
 	});
 
 	it("omits lazygit and external editor rows when bindings are whitespace-only", () => {
-		const hotkeysMarkdown = renderHotkeys({ lazygit: "   ", externalEditor: "\t" });
+		const hotkeysMarkdown = renderHotkeys({ "app.lazygit": "   ", "app.editor.external": "\t" });
 
 		expect(hotkeysMarkdown).not.toContain("Open Lazygit");
 		expect(hotkeysMarkdown).not.toContain("Edit message in external editor");
@@ -112,7 +112,7 @@ describe("CommandController hotkeys viewer lazygit rows", () => {
 	});
 
 	it("does not render stale hardcoded external editor shortcut when both actions are unbound", () => {
-		const hotkeysMarkdown = renderHotkeys({ lazygit: "", externalEditor: "" });
+		const hotkeysMarkdown = renderHotkeys({ "app.lazygit": "", "app.editor.external": "" });
 
 		expect(hotkeysMarkdown).not.toContain("Open Lazygit");
 		expect(hotkeysMarkdown).not.toContain("Edit message in external editor");

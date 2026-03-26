@@ -790,15 +790,24 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		let codepoint = ch as i32;
 		let is_letter = ch.is_ascii_lowercase();
 
-		// ctrl+alt+letter in legacy mode
-		if modifier == (MOD_CTRL | MOD_ALT) && !kitty_protocol_active && is_letter {
+		// ctrl+alt+letter
+		if modifier == (MOD_CTRL | MOD_ALT) && is_letter {
 			let ctrl_char = raw_ctrl_char(ch);
-			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ctrl_char;
+			// Legacy ESC + Ctrl-char (only when Kitty protocol is not active)
+			if !kitty_protocol_active && bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ctrl_char {
+				return true;
+			}
+			return mok_matches(codepoint, MOD_CTRL | MOD_ALT)
+				|| kitty_matches(codepoint, MOD_CTRL | MOD_ALT);
 		}
 
-		// alt+letter in legacy mode
-		if modifier == MOD_ALT && !kitty_protocol_active && is_letter {
-			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch;
+		// alt+letter
+		if modifier == MOD_ALT && is_letter {
+			// Legacy ESC + letter (only when Kitty protocol is not active)
+			if !kitty_protocol_active && bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch {
+				return true;
+			}
+			return mok_matches(codepoint, MOD_ALT) || kitty_matches(codepoint, MOD_ALT);
 		}
 
 		// ctrl+key
@@ -1413,5 +1422,42 @@ mod tests {
 		assert_eq!(parse_key_inner(b"\x1b[57400;133u", true).as_deref(), Some("ctrl+end"));
 		assert!(matches_key_inner(b"\x1b[57400;133u", "ctrl+end", true));
 		assert!(!matches_key_inner(b"\x1b[57400;133u", "1", true));
+	}
+
+	#[test]
+	fn alt_letter_matches_modify_other_keys_format() {
+		// modifyOtherKeys: \x1b[27;3;97~ = alt+a (mod 3 = alt+1)
+		assert!(matches_key_inner(b"\x1b[27;3;97~", "alt+a", false));
+		assert!(matches_key_inner(b"\x1b[27;3;112~", "alt+p", false));
+		// Also works when Kitty flag is active (belt-and-suspenders)
+		assert!(matches_key_inner(b"\x1b[27;3;97~", "alt+a", true));
+		assert!(matches_key_inner(b"\x1b[27;3;112~", "alt+p", true));
+		// parseKey agrees
+		assert_eq!(parse_key_inner(b"\x1b[27;3;97~", false).as_deref(), Some("alt+a"));
+		assert_eq!(parse_key_inner(b"\x1b[27;3;112~", false).as_deref(), Some("alt+p"));
+	}
+
+	#[test]
+	fn ctrl_alt_letter_matches_modify_other_keys_format() {
+		// modifyOtherKeys: \x1b[27;7;97~ = ctrl+alt+a (mod 7 = ctrl+alt+1)
+		assert!(matches_key_inner(b"\x1b[27;7;97~", "ctrl+alt+a", false));
+		assert!(matches_key_inner(b"\x1b[27;7;97~", "ctrl+alt+a", true));
+	}
+
+	#[test]
+	fn alt_letter_legacy_esc_prefix() {
+		// Legacy format: ESC + letter
+		assert!(matches_key_inner(b"\x1ba", "alt+a", false));
+		assert!(matches_key_inner(b"\x1bp", "alt+p", false));
+		// Legacy ESC prefix must NOT match when Kitty protocol is active
+		assert!(!matches_key_inner(b"\x1ba", "alt+a", true));
+	}
+
+	#[test]
+	fn alt_letter_kitty_csi_u() {
+		// Kitty CSI-u: \x1b[97;3u = alt+a
+		assert!(matches_key_inner(b"\x1b[97;3u", "alt+a", true));
+		assert!(matches_key_inner(b"\x1b[112;3u", "alt+p", true));
+		assert!(matches_key_inner(b"\x1b[97;3u", "alt+a", false));
 	}
 }

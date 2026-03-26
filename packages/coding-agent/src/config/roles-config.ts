@@ -107,7 +107,7 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			skills: "all",
 		},
 		orchestrator: {
-			tools: ["read", "bash", "task", "await", "todo_write", "ask"],
+			tools: ["read", "bash", "task", "cancel_job", "await", "todo_write", "ask"],
 			mcp: ["augment"],
 			skills: {
 				categories: ["orchestration"],

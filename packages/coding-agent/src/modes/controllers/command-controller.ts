@@ -516,18 +516,13 @@ export class CommandController {
 	}
 
 	handleHotkeysCommand(): void {
-		const getDisplayString = (action: string): string =>
-			(this.ctx.keybindings as { getDisplayString(actionName: string): string }).getDisplayString(action);
-		const expandToolsKey = getDisplayString("expandTools") || "Ctrl+O";
-		const agentModeKey = getDisplayString("cycleAgentMode") || "Alt+A";
-		const planModeKey = getDisplayString("togglePlanMode") || "Alt+Shift+P";
-		const sttKey = getDisplayString("toggleSTT") || "Alt+H";
-		const lazygitKey = getDisplayString("lazygit").trim();
-		const externalEditorKey = getDisplayString("externalEditor").trim();
-		const lazygitRow = lazygitKey ? `		| \`${lazygitKey}\` | Open Lazygit |\n` : "";
-		const externalEditorRow = externalEditorKey
-			? `		| \`${externalEditorKey}\` | Edit message in external editor |\n`
-			: "";
+		const kb = this.ctx.keybindings;
+		const key = (action: Parameters<typeof kb.getDisplayString>[0], fallback = "Disabled"): string =>
+			kb.getDisplayString(action) || fallback;
+		const optionalRow = (keyStr: string, label: string): string => {
+			const trimmed = keyStr.trim();
+			return trimmed ? `		| \`${trimmed}\` | ${label} |\n` : "";
+		};
 		const hotkeys = `
 		**Navigation**
 		| Key | Action |
@@ -550,26 +545,26 @@ export class CommandController {
 		| Key | Action |
 		|-----|--------|
 		| \`Tab\` | Path completion / accept autocomplete |
-		| \`Escape\` | Cancel autocomplete / abort streaming |
-		| \`Ctrl+C\` | Clear editor (first) / exit (second) |
-		| \`Ctrl+D\` | Exit (when editor is empty) |
-		| \`Ctrl+Z\` | Suspend to background |
-		| \`Shift+Tab\` | Cycle thinking level |
-		| \`Ctrl+P\` | Cycle role models (orchestrator/default/explore) |
-		| \`Shift+Ctrl+P\` | Cycle role models temporarily (orchestrator/default/explore) |
-		| \`Alt+P\` | Select model (temporary) |
-		| \`Ctrl+L\` | Select model (set roles) |
-		| \`${agentModeKey}\` | Cycle agent mode (Default/Orchestrator/Plan/Ask) |
-		| \`${planModeKey}\` | Toggle plan mode |
-		| \`Ctrl+R\` | Search prompt history |
-		| \`${expandToolsKey}\` | Toggle tool output expansion |
-		| \`Ctrl+T\` | Toggle todo list expansion |
-		${lazygitRow}${externalEditorRow}		| \`${sttKey}\` | Toggle speech-to-text recording |
-| \`/\` | Slash commands |
-| \`!\` | Run bash command |
-| \`!!\` | Run bash command (excluded from context) |
-| \`$\` | Run Python in shared kernel |
-| \`$$\` | Run Python (excluded from context) |
+		| \`${key("app.interrupt", "Escape")}\` | Cancel autocomplete / abort streaming |
+		| \`${key("app.clear", "Ctrl+C")}\` | Clear editor (first) / exit (second) |
+		| \`${key("app.exit", "Ctrl+D")}\` | Exit (when editor is empty) |
+		| \`${key("app.suspend", "Ctrl+Z")}\` | Suspend to background |
+		| \`${key("app.thinking.cycle", "Shift+Tab")}\` | Cycle thinking level |
+		| \`${key("app.model.cycleForward", "Ctrl+P")}\` | Cycle role models (slow/default/smol) |
+		| \`${key("app.model.cycleBackward", "Shift+Ctrl+P")}\` | Cycle role models temporarily |
+		| \`${key("app.model.select.temporary", "Alt+P")}\` | Select model (temporary) |
+		| \`${key("app.model.select", "Ctrl+L")}\` | Select model (set roles) |
+		| \`${key("app.agent.cycleMode", "Alt+A")}\` | Cycle agent mode (Default/Orchestrator/Plan/Ask) |
+		| \`${key("app.plan.toggle", "Alt+Shift+P")}\` | Toggle plan mode |
+		| \`${key("app.history.search", "Ctrl+R")}\` | Search prompt history |
+		| \`${key("app.tools.expand", "Ctrl+O")}\` | Toggle tool output expansion |
+		| \`${key("app.thinking.toggle", "Ctrl+T")}\` | Toggle thinking block visibility |
+		${optionalRow(key("app.editor.external", ""), "Edit message in external editor")}${optionalRow(key("app.lazygit", ""), "Open Lazygit")}| \`${key("app.stt.toggle", "Alt+H")}\` | Toggle speech-to-text recording |
+		| \`/\` | Slash commands |
+		| \`!\` | Run bash command |
+		| \`!!\` | Run bash command (excluded from context) |
+		| \`$\` | Run Python in shared kernel |
+		| \`$$\` | Run Python (excluded from context) |
 
 		**Subagent Navigator (Ctrl+X chord)**
 
@@ -581,7 +576,7 @@ export class CommandController {
 		| \`Ctrl+X, Ctrl+O\` | View most recently updated subagent |
 		| \`Ctrl+X, Ctrl+R\` | Refresh subagent list |
 		| \`Ctrl+X, Ctrl+V\` | Open navigator (explicit) |
-`;
+		`;
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new DynamicBorder());
 		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));

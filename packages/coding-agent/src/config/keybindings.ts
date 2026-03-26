@@ -26,6 +26,7 @@ interface AppKeybindings {
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
+	"app.model.select.temporary": true;
 	"app.tools.expand": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
@@ -202,6 +203,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+a",
 		description: "Cycle agent mode",
 	},
+	"app.model.select.temporary": {
+		defaultKeys: "alt+p",
+		description: "Select model (temporary)",
+	},
 	"app.lazygit": {
 		defaultKeys: "ctrl+g",
 		description: "Open lazygit",
@@ -225,6 +230,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	cycleModelForward: "app.model.cycleForward",
 	cycleModelBackward: "app.model.cycleBackward",
 	selectModel: "app.model.select",
+	selectModelTemporary: "app.model.select.temporary",
 	togglePlanMode: "app.plan.toggle",
 	historySearch: "app.history.search",
 	expandTools: "app.tools.expand",

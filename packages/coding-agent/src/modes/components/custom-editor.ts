@@ -11,6 +11,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.model.cycleForward"
 	| "app.model.cycleBackward"
 	| "app.model.select"
+	| "app.model.select.temporary"
 	| "app.tools.expand"
 	| "app.thinking.toggle"
 	| "app.editor.external"
@@ -29,6 +30,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.model.cycleForward": ["ctrl+p"],
 	"app.model.cycleBackward": ["shift+ctrl+p"],
 	"app.model.select": ["ctrl+l"],
+	"app.model.select.temporary": ["alt+p"],
 	"app.tools.expand": ["ctrl+o"],
 	"app.thinking.toggle": ["ctrl+t"],
 	"app.editor.external": ["ctrl+g"],
@@ -126,8 +128,8 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		// Intercept Alt+P for quick model switching
-		if (matchesKey(data, "alt+p") && this.onQuickSelectModel) {
+		// Intercept configured temporary model selector shortcut
+		if (this.#matchesAction(data, "app.model.select.temporary") && this.onQuickSelectModel) {
 			this.onQuickSelectModel();
 			return;
 		}

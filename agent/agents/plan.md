@@ -69,7 +69,7 @@ Default to parallel-first decomposition inside each phase: maximize safe sibling
 
 ## Run the verification gate
 After writing the plan, follow `rule://planning-protocol` for the full verification contract and artifact requirements.
-Spawn one `plan-verifier` subagent per phase in parallel via the task tool.
+Spawn one `plan-verifier` subagent per phase in parallel via the task tool (`agent: "plan-verifier"`). Never use `agent: "implement"` for plan verification.
 For each verifier, provide `plan_file`, `phase_key`, and `run_timestamp` in UTC compact format (`YYYYMMDD-HHMMSSZ`).
 Await all verifier results before claiming planning is complete.
 If any verifier returns `BLOCKED` or `PASS WITH FINDINGS`, patch the plan, then re-run the affected phase verifiers.

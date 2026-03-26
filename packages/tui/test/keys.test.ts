@@ -63,6 +63,26 @@ describe("matchesKey", () => {
 		expect(matchesKey("\x1b[57400;133u", "1")).toBe(false);
 		setKittyProtocolActive(false);
 	});
+
+	it("matches alt+letter via modifyOtherKeys CSI 27 format", () => {
+		setKittyProtocolActive(false);
+		// modifyOtherKeys: \x1b[27;3;97~ = alt+a (modifier 3 = alt + 1)
+		expect(matchesKey("\x1b[27;3;97~", "alt+a")).toBe(true);
+		expect(matchesKey("\x1b[27;3;112~", "alt+p")).toBe(true);
+		expect(matchesKey("\x1b[27;3;97~", "alt+p")).toBe(false);
+	});
+
+	it("matches alt+letter via legacy ESC prefix when kitty is off", () => {
+		setKittyProtocolActive(false);
+		expect(matchesKey("\x1ba", "alt+a")).toBe(true);
+		expect(matchesKey("\x1bp", "alt+p")).toBe(true);
+	});
+
+	it("rejects legacy ESC prefix alt+letter when kitty is active", () => {
+		setKittyProtocolActive(true);
+		expect(matchesKey("\x1ba", "alt+a")).toBe(false);
+		setKittyProtocolActive(false);
+	});
 });
 
 describe("parseKey", () => {

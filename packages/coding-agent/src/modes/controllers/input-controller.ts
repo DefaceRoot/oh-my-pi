@@ -210,13 +210,6 @@ export function detectLazygitInstallCommand(): { command: string; args: string[]
 	return null;
 }
 
-const CTRL_X_BYTE = "\x18";
-const CTRL_N_BYTE = "\x0e";
-const CTRL_P_BYTE = "\x10";
-const CTRL_O_BYTE = "\x0f";
-const CTRL_R_BYTE = "\x12";
-const CTRL_V_BYTE = "\x16";
-const ESC_BYTE = "\x1b";
 const CTRLX_CHORD_TIMEOUT_MS = 350;
 
 export class InputController {
@@ -323,6 +316,7 @@ export class InputController {
 		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel();
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
 		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel({ temporary: true });
+		this.ctx.editor.setActionKeys("app.model.select.temporary", this.ctx.keybindings.getKeys("app.model.select.temporary"));
 		this.ctx.editor.onQuickSelectModel = () => this.ctx.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
@@ -997,7 +991,7 @@ export class InputController {
 	}
 
 	#handleChordInput(data: string): { consume?: boolean; data?: string } | undefined {
-		if (data === CTRL_X_BYTE) {
+		if (matchesKey(data, "ctrl+x")) {
 			// State-B: subagent view already active → immediately exit
 			if (this.ctx.isSubagentViewActive()) {
 				this.ctx.exitSubagentView();
@@ -1010,29 +1004,32 @@ export class InputController {
 
 		if (this.#chordArmed) {
 			this.#disarmChord();
-			switch (data) {
-				case CTRL_N_BYTE:
-					void this.ctx.openSubagentViewerForRoot(1);
-					return { consume: true };
-				case CTRL_P_BYTE:
-					void this.ctx.openSubagentViewerForRoot(-1);
-					return { consume: true };
-				case CTRL_O_BYTE:
-					void this.ctx.openSubagentViewerNewest();
-					return { consume: true };
-				case CTRL_R_BYTE:
-					this.ctx.requestSubagentRefresh("manual");
-					return { consume: true };
-				case CTRL_V_BYTE:
-					this.ctx.openSubagentNavigator();
-					return { consume: true };
-				case ESC_BYTE:
-					// Cancel chord, no action
-					return { consume: true };
-				default:
-					// Unknown follow-up: disarm and don't consume
-					return undefined;
+			if (matchesKey(data, "ctrl+n")) {
+				void this.ctx.openSubagentViewerForRoot(1);
+				return { consume: true };
 			}
+			if (matchesKey(data, "ctrl+p")) {
+				void this.ctx.openSubagentViewerForRoot(-1);
+				return { consume: true };
+			}
+			if (matchesKey(data, "ctrl+o")) {
+				void this.ctx.openSubagentViewerNewest();
+				return { consume: true };
+			}
+			if (matchesKey(data, "ctrl+r")) {
+				this.ctx.requestSubagentRefresh("manual");
+				return { consume: true };
+			}
+			if (matchesKey(data, "ctrl+v")) {
+				this.ctx.openSubagentNavigator();
+				return { consume: true };
+			}
+			if (matchesKey(data, "escape")) {
+				// Cancel chord, no action
+				return { consume: true };
+			}
+			// Unknown follow-up: disarm and don't consume
+			return undefined;
 		}
 
 		return undefined;

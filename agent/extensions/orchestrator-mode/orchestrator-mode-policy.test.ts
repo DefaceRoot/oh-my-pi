@@ -77,6 +77,77 @@ const expectAllowed = (context: Record<string, unknown>, toolName: string, input
 	expect(decision).toBeUndefined();
 };
 
+const shouldRequireTodoRefreshAfterResult = (event: Record<string, unknown>) =>
+	(
+		_testExports as {
+			shouldRequireTodoRefreshAfterResult?: (event: Record<string, unknown>) => boolean;
+		}
+	).shouldRequireTodoRefreshAfterResult?.(event);
+
+describe("orchestrator-mode todo refresh triggers", () => {
+	it("does not require a todo refresh after launching background task jobs", () => {
+		expect(
+			shouldRequireTodoRefreshAfterResult({
+				toolName: "task",
+				details: {
+					results: [],
+					async: { state: "running", jobId: "job-1", type: "task" },
+				},
+			}),
+		).toBe(false);
+	});
+
+	it("requires a todo refresh after a synchronous task result", () => {
+		expect(
+			shouldRequireTodoRefreshAfterResult({
+				toolName: "task",
+				details: {
+					results: [{ id: "result-1" }],
+					totalDurationMs: 10,
+				},
+			}),
+		).toBe(true);
+	});
+
+	it("requires a todo refresh after an async task batch completes", () => {
+		expect(
+			shouldRequireTodoRefreshAfterResult({
+				toolName: "task",
+				details: {
+					results: [],
+					async: { state: "completed", jobId: "job-1", type: "task" },
+				},
+			}),
+		).toBe(true);
+	});
+
+	it("does not require a todo refresh after an await timeout with only running jobs", () => {
+		expect(
+			shouldRequireTodoRefreshAfterResult({
+				toolName: "await",
+				details: {
+					jobs: [
+						{ id: "job-1", type: "task", status: "running", label: "Designer", durationMs: 30_000 },
+					],
+				},
+			}),
+		).toBe(false);
+	});
+
+	it("requires a todo refresh after await observes completed work", () => {
+		expect(
+			shouldRequireTodoRefreshAfterResult({
+				toolName: "await",
+				details: {
+					jobs: [
+						{ id: "job-1", type: "task", status: "completed", label: "Designer", durationMs: 35_000 },
+					],
+				},
+			}),
+		).toBe(true);
+	});
+});
+
 describe("orchestrator-mode policy", () => {
 	it("detects parent orchestrator turns", () => {
 		expect(parentOrchestratorContext().orchestratorModeThisTurn).toBe(true);

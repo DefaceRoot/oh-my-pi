@@ -207,6 +207,32 @@ function isAgentResultRead(event: OrchestratorPolicyEvent): boolean {
 	return readPath.startsWith("agent://");
 }
 
+function shouldRequireTodoRefreshAfterResult(event: {
+	toolName: string;
+	details?: unknown;
+	isError?: boolean;
+}): boolean {
+	if (event.isError) return false;
+
+	if (event.toolName === "task") {
+		const details = event.details as { results?: unknown; async?: { state?: unknown } } | undefined;
+		if (Array.isArray(details?.results) && details.results.length > 0) return true;
+		return details?.async?.state === "completed" || details?.async?.state === "failed";
+	}
+
+	if (event.toolName === "await") {
+		const details = event.details as { jobs?: Array<{ status?: unknown }> } | undefined;
+		return Array.isArray(details?.jobs) && details.jobs.some(job => job.status !== "running");
+	}
+
+	if (event.toolName === "cancel_job") {
+		return true;
+	}
+
+	return false;
+}
+
+
 function buildOrchestratorPrompt(): string {
 	return [
 		"",
@@ -279,6 +305,7 @@ function buildOrchestratorPrompt(): string {
 		"- todo_write for detailed visible tracking from kickoff through closeout",
 		"- read only for narrow decomposition, capped at 5 distinct files per user request",
 		"- bash only for git status",
+		"- cancel_job to abort a running background job when it is no longer needed or has gone wrong",
 		"",
 		`Detailed todo minimums: at least ${MIN_ORCHESTRATOR_TODO_PHASES} phases and at least ${MIN_ORCHESTRATOR_TODO_TASKS} concrete tasks overall.`,
 		"If you are about to use any other tool or explain code changes yourself, stop and delegate instead.",
@@ -450,9 +477,10 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 			todoDeficiencyReason = getTodoPlanDeficiency(todoPhases);
 			todoBootstrapRequired = Boolean(todoDeficiencyReason);
 			todoRefreshRequired = false;
+			return;
 		}
 
-		if (event.toolName === "task") {
+		if (shouldRequireTodoRefreshAfterResult(event)) {
 			todoRefreshRequired = true;
 		}
 	});
@@ -464,4 +492,5 @@ export const _testExports = {
 	getTodoPlanDeficiency,
 	isOrchestratorContext,
 	shouldBlockTool,
+	shouldRequireTodoRefreshAfterResult,
 };

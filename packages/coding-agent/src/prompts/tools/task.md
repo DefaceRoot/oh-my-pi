@@ -84,7 +84,7 @@ Delegate type examples:
 - `designer`: frontend/UI design and implementation work.
 - `explore`: read-only codebase reconnaissance.
 - `research`: external-doc and web research.
+- `plan-verifier`: read-only plan quality verification before coding starts.
 - `lint`: scoped lint/typecheck/test execution.
 - `code-reviewer`: evidence-first structural review.
 - `commit`: git staging/commit/push handoff only.
-</delegation>
