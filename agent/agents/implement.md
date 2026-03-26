@@ -64,4 +64,8 @@ The runtime gate blocks `submit_result` until lint (when required), code-reviewe
 
 <critical>
 **submit_result is TERMINAL.** Calling it with any status (success OR aborted) ends this task immediately. The session will be destroyed. You MUST NOT make any further tool calls after submit_result — not another submit_result, not any other tool. One call, then stop.
+Always set `outcome` in the `result` object when calling `submit_result`:
+- `outcome.status`: `"pass"` when the assignment completed successfully, including the full delivery loop (lint + review + commit all succeeded) or an allowed `<skip_quality_gates />` success path, `"fail"` when aborted or a gate could not be remediated
+- `outcome.label`: `"done"`
+
 </critical>
