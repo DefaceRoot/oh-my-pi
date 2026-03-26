@@ -131,6 +131,7 @@ const MAIN_ROLE_NAMES = new Set(["default", "orchestrator", "plan", "ask"]);
 
 type RolesConfigEntry = {
 	mcp?: unknown;
+	skills?: unknown;
 };
 
 type RolesConfigShape = {
@@ -244,12 +245,14 @@ function stripMcpTools(systemPrompt: string, allowed: string[] | null): string {
 // ─── Skill filtering ───────────────────────────────────────────────────────
 
 /**
- * Skill allocation per agent.
+ * Legacy skill allocation per agent.
  * `null`  = all skills (no filtering).
  * `[]`    = no skills (remove entire section).
  * string[] = keep only these skill names.
+ *
+ * Used as fallback when no V2 skill config is found in roles.yml.
  */
-const AGENT_SKILL_ALLOW: Record<string, string[] | null> = {
+const LEGACY_SKILL_ALLOW: Record<string, string[] | null> = {
 	default:        null,
 	orchestrator:   ["brainstorming", "writing-plans", "commit-hygiene", "verification-before-completion"],
 	implement:      null,
@@ -294,46 +297,60 @@ const AGENT_SKILL_ALLOW: Record<string, string[] | null> = {
 	"worktree-setup": [],
 };
 
-/**
- * Filter the `# Skills` section from the system prompt based on agent role.
- *
- * The section has this structure:
- *   # Skills
- *   <intro text>
- *   ## skill-name-1
- *   Description...
- *   ## skill-name-2
- *   Description...
- *   # Next Heading
- *
- * For agents with no skills: remove the entire section (from `# Skills\n`
- * up to but not including the next `# ` top-level heading).
- *
- * For agents with specific skills: keep the section header and intro,
- * but retain only `## skill-name` blocks whose name is in the allowlist.
- */
-function stripSkills(systemPrompt: string, agent: string): string {
-	const allowed = AGENT_SKILL_ALLOW[agent] ?? AGENT_SKILL_ALLOW.default;
+type SkillConfig = { auto: string[]; frontmatter: string[] };
 
-	// null = keep everything
-	if (allowed === null) return systemPrompt;
+function isV2Skills(skills: unknown): skills is SkillConfig {
+	return (
+		skills !== null &&
+		typeof skills === "object" &&
+		"auto" in (skills as Record<string, unknown>) &&
+		Array.isArray((skills as Record<string, unknown>).auto)
+	);
+}
 
-	// Match the entire Skills section (from `# Skills\n` to next top-level heading)
-	const skillsSectionRe = /^# Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
-	const sectionMatch = systemPrompt.match(skillsSectionRe);
+function resolveSkillConfig(agent: string): SkillConfig | null {
+	const rolesPath = path.join(resolveAgentDir(), "roles.yml");
+	const loaded = RolesConfigFile.relocate(rolesPath).load();
+	if (!loaded || typeof loaded !== "object") return null;
+	const config = loaded as RolesConfigShape;
 
-	// No Skills section found — nothing to do
-	if (!sectionMatch) return systemPrompt;
-
-	// Empty allowlist = remove entire Skills section
-	if (allowed.length === 0) {
-		return systemPrompt.replace(skillsSectionRe, "");
+	// Check subagents section first (canonical for subagents)
+	const subagent = config.subagents?.[agent];
+	if (subagent && isV2Skills(subagent.skills)) {
+		return subagent.skills;
 	}
 
-	// Specific skills: keep section header/intro, filter individual skill blocks
-	const sectionText = sectionMatch[0];
+	// Then roles section
+	const role = config.roles?.[agent];
+	if (role && isV2Skills(role.skills)) {
+		return role.skills;
+	}
 
-	// Split section into: intro (before first ##) + individual skill blocks
+	return null;
+}
+
+const skillsSectionRe = /^# Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
+const availableSkillsSectionRe = /^# Available Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
+
+/**
+ * Core skill-section filter: applies an allowlist to one `#`-headed section.
+ * `null` = keep everything; `[]` = remove entire section; string[] = filter by name.
+ */
+function filterSkillSection(
+	systemPrompt: string,
+	sectionRe: RegExp,
+	allowed: string[] | null,
+): string {
+	if (allowed === null) return systemPrompt;
+
+	const sectionMatch = systemPrompt.match(sectionRe);
+	if (!sectionMatch) return systemPrompt;
+
+	if (allowed.length === 0) {
+		return systemPrompt.replace(sectionRe, "");
+	}
+
+	const sectionText = sectionMatch[0];
 	const firstSkillIdx = sectionText.indexOf("\n## ");
 	if (firstSkillIdx === -1) {
 		// No individual skill blocks found — return as-is
@@ -344,7 +361,6 @@ function stripSkills(systemPrompt: string, agent: string): string {
 	const skillsBody = sectionText.substring(firstSkillIdx + 1);
 
 	// Split skill blocks: each starts with `## skill-name\n`
-	// We split on `## ` at line start, keeping the delimiter
 	const skillBlocks: string[] = [];
 	const blockRe = /^## \S+.*(?:\n(?!## |# ).*)*\n?/gm;
 	let blockMatch: RegExpExecArray | null;
@@ -359,7 +375,40 @@ function stripSkills(systemPrompt: string, agent: string): string {
 	});
 
 	const filteredSection = intro + filteredBlocks.join("");
-	return systemPrompt.replace(skillsSectionRe, filteredSection);
+	return systemPrompt.replace(sectionRe, filteredSection);
+}
+
+/** V1 fallback: filter `# Skills` section using LEGACY_SKILL_ALLOW map. */
+function stripSkillsV1(systemPrompt: string, agent: string): string {
+	const allowed = LEGACY_SKILL_ALLOW[agent] ?? LEGACY_SKILL_ALLOW.default;
+	return filterSkillSection(systemPrompt, skillsSectionRe, allowed);
+}
+
+/**
+ * V2 skill filtering: filter both `# Skills` (auto) and `# Available Skills`
+ * (frontmatter) sections using the SkillConfig read from roles.yml.
+ */
+function stripSkillsV2(systemPrompt: string, config: SkillConfig): string {
+	let result = systemPrompt;
+	result = filterSkillSection(result, skillsSectionRe, config.auto);
+	result = filterSkillSection(result, availableSkillsSectionRe, config.frontmatter);
+	return result;
+}
+
+/**
+ * Filter skill sections from the system prompt based on agent role.
+ *
+ * V2 (roles.yml has `skills: { auto, frontmatter }` for this agent): filter
+ * both `# Skills` and `# Available Skills` sections independently.
+ *
+ * V1 fallback: filter only `# Skills` using the LEGACY_SKILL_ALLOW map.
+ */
+function stripSkills(systemPrompt: string, agent: string): string {
+	const skillConfig = resolveSkillConfig(agent);
+	if (skillConfig) {
+		return stripSkillsV2(systemPrompt, skillConfig);
+	}
+	return stripSkillsV1(systemPrompt, agent);
 }
 
 // ─── Extension entry point ─────────────────────────────────────────────────
@@ -381,8 +430,10 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 		sessionMcpAllowByKey.set(getSessionKey(ctx), mcpAllow);
 
 		// Skip filtering for agents with full access (no changes needed)
-		const skillAllow = AGENT_SKILL_ALLOW[agent] ?? AGENT_SKILL_ALLOW.default;
-		if (mcpAllow === null && skillAllow === null) {
+		const skillConfig = resolveSkillConfig(agent);
+		const hasV2Skills = skillConfig !== null;
+		const v1SkillAllow = LEGACY_SKILL_ALLOW[agent] ?? LEGACY_SKILL_ALLOW.default;
+		if (mcpAllow === null && !hasV2Skills && v1SkillAllow === null) {
 			pi.logger.debug(`mcp-filter: agent=${agent} — full access, skipping`);
 			return;
 		}
