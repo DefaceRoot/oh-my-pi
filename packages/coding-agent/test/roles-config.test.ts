@@ -9,6 +9,15 @@ type RolesConfigContract = {
 	getMcpForRole(role: string): string[] | Promise<string[]>;
 	getSkillCategoriesForRole(role: string): string[] | Promise<string[]>;
 	getMcpForSubagent(agentName: string): string[] | Promise<string[]>;
+	// V2 accessors
+	getSkillConfigForRole(role: string): { auto: string[]; frontmatter: string[] } | undefined;
+	setSkillConfigForRole(role: string, config: { auto: string[]; frontmatter: string[] }): void;
+	getSkillConfigForSubagent(agent: string): { auto: string[]; frontmatter: string[] } | undefined;
+	setSkillConfigForSubagent(agent: string, config: { auto: string[]; frontmatter: string[] }): void;
+	getToolsForSubagent(agent: string): string[] | null;
+	setToolsForSubagent(agent: string, config: { inherit?: string; add?: string[]; remove?: string[] }): void;
+	setMcpForSubagent(agent: string, servers: string[]): void;
+	setConfigForAgent(agentName: string, config: Record<string, unknown>): void;
 };
 
 type RolesConfigModuleContract = {
@@ -228,5 +237,245 @@ subagents:
 		]);
 		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("plan"))).toEqual(["planning", "workflow"]);
 		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("ask"))).toEqual([]);
+	});
+});
+describe("RolesConfig V2 accessors", () => {
+	let tempDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-v2-${Snowflake.next()}`);
+		await fs.mkdir(tempDir, { recursive: true });
+		rolesPath = path.join(tempDir, "roles.yml");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	const writeRoles = async (content: string) => {
+		await fs.writeFile(rolesPath, content, "utf8");
+	};
+
+	it("getSkillConfigForRole returns undefined for V1 format", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+  plan:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills:
+      categories:
+        - planning
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// V1 "all" string
+		expect(rolesConfig.getSkillConfigForRole("default")).toBeUndefined();
+		// V1 categories object
+		expect(rolesConfig.getSkillConfigForRole("plan")).toBeUndefined();
+	});
+
+	it("getSkillConfigForRole returns SkillConfig for V2 format", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills:
+      auto:
+        - frontend-design
+      frontmatter:
+        - brainstorming
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		const skillConfig = rolesConfig.getSkillConfigForRole("default");
+		expect(skillConfig).toBeDefined();
+		expect(skillConfig?.auto).toEqual(["frontend-design"]);
+		expect(skillConfig?.frontmatter).toEqual(["brainstorming"]);
+	});
+
+	it("V2 SkillConfig round-trip via setSkillConfigForRole and getSkillConfigForRole", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// Write V2 skills to the default role
+		rolesConfig.setSkillConfigForRole("default", { auto: ["simplify", "polish"], frontmatter: ["brainstorming"] });
+
+		// Read back from a fresh instance (proves persistence)
+		const fresh = new RolesConfig(rolesPath);
+		const result = fresh.getSkillConfigForRole("default");
+		expect(result).toBeDefined();
+		expect(result?.auto).toEqual(["simplify", "polish"]);
+		expect(result?.frontmatter).toEqual(["brainstorming"]);
+	});
+
+	it("getToolsForSubagent with inherit resolution", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - write
+      - bash
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  custom-agent:
+    mcp:
+      - augment
+    tools:
+      inherit: default
+      add:
+        - task
+      remove:
+        - bash
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// null when no tools config
+		expect(rolesConfig.getToolsForSubagent("_default")).toBeNull();
+
+		// resolved: [read, write, bash] + task - bash = [read, write, task]
+		const resolved = rolesConfig.getToolsForSubagent("custom-agent");
+		expect(resolved).toBeDefined();
+		expect(resolved).toContain("read");
+		expect(resolved).toContain("write");
+		expect(resolved).toContain("task");
+		expect(resolved).not.toContain("bash");
+	});
+
+	it("getToolsForSubagent falls back to default role when inherit is missing", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - grep
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  minimal-agent:
+    mcp:
+      - augment
+    tools:
+      remove:
+        - grep
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// No inherit specified — defaults to "default" role
+		const resolved = rolesConfig.getToolsForSubagent("minimal-agent");
+		expect(resolved).toContain("read");
+		expect(resolved).not.toContain("grep");
+	});
+
+	it("setMcpForSubagent persistence", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  my-agent:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setMcpForSubagent("my-agent", ["ref", "better-context"]);
+
+		// Fresh instance reads persisted value
+		const fresh = new RolesConfig(rolesPath);
+		const servers = fresh.getMcpForSubagent("my-agent");
+		expect(servers).toContain("augment");
+		expect(servers).toContain("ref");
+		expect(servers).toContain("better-context");
+	});
+	it("setConfigForAgent routes to roles section when name exists in roles", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+  custom-role:
+    tools:
+      - read
+      - bash
+    mcp:
+      - augment
+    skills: none
+subagents:
+  _default:
+    mcp:
+      - augment
+  new-agent:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// custom-role is a role entry — setConfigForAgent writes to roles
+		rolesConfig.setConfigForAgent("custom-role", { mcp: ["ref"] });
+		const fresh = new RolesConfig(rolesPath);
+		// getMcpForRole reads roles section first
+		expect(fresh.getMcpForRole("custom-role")).toContain("ref");
+
+		// new-agent is in subagents only — setConfigForAgent writes to subagents
+		rolesConfig.setConfigForAgent("new-agent", { mcp: ["better-context"] });
+		const fresh2 = new RolesConfig(rolesPath);
+		expect(fresh2.getMcpForSubagent("new-agent")).toContain("better-context");
+
+		// brand-new name — goes to subagents by default
+		rolesConfig.setConfigForAgent("brand-new", { mcp: ["ref"] });
+		const fresh3 = new RolesConfig(rolesPath);
+		expect(fresh3.getMcpForSubagent("brand-new")).toContain("ref");
 	});
 });

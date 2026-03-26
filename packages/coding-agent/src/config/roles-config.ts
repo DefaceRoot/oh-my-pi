@@ -4,22 +4,67 @@ import { type Static, Type } from "@sinclair/typebox";
 import { YAML } from "bun";
 import { ConfigFile } from "../config";
 
+// V2 Skill config: per-skill mode control
+const SkillConfigSchema = Type.Object({
+	auto: Type.Array(Type.String({ minLength: 1 })),
+	frontmatter: Type.Array(Type.String({ minLength: 1 })),
+});
+
+export type SkillConfig = Static<typeof SkillConfigSchema>;
+
+// V2 Tools inherit pattern for subagents
+const ToolsInheritSchema = Type.Object({
+	inherit: Type.Optional(Type.String({ minLength: 1 })),
+	add: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+	remove: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+});
+
+export type ToolsInheritConfig = Static<typeof ToolsInheritSchema>;
+
+// V2 Fallback model (placeholder for increment 2)
+const FallbackSchema = Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()]));
+
+// V2 Advanced config (placeholder for increment 2)
+const AdvancedConfigSchema = Type.Optional(
+	Type.Object({
+		thinkingLevel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		maxRecursionDepth: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		compactionStrategy: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		temperature: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+	}),
+);
+
+export type AdvancedConfig = {
+	thinkingLevel?: string | null;
+	maxRecursionDepth?: number | null;
+	compactionStrategy?: string | null;
+	temperature?: number | null;
+};
+
+// Accepts V1 format ("all", "none", { categories }) AND V2 format ({ auto, frontmatter })
 const RoleSkillsSchema = Type.Union([
 	Type.Literal("all"),
 	Type.Literal("none"),
 	Type.Object({
 		categories: Type.Array(Type.String({ minLength: 1 })),
 	}),
+	SkillConfigSchema,
 ]);
 
 const RoleConfigSchema = Type.Object({
 	tools: Type.Array(Type.String({ minLength: 1 })),
 	mcp: Type.Array(Type.String({ minLength: 1 })),
 	skills: RoleSkillsSchema,
+	fallback: FallbackSchema,
+	advanced: AdvancedConfigSchema,
 });
 
 const SubagentConfigSchema = Type.Object({
 	mcp: Type.Array(Type.String({ minLength: 1 })),
+	skills: Type.Optional(SkillConfigSchema),
+	tools: Type.Optional(Type.Union([ToolsInheritSchema, Type.Array(Type.String({ minLength: 1 }))])),
+	fallback: FallbackSchema,
+	advanced: AdvancedConfigSchema,
 });
 
 const RolesConfigSchema = Type.Object({
@@ -31,6 +76,10 @@ type RoleSkillsConfig = Static<typeof RoleSkillsSchema>;
 type RoleConfig = Static<typeof RoleConfigSchema>;
 type SubagentConfig = Static<typeof SubagentConfigSchema>;
 export type RolesConfigData = Static<typeof RolesConfigSchema>;
+
+// V2 type aliases — same underlying types since the schemas are unified supersets
+export type RoleConfigV2 = RoleConfig;
+export type SubagentConfigV2 = SubagentConfig;
 
 export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
 	workflow: [
@@ -208,23 +257,76 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 
 export const RolesConfigFile = new ConfigFile<RolesConfigData>("roles", RolesConfigSchema);
 
-function cloneRoleConfig(config: RoleConfig): RoleConfig {
+// Returns true when the skills value is V2 format ({ auto, frontmatter })
+function isV2SkillConfig(skills: unknown): skills is SkillConfig {
+	return (
+		skills !== null &&
+		typeof skills === "object" &&
+		"auto" in skills &&
+		Array.isArray((skills as Record<string, unknown>).auto)
+	);
+}
+
+function cloneSkillConfig(config: SkillConfig): SkillConfig {
 	return {
+		auto: [...config.auto],
+		frontmatter: [...config.frontmatter],
+	};
+}
+
+function cloneToolsInheritConfig(config: ToolsInheritConfig): ToolsInheritConfig {
+	return {
+		inherit: config.inherit,
+		add: config.add !== undefined ? [...config.add] : undefined,
+		remove: config.remove !== undefined ? [...config.remove] : undefined,
+	};
+}
+
+function cloneAdvancedConfig(config: AdvancedConfig): AdvancedConfig {
+	return { ...config };
+}
+
+function cloneRoleConfig(config: RoleConfig): RoleConfig {
+	const base: RoleConfig = {
 		tools: [...config.tools],
 		mcp: [...config.mcp],
 		skills:
 			typeof config.skills === "string"
 				? config.skills
-				: {
-						categories: [...config.skills.categories],
-					},
+				: isV2SkillConfig(config.skills)
+					? cloneSkillConfig(config.skills)
+					: {
+							categories: [...(config.skills as { categories: string[] }).categories],
+						},
 	};
+	if (config.fallback !== undefined) {
+		base.fallback = config.fallback;
+	}
+	if (config.advanced !== undefined) {
+		base.advanced = cloneAdvancedConfig(config.advanced);
+	}
+	return base;
 }
 
 function cloneSubagentConfig(config: SubagentConfig): SubagentConfig {
-	return {
+	const base: SubagentConfig = {
 		mcp: [...config.mcp],
 	};
+	if (config.skills !== undefined) {
+		base.skills = cloneSkillConfig(config.skills);
+	}
+	if (config.tools !== undefined) {
+		base.tools = Array.isArray(config.tools)
+			? [...config.tools]
+			: cloneToolsInheritConfig(config.tools as ToolsInheritConfig);
+	}
+	if (config.fallback !== undefined) {
+		base.fallback = config.fallback;
+	}
+	if (config.advanced !== undefined) {
+		base.advanced = cloneAdvancedConfig(config.advanced);
+	}
+	return base;
 }
 
 function cloneRolesConfig(config: RolesConfigData): RolesConfigData {
@@ -269,7 +371,11 @@ export class RolesConfig {
 		if (skills === "all") {
 			return [...SKILL_CATEGORIES];
 		}
-		return [...skills.categories];
+		// V2 SkillConfig ({ auto, frontmatter }) has no category list — return empty
+		if (isV2SkillConfig(skills)) {
+			return [];
+		}
+		return [...(skills as { categories: string[] }).categories];
 	}
 
 	#persistConfig(config: RolesConfigData): void {
@@ -333,5 +439,146 @@ export class RolesConfig {
 		}
 		const fallbackSubagent = config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default;
 		return normalizeMcpServers(fallbackSubagent.mcp);
+	}
+
+	// --- V2 accessors ---
+
+	/**
+	 * Returns the V2 SkillConfig for a role if the role uses V2 skills format.
+	 * Returns undefined for V1 format ("all", "none", { categories }).
+	 */
+	getSkillConfigForRole(role: string): SkillConfig | undefined {
+		const roleConfig = this.#getRole(role);
+		if (isV2SkillConfig(roleConfig.skills)) {
+			return cloneSkillConfig(roleConfig.skills);
+		}
+		return undefined;
+	}
+
+	/**
+	 * Returns the V2 SkillConfig stored in a subagent's config.
+	 * Returns undefined if no skills config is set or it is not V2 format.
+	 */
+	getSkillConfigForSubagent(agent: string): SkillConfig | undefined {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent];
+		if (!subagentConfig?.skills) {
+			return undefined;
+		}
+		if (isV2SkillConfig(subagentConfig.skills)) {
+			return cloneSkillConfig(subagentConfig.skills);
+		}
+		return undefined;
+	}
+
+	/** Sets V2 SkillConfig for a role and persists. */
+	setSkillConfigForRole(role: string, skillConfig: SkillConfig): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		config.roles[role] = {
+			...cloneRoleConfig(roleConfig),
+			skills: cloneSkillConfig(skillConfig),
+		};
+		this.#persistConfig(config);
+	}
+
+	/** Sets V2 SkillConfig for a subagent and persists. */
+	setSkillConfigForSubagent(agent: string, skillConfig: SkillConfig): void {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
+		config.subagents[agent] = {
+			...cloneSubagentConfig(subagentConfig),
+			skills: cloneSkillConfig(skillConfig),
+		};
+		this.#persistConfig(config);
+	}
+
+	/**
+	 * Resolves the effective tool list for a subagent.
+	 *
+	 * - If the subagent has no tools config: returns null (caller uses agent defaults).
+	 * - If tools is a direct array: returns a copy.
+	 * - If tools is a ToolsInheritConfig: resolves by inheriting from the named role
+	 *   (defaulting to "default"), then applying `add` and `remove` patches.
+	 */
+	getToolsForSubagent(agent: string): string[] | null {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent];
+		if (!subagentConfig || subagentConfig.tools === undefined) {
+			return null;
+		}
+
+		const tools = subagentConfig.tools;
+
+		if (Array.isArray(tools)) {
+			return [...tools];
+		}
+
+		// ToolsInheritConfig — resolve inheritance
+		const toolsInherit = tools as ToolsInheritConfig;
+		const inheritFrom = toolsInherit.inherit ?? "default";
+		let result = [...this.getToolsForRole(inheritFrom)];
+
+		if (toolsInherit.add) {
+			result = [...result, ...toolsInherit.add];
+		}
+		if (toolsInherit.remove) {
+			const toRemove = new Set(toolsInherit.remove);
+			result = result.filter(t => !toRemove.has(t));
+		}
+
+		return result;
+	}
+
+	/** Writes a ToolsInheritConfig to a subagent and persists. */
+	setToolsForSubagent(agent: string, toolsConfig: ToolsInheritConfig): void {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
+		config.subagents[agent] = {
+			...cloneSubagentConfig(subagentConfig),
+			tools: cloneToolsInheritConfig(toolsConfig),
+		};
+		this.#persistConfig(config);
+	}
+
+	/** Writes MCP server list to a subagent entry and persists. */
+	setMcpForSubagent(agent: string, servers: string[]): void {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
+		config.subagents[agent] = {
+			...cloneSubagentConfig(subagentConfig),
+			mcp: normalizeMcpServers(servers),
+		};
+		this.#persistConfig(config);
+	}
+
+	/**
+	 * Routes a partial config write to the correct section.
+	 *
+	 * Resolution order: roles first, then subagents. New agent names default to subagents.
+	 *
+	 * **Limitation**: when a name appears in both `roles` and `subagents` (e.g., `implement`
+	 * in the default V1 config), this method always writes to `roles`. Use the dedicated
+	 * `setSkillConfigForSubagent` / `setMcpForSubagent` / `setToolsForSubagent` methods to
+	 * update the subagent entry for such names explicitly.
+	 */
+	setConfigForAgent(agentName: string, agentConfig: Partial<RoleConfigV2 | SubagentConfigV2>): void {
+		const config = this.#getConfig();
+
+		if (agentName in config.roles) {
+			const roleConfig = config.roles[agentName] ?? DEFAULT_ROLES_CONFIG.roles.default;
+			config.roles[agentName] = {
+				...cloneRoleConfig(roleConfig),
+				...agentConfig,
+			} as RoleConfigV2;
+		} else {
+			const subagentConfig = config.subagents[agentName] ?? { mcp: [] };
+			config.subagents[agentName] = {
+				...cloneSubagentConfig(subagentConfig),
+				...agentConfig,
+			} as SubagentConfigV2;
+		}
+
+		this.#persistConfig(config);
 	}
 }

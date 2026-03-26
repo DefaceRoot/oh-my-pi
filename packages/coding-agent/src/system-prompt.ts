@@ -64,6 +64,8 @@ function getSkillCategoriesForMode(mode: MainPromptMode): string[] | null {
 	const roleSkills = DEFAULT_ROLES_CONFIG.roles[mode].skills;
 	if (roleSkills === "all") return null;
 	if (roleSkills === "none") return [];
+	// V2 SkillConfig ({ auto, frontmatter }) has no category list
+	if (!("categories" in roleSkills)) return [];
 	return [...roleSkills.categories];
 }
 
