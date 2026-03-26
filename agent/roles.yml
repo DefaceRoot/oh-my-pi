@@ -1,6 +1,6 @@
-roles: 
-  default: 
-    tools: 
+roles:
+  default:
+    tools:
       - read
       - write
       - edit
@@ -23,28 +23,46 @@ roles:
       - rewind
       - browser
       - resolve
-    mcp: 
+    mcp:
       - augment
       - ref
     skills: all
-  orchestrator: 
-    tools: 
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  orchestrator:
+    tools:
       - read
       - bash
       - task
-      - await
       - cancel_job
+      - await
       - todo_write
       - ask
-    mcp: 
+    mcp:
       - augment
       - ref
-    skills: 
-      categories: 
-        - workflow
-        - infra
-  plan: 
-    tools: 
+    skills:
+      auto:
+        - commit-hygiene
+        - verification-before-completion
+        - dispatching-parallel-agents
+        - grafana-dashboards
+        - qa-test-planner
+        - agent-browser
+        - dragonglass-phased-cleanup
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  plan:
+    tools:
       - read
       - write
       - edit
@@ -65,15 +83,31 @@ roles:
       - render_mermaid
       - resolve
       - exit_plan_mode
-    mcp: 
+    mcp:
       - augment
       - ref
-    skills: 
-      categories: 
-        - planning
-        - workflow
-  ask: 
-    tools: 
+    skills:
+      auto:
+        - brainstorming
+        - generate-creative-ideas
+        - writing-plans
+        - validate-implementation-plan
+        - code-review-foundations
+        - commit-hygiene
+        - dispatching-parallel-agents
+        - systematic-debugging
+        - verification-before-completion
+        - using-git-worktrees
+        - using-tmux-for-interactive-commands
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  ask:
+    tools:
       - read
       - find
       - grep
@@ -82,515 +116,355 @@ roles:
       - lsp
       - task
       - submit_result
-    mcp: 
+    mcp:
       - augment
       - ref
-    skills: none
-  explore: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+subagents:
+  implement:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
-    skills: all
-  implement: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-      - ref
-    skills: all
-  code-reviewer: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-      - ref
-    skills: all
-  designer: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  designer:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - chrome-devtools
       - ref
-    skills: all
-  research: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  debug:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
+      - chrome-devtools
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  explore:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
       - better-context
-    skills: all
-  grafana: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+      - ref
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  research:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+      - better-context
+      - ref
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  grafana:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - chrome-devtools
       - grafana
-    skills: all
-  verifier: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  verifier:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - chrome-devtools
       - ref
-    skills: all
-  coderabbit: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  plan-verifier: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  plan-verifier:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - chrome-devtools
       - ref
-    skills: all
-  debug: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  coderabbit:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  commit:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  lint:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  merge:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  curator:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  worktree-setup:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
+      - augment
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  vision:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
-      - chrome-devtools
-    skills: all
-  commit: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  lint: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  merge: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  curator: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  worktree-setup: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
-      - augment
-    skills: all
-  vision: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  task:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
-    skills: all
-  task: 
-    tools: 
-      - read
-      - write
-      - edit
-      - find
-      - grep
-      - bash
-      - python
-      - ssh
-      - web_search
-      - fetch
-      - lsp
-      - ast_grep
-      - ast_edit
-      - task
-      - cancel_job
-      - await
-      - todo_write
-      - ask
-      - checkpoint
-      - rewind
-      - browser
-      - resolve
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  code-reviewer:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
-    skills: all
-subagents: 
-  designer: 
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  ask-explore:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp: []
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  ask-research:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
-      - chrome-devtools
       - ref
-  grafana: 
-    mcp: 
-      - augment
-      - grafana
-      - ref
-  research: 
-    mcp: 
-      - augment
-      - better-context
-      - ref
-  explore: 
-    mcp: 
-      - augment
-      - better-context
-      - ref
-  ask-explore: 
-    mcp: 
-      []
-  ask-research: 
-    mcp: 
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
+  _default:
+    tools:
+      inherit: default
+      add: []
+      remove: []
+    mcp:
       - augment
       - ref
-  _default: 
-    mcp: 
-      - augment
-      - ref
+    skills:
+      auto: []
+      frontmatter: []
+    fallback: null
+    advanced:
+      thinkingLevel: null
+      maxRecursionDepth: null
+      compactionStrategy: null
+      temperature: null
