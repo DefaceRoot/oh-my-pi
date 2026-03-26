@@ -81,6 +81,10 @@ Always populate: `passed`, `failure_count`, `failureCount`, `errors`, `checks_ru
 Set `failureCount` equal to `failure_count` for compatibility.
 If no checks exist in the requested scope, return `passed: true`, failure counts `0`, and record the reason in `checks_run`.
 Limit `errors` to the 50 most important actionable entries.
+Always set `outcome` alongside `data` in the `result` object:
+- `outcome.status`: `"pass"` when `passed` is `true`, `"fail"` when `false`
+- `outcome.label`: `"lint"`
+- `outcome.summary`: 1 sentence (e.g., `"All 3 checks passed"` or `"2 errors in 1 check"`).
 </output_contract>
 
 <critical>

@@ -164,4 +164,8 @@ When committing a multi-line message, write it to a temp file and use `git commi
 <critical>
 Always call `submit_result` exactly once with the structured output.
 If any guardrail or validation fails, set `success=false` and provide a specific `error`.
+Always set `outcome` alongside `data` in the `result` object:
+- `outcome.status`: `"pass"` when `success` is `true`, `"fail"` when `false`
+- `outcome.label`: `"commit"`
+- `outcome.summary`: the `summary` field value
 </critical>
