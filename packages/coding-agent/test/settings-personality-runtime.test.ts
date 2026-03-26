@@ -53,12 +53,16 @@ describe("personality setting prompt integration", () => {
 	});
 
 	it("uses the technical personality when configured", async () => {
-		const defaultPrompt = await renderSessionPrompt(Settings.isolated());
 		const technicalPrompt = await renderSessionPrompt(Settings.isolated({ personality: "technical" }));
-		const technicalLine = "- (1) Correctness first, (2) Brevity second, (3) Politeness third.";
+		const correctnessLine = "- (1) Correctness first, (2) Brevity second, (3) Politeness third.";
 
-		expect(countOccurrences(defaultPrompt, technicalLine)).toBe(1);
-		expect(countOccurrences(technicalPrompt, technicalLine)).toBe(2);
+		expect(countOccurrences(technicalPrompt, correctnessLine)).toBe(1);
 		expect(technicalPrompt).not.toContain("## What was wrong");
+	});
+
+	it("plain-english personality does not contain hardcoded communication block", async () => {
+		const prompt = await renderSessionPrompt(Settings.isolated());
+
+		expect(prompt).not.toContain("No emojis, filler, or ceremony");
 	});
 });
