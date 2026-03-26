@@ -7,7 +7,6 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
 type RolesConfigContract = {
 	getToolsForRole(role: string): string[] | Promise<string[]>;
 	getMcpForRole(role: string): string[] | Promise<string[]>;
-	getSkillCategoriesForRole(role: string): string[] | Promise<string[]>;
 	getMcpForSubagent(agentName: string): string[] | Promise<string[]>;
 	// V2 accessors
 	getSkillConfigForRole(role: string): { auto: string[]; frontmatter: string[] } | undefined;
@@ -83,7 +82,6 @@ subagents:
 
 		expect(await resolveArray(rolesConfig.getToolsForRole("default"))).toEqual(["read", "grep"]);
 		expect(await resolveArray(rolesConfig.getMcpForRole("default"))).toEqual(["augment"]);
-		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("default"))).toEqual(["workflow"]);
 	});
 
 	it("falls back to hardcoded defaults when roles.yml is missing", async () => {
@@ -196,49 +194,8 @@ subagents:
 		expect(await resolveArray(rolesConfig.getMcpForRole("unknown-role"))).toEqual(["augment"]);
 	});
 
-	it("resolves configured skill categories per role", async () => {
-		await writeRoles(`roles:
-  default:
-    tools:
-      - read
-    mcp:
-      - augment
-    skills:
-      categories:
-        - implementation
-        - frontend
-  plan:
-    tools:
-      - read
-    mcp:
-      - augment
-    skills:
-      categories:
-        - planning
-        - workflow
-  ask:
-    tools:
-      - read
-    mcp:
-      - augment
-    skills: none
-subagents:
-  _default:
-    mcp:
-      - augment
-`);
-
-		const { RolesConfig } = await loadRolesConfigModule();
-		const rolesConfig = new RolesConfig(rolesPath);
-
-		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("default"))).toEqual([
-			"implementation",
-			"frontend",
-		]);
-		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("plan"))).toEqual(["planning", "workflow"]);
-		expect(await resolveArray(rolesConfig.getSkillCategoriesForRole("ask"))).toEqual([]);
-	});
 });
+
 describe("RolesConfig V2 accessors", () => {
 	let tempDir: string;
 	let rolesPath: string;

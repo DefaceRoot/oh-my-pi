@@ -21,7 +21,7 @@ type MainRole = "default" | "orchestrator" | "plan" | "ask";
 
 const ROLE_TOOL_COUNT_TARGETS: Record<MainRole, number> = {
 	default: 22,
-	orchestrator: 6,
+	orchestrator: 7,
 	plan: 20,
 	ask: 7,
 };
@@ -157,12 +157,21 @@ function assertToolGuidanceExclusions(prompt: string, role: MainRole): void {
 	}
 }
 
+function skillsForRole(role: MainRole): Skill[] {
+	const skillConfig = DEFAULT_ROLES_CONFIG.roles[role]?.skills;
+	if (!skillConfig || skillConfig === "all" || skillConfig === "none" || typeof skillConfig !== "object" || !("auto" in skillConfig)) {
+		return TEST_SKILLS;
+	}
+	const autoSet = new Set((skillConfig as { auto: string[] }).auto);
+	return TEST_SKILLS.filter(s => autoSet.has(s.name));
+}
+
 async function renderPromptForRole(role: MainRole): Promise<string> {
 	return await buildSystemPrompt({
 		mode: role,
 		cwd: os.tmpdir(),
 		tools: createRoleTools(role),
-		skills: TEST_SKILLS,
+		skills: skillsForRole(role),
 		contextFiles: [],
 		rules: [],
 	});

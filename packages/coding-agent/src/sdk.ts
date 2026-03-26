@@ -1413,9 +1413,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			appendPrompt = parts.join("\n\n");
 		}
+		// Compute effective skills for this mode: use role's V2 skill config when no explicit config was given
+		const effectiveSkills = await (async () => {
+			if (options.skillConfig) return skills; // explicit config already applied at session creation
+			const roleSkillConfig = rolesConfig.getSkillConfigForRole(currentMode);
+			if (roleSkillConfig) return await loadSkillsWithConfig(skills, roleSkillConfig);
+			return skills; // V1 "all" or no config → pass all skills through
+		})();
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
-			skills,
+			skills: effectiveSkills,
 			contextFiles,
 			tools: promptTools,
 			toolNames,
@@ -1437,7 +1444,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (typeof options.systemPrompt === "string") {
 			return await buildSystemPromptInternal({
 				cwd,
-				skills,
+				skills: effectiveSkills,
 				contextFiles,
 				tools: promptTools,
 				toolNames,

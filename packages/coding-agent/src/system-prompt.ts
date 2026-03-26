@@ -11,10 +11,9 @@ import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { renderPromptTemplate } from "./config/prompt-templates";
-import { DEFAULT_ROLES_CONFIG } from "./config/roles-config";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
-import { filterSkillsByCategories, loadSkills, type Skill } from "./extensibility/skills";
+import { loadSkills, type Skill } from "./extensibility/skills";
 import plainEnglishPersonalityPrompt from "./prompts/personalities/plain-english.md" with { type: "text" };
 import technicalPersonalityPrompt from "./prompts/personalities/technical.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
@@ -58,15 +57,6 @@ function getPersonalityPrompt(personality: PromptPersonality | undefined): strin
 	if (personality === "plain-english") return plainEnglishPersonalityPrompt;
 	if (personality === "technical") return technicalPersonalityPrompt;
 	return undefined;
-}
-
-function getSkillCategoriesForMode(mode: MainPromptMode): string[] | null {
-	const roleSkills = DEFAULT_ROLES_CONFIG.roles[mode].skills;
-	if (roleSkills === "all") return null;
-	if (roleSkills === "none") return [];
-	// V2 SkillConfig ({ auto, frontmatter }) has no category list
-	if (!("categories" in roleSkills)) return [];
-	return [...roleSkills.categories];
 }
 
 interface AgentsMdSearch {
@@ -472,7 +462,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mode = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
-	const modeSkillCategories = getSkillCategoriesForMode(mode);
 
 	const prepPromise = (() => {
 		const systemPromptCustomizationPromise = logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, {
@@ -486,7 +475,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			providedSkills !== undefined
 				? Promise.resolve(providedSkills)
 				: skillsSettings?.enabled !== false
-					? loadSkills({ ...skillsSettings, cwd: resolvedCwd, categories: modeSkillCategories ?? undefined }).then(
+					? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(
 							result => result.skills,
 						)
 					: Promise.resolve([]);
@@ -586,10 +575,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		description: tools?.get(name)?.description ?? "",
 	}));
 
-	// Filter skills by mode first, then by read-tool availability
-	const skillsForMode = modeSkillCategories === null ? skills : filterSkillsByCategories(skills, modeSkillCategories);
+	// Filter by read-tool availability
 	const hasRead = tools?.has("read");
-	const filteredSkills = hasRead ? skillsForMode : [];
+	const filteredSkills = hasRead ? skills : [];
 
 	// Separate by mode if skills carry mode info (backward compat: skills without mode field → auto)
 	const autoSkills = filteredSkills.filter(s => !("mode" in s) || s.mode === "auto");

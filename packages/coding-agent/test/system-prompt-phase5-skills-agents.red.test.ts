@@ -69,10 +69,10 @@ describe("Phase 5 RED: per-mode skill filtering", () => {
 		expect(prompt.includes("## simplify")).toBe(true);
 	});
 
-	it("ask mode loads no skills", async () => {
+	it("ask mode with no pre-filtered skills shows no skills", async () => {
 		const prompt = await renderPromptForRole("ask", {
 			cwd: os.tmpdir(),
-			skills: TEST_SKILLS,
+			skills: [], // ask role has skills: none — caller pre-filters to empty
 		});
 
 		expect(prompt.includes("## brainstorming")).toBe(false);
@@ -80,10 +80,12 @@ describe("Phase 5 RED: per-mode skill filtering", () => {
 		expect(prompt.includes("## simplify")).toBe(false);
 	});
 
-	it("plan mode keeps planning and workflow skills only", async () => {
+	it("plan mode renders only the pre-filtered planning and workflow skills", async () => {
+		// Skills arrive pre-filtered by the caller; plan role allows planning+workflow categories
+		const planSkills = TEST_SKILLS.filter(s => s.name !== "simplify");
 		const prompt = await renderPromptForRole("plan", {
 			cwd: os.tmpdir(),
-			skills: TEST_SKILLS,
+			skills: planSkills,
 		});
 
 		expect(prompt.includes("## brainstorming")).toBe(true);

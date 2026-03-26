@@ -81,42 +81,6 @@ export type RolesConfigData = Static<typeof RolesConfigSchema>;
 export type RoleConfigV2 = RoleConfig;
 export type SubagentConfigV2 = SubagentConfig;
 
-export const SKILL_CATEGORY_TO_SKILLS: Record<string, string[]> = {
-	workflow: [
-		"code-review-foundations",
-		"commit-hygiene",
-		"dispatching-parallel-agents",
-		"systematic-debugging",
-		"verification-before-completion",
-		"using-git-worktrees",
-		"using-tmux-for-interactive-commands",
-	],
-	orchestration: ["commit-hygiene", "verification-before-completion", "dispatching-parallel-agents"],
-	planning: ["brainstorming", "generate-creative-ideas", "writing-plans", "validate-implementation-plan"],
-	implementation: [
-		"test-driven-development",
-		"error-handling-patterns",
-		"e2e-testing-patterns",
-		"auth-implementation-patterns",
-		"fastapi-templates",
-		"monorepo-management",
-		"security-review",
-		"simplify",
-	],
-	frontend: [
-		"frontend-design",
-		"framer-motion-best-practices",
-		"vercel-react-best-practices",
-		"ui-ux-pro-max",
-		"web-design-guidelines",
-		"svg-art",
-	],
-	meta: ["skill-creator", "oh-my-pi-customization", "find-skills", "system-prompts", "semantic-compression"],
-	infra: ["grafana-dashboards", "qa-test-planner", "agent-browser", "dragonglass-phased-cleanup"],
-};
-
-export const SKILL_CATEGORIES = Object.keys(SKILL_CATEGORY_TO_SKILLS);
-
 const ALWAYS_ON_MCP_SERVER = "augment";
 
 function normalizeMcpServers(servers: readonly string[]): string[] {
@@ -159,7 +123,16 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			tools: ["read", "bash", "task", "cancel_job", "await", "todo_write", "ask"],
 			mcp: ["augment"],
 			skills: {
-				categories: ["orchestration"],
+				auto: [
+					"commit-hygiene",
+					"verification-before-completion",
+					"dispatching-parallel-agents",
+					"grafana-dashboards",
+					"qa-test-planner",
+					"agent-browser",
+					"dragonglass-phased-cleanup",
+				],
+				frontmatter: [],
 			},
 		},
 		plan: {
@@ -187,13 +160,26 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 			],
 			mcp: ["augment"],
 			skills: {
-				categories: ["planning", "workflow"],
+				auto: [
+					"brainstorming",
+					"generate-creative-ideas",
+					"writing-plans",
+					"validate-implementation-plan",
+					"code-review-foundations",
+					"commit-hygiene",
+					"dispatching-parallel-agents",
+					"systematic-debugging",
+					"verification-before-completion",
+					"using-git-worktrees",
+					"using-tmux-for-interactive-commands",
+				],
+				frontmatter: [],
 			},
 		},
 		ask: {
 			tools: ["read", "find", "grep", "fetch", "web_search", "lsp", "submit_result"],
 			mcp: ["augment"],
-			skills: "none",
+			skills: { auto: [], frontmatter: [] },
 		},
 		implement: {
 			tools: [
@@ -364,20 +350,6 @@ export class RolesConfig {
 		return config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
 	}
 
-	#getSkillCategories(skills: RoleSkillsConfig): string[] {
-		if (skills === "none") {
-			return [];
-		}
-		if (skills === "all") {
-			return [...SKILL_CATEGORIES];
-		}
-		// V2 SkillConfig ({ auto, frontmatter }) has no category list — return empty
-		if (isV2SkillConfig(skills)) {
-			return [];
-		}
-		return [...(skills as { categories: string[] }).categories];
-	}
-
 	#persistConfig(config: RolesConfigData): void {
 		const configPath = this.#configFile.path();
 		const serialized =
@@ -427,10 +399,6 @@ export class RolesConfig {
 		this.#persistConfig(config);
 	}
 
-	getSkillCategoriesForRole(role: string): string[] {
-		return this.#getSkillCategories(this.#getRole(role).skills);
-	}
-
 	getMcpForSubagent(agentName: string): string[] {
 		const config = this.#getConfig();
 		const namedSubagent = config.subagents[agentName];
@@ -445,13 +413,19 @@ export class RolesConfig {
 
 	/**
 	 * Returns the V2 SkillConfig for a role if the role uses V2 skills format.
-	 * Returns undefined for V1 format ("all", "none", { categories }).
+	 * V1 "none" is migrated to an empty V2 config (no skills).
+	 * V1 "all" or V1 { categories } returns undefined (caller passes all skills through).
 	 */
 	getSkillConfigForRole(role: string): SkillConfig | undefined {
 		const roleConfig = this.#getRole(role);
 		if (isV2SkillConfig(roleConfig.skills)) {
 			return cloneSkillConfig(roleConfig.skills);
 		}
+		// Migrate V1 "none" → V2 empty config to preserve the restriction
+		if (roleConfig.skills === "none") {
+			return { auto: [], frontmatter: [] };
+		}
+		// V1 "all" or V1 { categories } → return undefined (pass all skills through)
 		return undefined;
 	}
 
