@@ -140,6 +140,8 @@ Loaded via symbolic link.
 			filePath: "/fake/path/SKILL.md",
 			baseDir: "/fake/path",
 			source: "custom" as const,
+			mode: 'auto' as const,
+			content: '',
 		};
 
 		const { session } = await createAgentSession({

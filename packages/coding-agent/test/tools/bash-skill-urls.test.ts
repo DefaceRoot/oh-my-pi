@@ -17,6 +17,8 @@ function createSkill(name: string, baseDir: string): Skill {
 		filePath: path.join(resolvedBaseDir, "SKILL.md"),
 		baseDir: resolvedBaseDir,
 		source: "test",
+		mode: 'auto' as const,
+		content: '',
 	};
 }
 

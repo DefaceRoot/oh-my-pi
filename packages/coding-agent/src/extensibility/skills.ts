@@ -4,10 +4,13 @@ import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import { SKILL_CATEGORY_TO_SKILLS } from "../config/roles-config";
+import type { SkillConfig } from "../config/roles-config";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
 import { expandTilde } from "../tools/path-utils";
+
+export type SkillMode = 'auto' | 'frontmatter';
 
 export interface Skill {
 	name: string;
@@ -17,6 +20,10 @@ export interface Skill {
 	source: string;
 	/** Source metadata for display */
 	_source?: SourceMeta;
+	/** How this skill is included in the prompt */
+	mode: SkillMode;
+	/** Full SKILL.md body for auto mode; summary for frontmatter mode */
+	content: string;
 }
 
 export interface SkillWarning {
@@ -58,6 +65,8 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
 			source: options.source,
 			_source: capSkill._source,
+			mode: 'auto' as const,
+			content: capSkill.content,
 		})),
 		warnings: (result.warnings ?? []).map(message => ({ skillPath: options.dir, message })),
 	};
@@ -224,6 +233,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
 				_source: capSkill._source,
+				mode: 'auto' as const,
+				content: capSkill.content,
 			});
 			realPathSet.add(resolvedPath);
 		}
@@ -261,6 +272,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
 					source: "custom:user",
 					_source: { ...capSkill._source, providerName: "Custom" },
+					mode: 'auto' as const,
+					content: capSkill.content,
 				},
 				path: capSkill.path,
 			});
@@ -303,4 +316,37 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		skills,
 		warnings: [...(result.warnings ?? []).map(w => ({ skillPath: "", message: w })), ...collisionWarnings],
 	};
+}
+
+
+/**
+ * Filter and transform a set of already-loaded skills according to a SkillConfig.
+ * Skills in the auto list get full SKILL.md content; skills in the frontmatter list get
+ * a brief summary. Skills absent from both lists are excluded.
+ * If a skill appears in both lists, auto takes precedence.
+ */
+export async function loadSkillsWithConfig(
+	allSkills: Skill[],
+	config: SkillConfig,
+): Promise<Skill[]> {
+	const result: Skill[] = [];
+	const autoSet = new Set(config.auto);
+	const frontmatterSet = new Set(config.frontmatter);
+
+	for (const skill of allSkills) {
+		if (autoSet.has(skill.name)) {
+			if (frontmatterSet.has(skill.name)) {
+				console.warn(`[skills] Skill "${skill.name}" is in both auto and frontmatter lists; auto takes precedence`);
+			}
+			result.push({ ...skill, mode: 'auto', content: skill.content });
+		} else if (frontmatterSet.has(skill.name)) {
+			result.push({ ...skill, mode: 'frontmatter', content: buildFrontmatterSummary(skill) });
+		}
+		// Skills absent from both lists are excluded
+	}
+	return result;
+}
+
+function buildFrontmatterSummary(skill: Skill): string {
+	return skill.description || skill.name;
 }

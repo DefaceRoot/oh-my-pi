@@ -8,6 +8,7 @@ import {
 	filterSkillsByCategories,
 	loadSkills,
 	loadSkillsFromDir,
+	loadSkillsWithConfig,
 	type Skill,
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 
@@ -143,6 +144,8 @@ describe("skills", () => {
 			filePath: `/tmp/${name}/SKILL.md`,
 			baseDir: `/tmp/${name}`,
 			source: "test",
+			mode: 'auto' as const,
+			content: '',
 		});
 
 		it("keeps shared skills available through both categories", () => {
@@ -460,6 +463,71 @@ description: Skill loaded from a tilde-expanded custom directory.
 			expect(skillMap.get("calendar")?.source).toBe("first");
 			expect(collisionWarnings).toHaveLength(1);
 			expect(collisionWarnings[0].message).toContain("name collision");
+		});
+	});
+	describe("loadSkillsWithConfig", () => {
+		const makeSkill = (name: string, content: string = "full content for " + name): Skill => ({
+			name,
+			description: `${name} description`,
+			filePath: `/tmp/${name}/SKILL.md`,
+			baseDir: `/tmp/${name}`,
+			source: "test",
+			mode: 'auto' as const,
+			content,
+		});
+
+		const autoSkill = makeSkill("auto-skill", "Full SKILL.md content");
+		const fmSkill = makeSkill("frontmatter-skill", "Some body content");
+		const disabledSkill = makeSkill("disabled-skill", "Should not appear");
+		const bothSkill = makeSkill("both-skill", "Both list content");
+		const allSkills = [autoSkill, fmSkill, disabledSkill, bothSkill];
+
+		it("auto mode returns full content with mode='auto'", async () => {
+			const result = await loadSkillsWithConfig(allSkills, { auto: ["auto-skill"], frontmatter: [] });
+			expect(result).toHaveLength(1);
+			expect(result[0].name).toBe("auto-skill");
+			expect(result[0].mode).toBe("auto");
+			expect(result[0].content).toBe("Full SKILL.md content");
+		});
+
+		it("frontmatter mode returns description summary with mode='frontmatter'", async () => {
+			const result = await loadSkillsWithConfig(allSkills, { auto: [], frontmatter: ["frontmatter-skill"] });
+			expect(result).toHaveLength(1);
+			expect(result[0].name).toBe("frontmatter-skill");
+			expect(result[0].mode).toBe("frontmatter");
+			expect(result[0].content).toBe("frontmatter-skill description");
+		});
+
+		it("disabled skills excluded when absent from both lists", async () => {
+			const result = await loadSkillsWithConfig(allSkills, {
+				auto: ["auto-skill"],
+				frontmatter: ["frontmatter-skill"],
+			});
+			expect(result.some(s => s.name === "disabled-skill")).toBe(false);
+			expect(result).toHaveLength(2);
+		});
+
+		it("skill in both lists uses auto mode", async () => {
+			const result = await loadSkillsWithConfig(allSkills, {
+				auto: ["both-skill"],
+				frontmatter: ["both-skill"],
+			});
+			expect(result).toHaveLength(1);
+			expect(result[0].mode).toBe("auto");
+			expect(result[0].content).toBe("Both list content");
+		});
+
+		it("empty config returns no skills", async () => {
+			const result = await loadSkillsWithConfig(allSkills, { auto: [], frontmatter: [] });
+			expect(result).toHaveLength(0);
+		});
+
+		it("unknown skill names in config are silently ignored", async () => {
+			const result = await loadSkillsWithConfig(allSkills, {
+				auto: ["nonexistent-skill"],
+				frontmatter: ["also-unknown"],
+			});
+			expect(result).toHaveLength(0);
 		});
 	});
 });

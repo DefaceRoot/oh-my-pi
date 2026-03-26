@@ -15,6 +15,8 @@ const TEST_SKILLS: Skill[] = [
 		filePath: "/tmp/skills/brainstorming/SKILL.md",
 		baseDir: "/tmp/skills/brainstorming",
 		source: "test",
+		mode: 'auto' as const,
+		content: '',
 	},
 	{
 		name: "commit-hygiene",
@@ -22,6 +24,8 @@ const TEST_SKILLS: Skill[] = [
 		filePath: "/tmp/skills/commit-hygiene/SKILL.md",
 		baseDir: "/tmp/skills/commit-hygiene",
 		source: "test",
+		mode: 'auto' as const,
+		content: '',
 	},
 	{
 		name: "simplify",
@@ -29,6 +33,8 @@ const TEST_SKILLS: Skill[] = [
 		filePath: "/tmp/skills/simplify/SKILL.md",
 		baseDir: "/tmp/skills/simplify",
 		source: "test",
+		mode: 'auto' as const,
+		content: '',
 	},
 ];
 
