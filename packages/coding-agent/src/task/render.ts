@@ -473,7 +473,8 @@ function summarizeCallAgents(args: TaskParams): string | undefined {
 	const defaultAgent = typeof args.agent === "string" && args.agent.trim().length > 0 ? args.agent.trim() : undefined;
 	const agentNames = new Set<string>();
 	for (const task of args.tasks ?? []) {
-		const taskAgent = typeof task.agent === "string" && task.agent.trim().length > 0 ? task.agent.trim() : defaultAgent;
+		const taskAgent =
+			typeof task.agent === "string" && task.agent.trim().length > 0 ? task.agent.trim() : defaultAgent;
 		if (taskAgent) agentNames.add(taskAgent);
 	}
 	if (agentNames.size === 0 && defaultAgent) {

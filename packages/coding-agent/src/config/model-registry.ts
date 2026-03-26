@@ -823,7 +823,9 @@ export class ModelRegistry {
 						model = {
 							...model,
 							baseUrl: providerOverride.baseUrl ?? model.baseUrl,
-							headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
+							headers: providerOverride.headers
+								? { ...model.headers, ...providerOverride.headers }
+								: model.headers,
 							compat: mergeCompat(model.compat, providerOverride.compat),
 						};
 					}

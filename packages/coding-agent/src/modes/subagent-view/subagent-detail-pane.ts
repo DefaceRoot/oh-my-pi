@@ -198,7 +198,14 @@ export class SubagentDetailPane extends Container {
 	}
 
 	#addSessionContextSection(ref: SubagentViewRef): void {
-		if (!ref.sessionId && !ref.parentSessionId && !ref.parentAgentName && ref.depth === undefined && !(ref.mcpServers?.length)) return;
+		if (
+			!ref.sessionId &&
+			!ref.parentSessionId &&
+			!ref.parentAgentName &&
+			ref.depth === undefined &&
+			!ref.mcpServers?.length
+		)
+			return;
 
 		this.addChild(new Text(theme.bold("Session"), 1, 0));
 
@@ -207,7 +214,9 @@ export class SubagentDetailPane extends Container {
 			this.addChild(new Text(`  ${theme.fg("text", "ID:")} ${theme.fg("dim", displayId)}`, 1, 0));
 		}
 		if (ref.parentSessionId) {
-			this.addChild(new Text(`  ${theme.fg("text", "Parent Session:")} ${theme.fg("dim", ref.parentSessionId)}`, 1, 0));
+			this.addChild(
+				new Text(`  ${theme.fg("text", "Parent Session:")} ${theme.fg("dim", ref.parentSessionId)}`, 1, 0),
+			);
 		}
 		if (ref.parentAgentName) {
 			this.addChild(new Text(`  ${theme.fg("text", "Parent:")} ${theme.fg("dim", ref.parentAgentName)}`, 1, 0));

@@ -340,8 +340,6 @@ describe("SessionManager.listAllGroupedByProject", () => {
 	});
 });
 
-
-
 describe("SessionManager.moveTo", () => {
 	const originalAgentDir = getAgentDir();
 	let tempDir: string;

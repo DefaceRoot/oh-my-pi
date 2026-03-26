@@ -37,9 +37,9 @@
         "mcp-grafana"
       ],
       "env": {
-        "GRAFANA_URL": "${GRAFANA_URL}",
+        "GRAFANA_URL": "!$PI_CODING_AGENT_DIR/scripts/resolve-monocle-grafana-url.sh",
         "GRAFANA_USERNAME": "${GRAFANA_USERNAME:-admin}",
-        "GRAFANA_PASSWORD": "${GRAFANA_PASSWORD}"
+        "GRAFANA_PASSWORD": "!$PI_CODING_AGENT_DIR/scripts/resolve-monocle-grafana-password.sh"
       },
       "enabled": true,
       "timeout": 120000

@@ -15,11 +15,10 @@ import { DEFAULT_ROLES_CONFIG } from "./config/roles-config";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { filterSkillsByCategories, loadSkills, type Skill } from "./extensibility/skills";
-import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
-import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import plainEnglishPersonalityPrompt from "./prompts/personalities/plain-english.md" with { type: "text" };
 import technicalPersonalityPrompt from "./prompts/personalities/technical.md" with { type: "text" };
-
+import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
+import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 
 function firstNonEmpty(...values: (string | undefined | null)[]): string | null {
 	for (const value of values) {
@@ -49,7 +48,10 @@ type MainPromptMode = "default" | "orchestrator" | "plan" | "ask";
 export type PromptPersonality = "plain-english" | "technical";
 
 function joinPromptSections(...sections: Array<string | undefined | null>): string {
-	return sections.map(section => section?.trim()).filter(Boolean).join("\n\n");
+	return sections
+		.map(section => section?.trim())
+		.filter(Boolean)
+		.join("\n\n");
 }
 
 function getPersonalityPrompt(personality: PromptPersonality | undefined): string | undefined {

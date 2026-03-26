@@ -116,7 +116,13 @@ describe("TaskTool async submit_result suppression", () => {
 			"call-1",
 			{
 				agent: "explore",
-				tasks: [{ id: "SubmitTask", description: "submit_result suppression task", assignment: "submit via submit_result" }],
+				tasks: [
+					{
+						id: "SubmitTask",
+						description: "submit_result suppression task",
+						assignment: "submit via submit_result",
+					},
+				],
 			},
 			undefined,
 			undefined,

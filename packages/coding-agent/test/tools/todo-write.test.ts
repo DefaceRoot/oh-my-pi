@@ -111,7 +111,11 @@ describe("TodoWriteTool auto-start behavior", () => {
 	});
 });
 
-function createMessageEntry(id: string, message: Record<string, unknown>, parentId: string | null = null): SessionEntry {
+function createMessageEntry(
+	id: string,
+	message: Record<string, unknown>,
+	parentId: string | null = null,
+): SessionEntry {
 	return {
 		type: "message",
 		id,

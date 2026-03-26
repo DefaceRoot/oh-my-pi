@@ -231,7 +231,7 @@ describe("TaskTool TOON wiring", () => {
 
 			await tool.execute("sync-call", {
 				agent: "explore",
-				context: "Legacy background that should be replaced by the builder payload.",
+				context: "Outer context supplied to task tool — appended after builder TOON.",
 				tasks: [
 					{
 						id: "SyncTask",
@@ -246,7 +246,9 @@ describe("TaskTool TOON wiring", () => {
 			expect(buildToonCalls[0]?.compactContext).toBe(inheritedContext);
 			expect(buildToonCalls[0]?.delegate).toBe("explore");
 			expect(runSubprocessCalls).toHaveLength(1);
-			expect(runSubprocessCalls[0]?.task).toBe(delegatedToon);
+			expect(runSubprocessCalls[0]?.task).toBe(
+				`${delegatedToon}\n\nOuter context supplied to task tool — appended after builder TOON.`,
+			);
 			expect(runSubprocessCalls[0]?.images).toEqual(images);
 		});
 	});
@@ -267,7 +269,7 @@ describe("TaskTool TOON wiring", () => {
 				"async-call",
 				{
 					agent: "explore",
-					context: "Legacy background that should not be rewrapped.",
+					context: "Additional outer context appended after builder TOON.",
 					tasks: [
 						{
 							id: "AsyncTask",
@@ -286,7 +288,9 @@ describe("TaskTool TOON wiring", () => {
 
 			expect(buildToonCalls).toHaveLength(1);
 			expect(runSubprocessCalls).toHaveLength(1);
-			expect(runSubprocessCalls[0]?.task).toBe(delegatedToon);
+			expect(runSubprocessCalls[0]?.task).toBe(
+				`${delegatedToon}\n\nAdditional outer context appended after builder TOON.`,
+			);
 			expect(runSubprocessCalls[0]?.images).toEqual(images);
 			expect(runSubprocessCalls[0]?.images).not.toEqual(laterImages);
 		});

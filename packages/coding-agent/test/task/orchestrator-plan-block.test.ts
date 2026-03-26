@@ -29,7 +29,7 @@ const availableAgents = [
 	"lint",
 	"code-reviewer",
 	"commit",
-] .map(name => ({
+].map(name => ({
 	name,
 	description: `${name} test agent`,
 	source: "bundled" as const,

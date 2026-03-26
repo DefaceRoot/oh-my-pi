@@ -267,7 +267,10 @@ describe("InteractiveMode subagent token loading", () => {
 					},
 				}),
 				JSON.stringify({ type: "handoff", target: "child-session" }),
-				JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "no usage" }] } }),
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "no usage" }] },
+				}),
 			].join("\n")}\n`,
 			"utf8",
 		);
@@ -277,7 +280,6 @@ describe("InteractiveMode subagent token loading", () => {
 
 		expect(tokens).toBe(6_018);
 	});
-
 
 	test("loadSubagentTranscript uses latest assistant usage instead of cumulative transcript totals", async () => {
 		const sessionPath = path.join(tempDir, "session-usage.jsonl");
@@ -700,7 +702,6 @@ describe("InteractiveMode subagent token loading", () => {
 		expect(statusText).toContain("tokens:17");
 		expect(statusText).not.toContain("120,000");
 	});
-
 
 	test("renderSubagentSession falls back to transcript identity when the snapshot ref is missing agent metadata", async () => {
 		const setContent = vi.fn();

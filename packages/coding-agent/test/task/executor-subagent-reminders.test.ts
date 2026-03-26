@@ -12,7 +12,6 @@ import type { AgentDefinition } from "../../src/task/types";
 const missingSubmitResultWarning =
 	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
 
-
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -666,7 +665,6 @@ describe("runSubprocess submit_result reminders", () => {
 			abortReason: "User stopped: pause and resume later",
 		});
 	});
-
 
 	it("marks pre-aborted subprocess with a concrete reason", async () => {
 		const abortController = new AbortController();

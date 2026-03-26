@@ -113,7 +113,6 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { collectDelegationContext } from "../task/delegation-context";
-import type { EventBus } from "../utils/event-bus";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
@@ -128,6 +127,7 @@ import {
 } from "../tools/todo-write";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
+import type { EventBus } from "../utils/event-bus";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
@@ -371,7 +371,7 @@ async function waitForCompletionWithTimeout(
 	promise: Promise<unknown>,
 	timeoutMs: number,
 	signal?: AbortSignal,
-	): Promise<boolean> {
+): Promise<boolean> {
 	if (timeoutMs <= 0 || signal?.aborted) return false;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let detachAbortListener: (() => void) | undefined;
@@ -400,7 +400,6 @@ async function waitForCompletionWithTimeout(
 		}
 	}
 }
-
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -529,52 +528,48 @@ export class AgentSession {
 		this.#asyncJobManager = config.asyncJobManager;
 		this.agent.beforeIdle = this.#asyncJobManager
 			? async signal => {
-				const manager = this.#asyncJobManager;
-				if (!manager || signal?.aborted) return;
-				const running = manager.getRunningJobs();
-				if (running.length === 0 && !manager.hasPendingDeliveries()) {
-					return;
+					const manager = this.#asyncJobManager;
+					if (!manager || signal?.aborted) return;
+					const running = manager.getRunningJobs();
+					if (running.length === 0 && !manager.hasPendingDeliveries()) {
+						return;
+					}
+
+					this.#beforeIdleAsyncDrainActive = true;
+					try {
+						if (running.length > 0) {
+							await waitForCompletionWithTimeout(
+								manager.waitForAll(),
+								BEFORE_IDLE_WAIT_FOR_JOBS_TIMEOUT_MS,
+								signal,
+							);
+							if (signal?.aborted) return;
+						}
+
+						if (manager.hasPendingDeliveries()) {
+							await waitForCompletionWithTimeout(
+								manager.drainDeliveries({ timeoutMs: BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS }),
+								BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS,
+								signal,
+							);
+							if (signal?.aborted) return;
+						}
+
+						// Suppress still-running jobs before the final delivery snapshot so any job that
+						// completes between these reads stays suppressed when it enqueues its result.
+						const stillRunning = manager.getRunningJobs();
+						if (stillRunning.length > 0) {
+							manager.acknowledgeDeliveries(stillRunning.map(job => job.id));
+						}
+
+						const remaining = manager.getDeliveryState();
+						if (remaining.pendingJobIds.length > 0) {
+							manager.acknowledgeDeliveries(remaining.pendingJobIds);
+						}
+					} finally {
+						this.#beforeIdleAsyncDrainActive = false;
+					}
 				}
-
-
-				this.#beforeIdleAsyncDrainActive = true;
-				try {
-					if (running.length > 0) {
-						await waitForCompletionWithTimeout(
-							manager.waitForAll(),
-							BEFORE_IDLE_WAIT_FOR_JOBS_TIMEOUT_MS,
-							signal,
-						);
-						if (signal?.aborted) return;
-					}
-
-
-					if (manager.hasPendingDeliveries()) {
-						await waitForCompletionWithTimeout(
-							manager.drainDeliveries({ timeoutMs: BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS }),
-							BEFORE_IDLE_DRAIN_DELIVERIES_TIMEOUT_MS,
-							signal,
-						);
-						if (signal?.aborted) return;
-					}
-
-
-					// Suppress still-running jobs before the final delivery snapshot so any job that
-					// completes between these reads stays suppressed when it enqueues its result.
-					const stillRunning = manager.getRunningJobs();
-					if (stillRunning.length > 0) {
-						manager.acknowledgeDeliveries(stillRunning.map(job => job.id));
-					}
-
-
-					const remaining = manager.getDeliveryState();
-					if (remaining.pendingJobIds.length > 0) {
-						manager.acknowledgeDeliveries(remaining.pendingJobIds);
-					}
-				} finally {
-					this.#beforeIdleAsyncDrainActive = false;
-				}
-			}
 			: undefined;
 
 		this.#scopedModels = config.scopedModels ?? [];

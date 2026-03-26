@@ -1,11 +1,11 @@
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, test, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, getBundledModel } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { AsyncJobManager, type AsyncJob } from "../src/async/job-manager";
+import { type AsyncJob, AsyncJobManager } from "../src/async/job-manager";
 import { Settings } from "../src/config/settings";
 import { createAgentSession } from "../src/sdk";
 import { AgentSession } from "../src/session/agent-session";
@@ -21,7 +21,6 @@ const TEST_MODEL_REGISTRY = {
 } as never;
 
 const tempDirs = new Set<string>();
-
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 
@@ -90,13 +89,7 @@ async function startAsyncBashJob(session: AgentSession, command = "printf 'async
 	if (!bashTool) {
 		throw new Error("Expected bash tool to be available");
 	}
-	await bashTool.execute(
-		"call-bash",
-		{ command, async: true },
-		undefined,
-		undefined,
-		undefined,
-	);
+	await bashTool.execute("call-bash", { command, async: true }, undefined, undefined, undefined);
 }
 
 describe("background job revival prevention", () => {
@@ -138,7 +131,6 @@ describe("background job revival prevention", () => {
 				asyncJobManager: manager,
 			});
 
-
 			const jobId = manager.register(
 				"task",
 				"delayed",
@@ -149,15 +141,11 @@ describe("background job revival prevention", () => {
 				{ id: "delayed" },
 			);
 
-
 			await session.prompt("start");
-
 
 			expect(getCallCount()).toBe(2);
 			const asyncMessages = session.agent.state.messages.filter(
-				(
-					message,
-				): message is Extract<AgentMessage, { role: "custom" }> =>
+				(message): message is Extract<AgentMessage, { role: "custom" }> =>
 					message.role === "custom" && message.customType === "async-result",
 			);
 			expect(asyncMessages).toHaveLength(1);
@@ -169,76 +157,78 @@ describe("background job revival prevention", () => {
 		}
 	});
 
-	test("acknowledges pending, running, and late completions after drain limits are reached", async () => {
-		const { agent } = createStreamAgent(["unused"]);
-		const ackCalls: string[][] = [];
-		const waitForAllCalls: boolean[] = [];
-		const drainCalls: Array<{ timeoutMs?: number }> = [];
-		let pendingJobIds = ["job-pending"];
-		let runningJobs: AsyncJob[] = [
-			{
-				id: "job-running",
-				type: "task",
-				status: "running",
-				startTime: Date.now(),
-				label: "still running",
-				abortController: new AbortController(),
-				promise: new Promise<void>(() => {}),
-			},
-		];
-		const fakeManager = {
-			getRunningJobs: () => runningJobs,
-			hasPendingDeliveries: () => pendingJobIds.length > 0,
-			waitForAll: async () => {
-				waitForAllCalls.push(true);
-				await new Promise<void>(() => {});
-			},
-			drainDeliveries: async (options?: { timeoutMs?: number }) => {
-				drainCalls.push(options ?? {});
-				return await new Promise<boolean>(resolve => {
-					setTimeout(() => resolve(false), 2_000);
-				});
-			},
-			getDeliveryState: () => ({
-				queued: pendingJobIds.length,
-				delivering: false,
-				pendingJobIds: [...pendingJobIds],
-			}),
-			acknowledgeDeliveries: (jobIds: string[]) => {
-				ackCalls.push(jobIds);
-				if (jobIds.includes("job-running")) {
-					runningJobs = [];
-					pendingJobIds = ["job-pending", "job-finished-between-snapshots"];
-				} else {
-					pendingJobIds = pendingJobIds.filter(jobId => !jobIds.includes(jobId));
-				}
-				return jobIds.length;
-			},
-			dispose: async () => true,
-		} as unknown as AsyncJobManager;
-		const session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "compaction.enabled": false, "contextPromotion.enabled": false }),
-			modelRegistry: TEST_MODEL_REGISTRY,
-			asyncJobManager: fakeManager,
-		});
+	test(
+		"acknowledges pending, running, and late completions after drain limits are reached",
+		async () => {
+			const { agent } = createStreamAgent(["unused"]);
+			const ackCalls: string[][] = [];
+			const waitForAllCalls: boolean[] = [];
+			const drainCalls: Array<{ timeoutMs?: number }> = [];
+			let pendingJobIds = ["job-pending"];
+			let runningJobs: AsyncJob[] = [
+				{
+					id: "job-running",
+					type: "task",
+					status: "running",
+					startTime: Date.now(),
+					label: "still running",
+					abortController: new AbortController(),
+					promise: new Promise<void>(() => {}),
+				},
+			];
+			const fakeManager = {
+				getRunningJobs: () => runningJobs,
+				hasPendingDeliveries: () => pendingJobIds.length > 0,
+				waitForAll: async () => {
+					waitForAllCalls.push(true);
+					await new Promise<void>(() => {});
+				},
+				drainDeliveries: async (options?: { timeoutMs?: number }) => {
+					drainCalls.push(options ?? {});
+					return await new Promise<boolean>(resolve => {
+						setTimeout(() => resolve(false), 2_000);
+					});
+				},
+				getDeliveryState: () => ({
+					queued: pendingJobIds.length,
+					delivering: false,
+					pendingJobIds: [...pendingJobIds],
+				}),
+				acknowledgeDeliveries: (jobIds: string[]) => {
+					ackCalls.push(jobIds);
+					if (jobIds.includes("job-running")) {
+						runningJobs = [];
+						pendingJobIds = ["job-pending", "job-finished-between-snapshots"];
+					} else {
+						pendingJobIds = pendingJobIds.filter(jobId => !jobIds.includes(jobId));
+					}
+					return jobIds.length;
+				},
+				dispose: async () => true,
+			} as unknown as AsyncJobManager;
+			const session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false, "contextPromotion.enabled": false }),
+				modelRegistry: TEST_MODEL_REGISTRY,
+				asyncJobManager: fakeManager,
+			});
 
+			try {
+				const beforeIdlePromise = agent.beforeIdle?.();
+				await beforeIdlePromise;
 
-		try {
-			const beforeIdlePromise = agent.beforeIdle?.();
-			await beforeIdlePromise;
-
-
-			expect(waitForAllCalls).toHaveLength(1);
-			expect(drainCalls).toEqual([{ timeoutMs: 2_000 }]);
-			expect(ackCalls).toEqual([["job-running"], ["job-pending", "job-finished-between-snapshots"]]);
-			expect(pendingJobIds).toEqual([]);
-			expect(runningJobs).toEqual([]);
-		} finally {
-			await session.dispose();
-		}
-	}, { timeout: 10_000 });
+				expect(waitForAllCalls).toHaveLength(1);
+				expect(drainCalls).toEqual([{ timeoutMs: 2_000 }]);
+				expect(ackCalls).toEqual([["job-running"], ["job-pending", "job-finished-between-snapshots"]]);
+				expect(pendingJobIds).toEqual([]);
+				expect(runningJobs).toEqual([]);
+			} finally {
+				await session.dispose();
+			}
+		},
+		{ timeout: 10_000 },
+	);
 
 	test("stops waiting for before-idle drain when the turn is aborted", async () => {
 		const { agent } = createStreamAgent(["unused"]);
@@ -278,18 +268,15 @@ describe("background job revival prevention", () => {
 			asyncJobManager: fakeManager,
 		});
 
-
 		try {
 			const abortController = new AbortController();
 			const beforeIdlePromise = agent.beforeIdle?.(abortController.signal);
 			abortController.abort();
 
-
 			const result = await Promise.race([
 				beforeIdlePromise?.then(() => "completed"),
 				Bun.sleep(100).then(() => "timed-out"),
 			]);
-
 
 			expect(result).toBe("completed");
 			expect(waitForAllCalls).toHaveLength(1);
@@ -298,7 +285,6 @@ describe("background job revival prevention", () => {
 			await session.dispose();
 		}
 	});
-
 
 	test("queues async completions for the next turn when the session is idle", async () => {
 		const tempDir = createTempDir("pi-async-idle-");
@@ -317,10 +303,8 @@ describe("background job revival prevention", () => {
 				sendCustomMessageCalls.push(args as [unknown, unknown]);
 			}) as typeof session.sendCustomMessage;
 
-
 			await startAsyncBashJob(session);
 			const [, deliveryOptions] = await waitForValue(() => sendCustomMessageCalls[0], 5_000);
-
 
 			expect(sendCustomMessageCalls).toHaveLength(1);
 			expect(deliveryOptions).toEqual({ deliverAs: "nextTurn", triggerTurn: false });
@@ -346,12 +330,10 @@ describe("background job revival prevention", () => {
 				sendCustomMessageCalls.push(args as [unknown, unknown]);
 			}) as typeof session.sendCustomMessage;
 
-
 			await startAsyncBashJob(session, "sleep 0.1; printf 'async result'");
 			const beforeIdlePromise = session.agent.beforeIdle?.();
 			const [, deliveryOptions] = await waitForValue(() => sendCustomMessageCalls[0], 5_000);
 			await beforeIdlePromise;
-
 
 			expect(sendCustomMessageCalls).toHaveLength(1);
 			expect(deliveryOptions).toEqual({ deliverAs: "followUp", triggerTurn: true });
@@ -359,7 +341,6 @@ describe("background job revival prevention", () => {
 			await session?.dispose();
 		}
 	});
-
 
 	test("preserves follow-up delivery for async completions while streaming", async () => {
 		const tempDir = createTempDir("pi-async-streaming-");
@@ -379,10 +360,8 @@ describe("background job revival prevention", () => {
 			}) as typeof session.sendCustomMessage;
 			session.agent.state.isStreaming = true;
 
-
 			await startAsyncBashJob(session);
 			const [, deliveryOptions] = await waitForValue(() => sendCustomMessageCalls[0], 5_000);
-
 
 			expect(sendCustomMessageCalls).toHaveLength(1);
 			expect(deliveryOptions).toEqual({ deliverAs: "followUp", triggerTurn: true });

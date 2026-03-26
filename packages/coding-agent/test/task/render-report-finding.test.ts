@@ -230,8 +230,18 @@ describe("taskToolRenderer report_finding safety", () => {
 		const mixedCall = taskToolRenderer.renderCall(
 			{
 				tasks: [
-					{ id: "DesignNav", agent: "designer", description: "Design navigation", assignment: "Review navigation layout." },
-					{ id: "ResearchDom", agent: "research", description: "Research DOM contract", assignment: "Inspect sidebar DOM expectations." },
+					{
+						id: "DesignNav",
+						agent: "designer",
+						description: "Design navigation",
+						assignment: "Review navigation layout.",
+					},
+					{
+						id: "ResearchDom",
+						agent: "research",
+						description: "Research DOM contract",
+						assignment: "Inspect sidebar DOM expectations.",
+					},
 				],
 			} as never,
 			{ expanded: false, isPartial: false },
@@ -242,6 +252,4 @@ describe("taskToolRenderer report_finding safety", () => {
 		expect(mixedText).toContain("designer");
 		expect(mixedText).toContain("research");
 	});
-
-
 });

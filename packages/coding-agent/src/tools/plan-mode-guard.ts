@@ -25,7 +25,10 @@ function isWithinDirectory(resolvedPath: string, rootPath: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function isPlanModeWritablePlanVerifierArtifactFile(resolvedTargetPath: string, resolvedActivePlanPath: string): boolean {
+function isPlanModeWritablePlanVerifierArtifactFile(
+	resolvedTargetPath: string,
+	resolvedActivePlanPath: string,
+): boolean {
 	const normalizedTarget = path.normalize(resolvedTargetPath);
 	const ext = path.extname(normalizedTarget).toLowerCase();
 	if (ext !== ".md" && ext !== ".json") return false;

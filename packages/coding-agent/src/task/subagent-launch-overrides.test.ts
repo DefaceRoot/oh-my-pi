@@ -1,5 +1,5 @@
-import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { Settings } from "../config/settings";
 import { parseAgentFields } from "../discovery/helpers";
 import { parseFrontmatter } from "../utils/frontmatter";

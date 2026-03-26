@@ -61,7 +61,7 @@ Use `edit` for incremental plan updates after new findings or review feedback.
 ## Phase 5: Run the verification gate
 After writing the plan, follow `rule://planning-protocol` for the full verification contract and artifact requirements.
 Spawn one `plan-verifier` subagent per phase in parallel via the task tool (`agent: "plan-verifier"`). Never use `agent: "implement"` for plan verification.
-For each verifier, provide `plan_file`, `phase_key`, and `run_timestamp` in UTC compact format (`YYYYMMDD-HHMMSSZ`).
+For each verifier, include `plan_file` (absolute path), `phase_key` (e.g. `01-foundation`), and `run_timestamp` in UTC compact format (`YYYYMMDD-HHMMSSZ`) as explicit named fields directly in the task `assignment` text. Do not place these inputs in the shared `context` parameter — they must appear in each individual task's `assignment` where the verifier's behavior rules require them.
 Await all verifier results before claiming planning is complete.
 If any verifier returns `BLOCKED` or `PASS WITH FINDINGS`, patch the plan, then re-run the affected phase verifiers.
 Planning is complete only when every phase verifier returns `PASS`.

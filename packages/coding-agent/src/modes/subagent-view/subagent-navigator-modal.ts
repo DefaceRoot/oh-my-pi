@@ -669,7 +669,13 @@ function buildColumnSpec(width: number, rowCount: number): NavigatorColumns {
 	const showModel = viewportWidth >= 80;
 	const showLastActive = viewportWidth >= 100;
 	const showTokens = viewportWidth >= 120;
-	const visibleColumnCount = 4 + (showResult ? 1 : 0) + (showChanges ? 1 : 0) + (showModel ? 1 : 0) + (showLastActive ? 1 : 0) + (showTokens ? 1 : 0);
+	const visibleColumnCount =
+		4 +
+		(showResult ? 1 : 0) +
+		(showChanges ? 1 : 0) +
+		(showModel ? 1 : 0) +
+		(showLastActive ? 1 : 0) +
+		(showTokens ? 1 : 0);
 	const separators = COLUMN_SEPARATOR.length * Math.max(0, visibleColumnCount - 1);
 	const titleW = Math.max(
 		MIN_TITLE_WIDTH,

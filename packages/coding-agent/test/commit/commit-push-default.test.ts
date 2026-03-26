@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import CommitCommand from "../../src/commands/commit";
-import { parseCommitArgs } from "../../src/commit/cli";
 import * as commitModule from "../../src/commit";
+import { parseCommitArgs } from "../../src/commit/cli";
 import * as themeModule from "../../src/modes/theme/theme";
 
 const TEST_CONFIG: CliConfig = {
@@ -38,7 +38,7 @@ describe("commit push defaults", () => {
 			throw new Error(`exit:${code ?? 0}`);
 		}) as never);
 
-		expect(() => parseCommitArgs(["commit", "--bogus"])) .toThrow("exit:1");
+		expect(() => parseCommitArgs(["commit", "--bogus"])).toThrow("exit:1");
 		expect(stderrSpy).toHaveBeenCalled();
 	});
 

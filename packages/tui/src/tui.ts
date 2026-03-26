@@ -686,12 +686,10 @@ export class TUI extends Container {
 			return;
 		}
 
-
 		// Reset manual scroll on any keyboard input (return to live view)
 		if (this.#manualScrollRows > 0) {
 			this.#manualScrollRows = 0;
 		}
-
 
 		// Global debug key handler (Shift+Ctrl+D)
 		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
@@ -717,7 +715,6 @@ export class TUI extends Container {
 			this.requestRender();
 		}
 	}
-
 
 	/** Handle wheel events for viewport scrolling. Returns true if scroll was applied. */
 	#handleWheelViewportScroll(mouseEvent: TerminalMouseEvent): boolean {
@@ -781,7 +778,6 @@ export class TUI extends Container {
 		this.#cellSizeQueryPending = false; // Give up waiting
 		return result;
 	}
-
 
 	/**
 	 * Resolve overlay layout from options.

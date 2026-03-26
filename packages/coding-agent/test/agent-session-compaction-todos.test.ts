@@ -12,7 +12,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools";
-import { TempDir, getProjectAgentDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession compaction todo preservation", () => {
 	let tempDir: TempDir;

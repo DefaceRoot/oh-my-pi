@@ -12,21 +12,21 @@ import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
+import {
+	type SudoPtyRequest,
+	type SudoPtyResponse,
+	TASK_SUDO_PTY_REQUEST_CHANNEL,
+	TASK_SUDO_PTY_RESPONSE_CHANNEL,
+} from "../task/types";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
-import { detectSudoNeedsPassword, isSudoCandidate } from "./bash-sudo";
-import {
-	TASK_SUDO_PTY_REQUEST_CHANNEL,
-	TASK_SUDO_PTY_RESPONSE_CHANNEL,
-	type SudoPtyRequest,
-	type SudoPtyResponse,
-} from "../task/types";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
+import { detectSudoNeedsPassword, isSudoCandidate } from "./bash-sudo";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { replaceTabs } from "./render-utils";

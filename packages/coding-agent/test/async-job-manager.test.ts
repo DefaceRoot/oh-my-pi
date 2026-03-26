@@ -235,17 +235,14 @@ describe("AsyncJobManager", () => {
 			},
 		});
 
-
 		firstJobId = manager.register("task", "first", async () => "one");
 		secondJobId = manager.register("task", "second", async () => "two");
 		await manager.waitForAll();
 		await firstDeliveryStarted;
 
-
 		expect(manager.getDeliveryState().pendingJobIds).toEqual([firstJobId, secondJobId]);
 		expect(manager.acknowledgeDeliveries([firstJobId])).toBe(1);
 		releaseFirstDelivery?.();
-
 
 		const drained = await manager.drainDeliveries({ timeoutMs: 2_000 });
 		expect(drained).toBe(true);
@@ -257,11 +254,9 @@ describe("AsyncJobManager", () => {
 			`start:${secondJobId}`,
 
 			`done:${secondJobId}`,
-
 		]);
 		expect(manager.hasPendingDeliveries()).toBe(false);
 	});
-
 
 	test("dispose clears jobs and pending deliveries", async () => {
 		const manager = new AsyncJobManager({

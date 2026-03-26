@@ -370,7 +370,6 @@ export class AsyncJobManager {
 				continue;
 			}
 
-
 			try {
 				await this.#onJobComplete(delivery.jobId, delivery.text, this.#jobs.get(delivery.jobId));
 				this.#removeDelivery(delivery);

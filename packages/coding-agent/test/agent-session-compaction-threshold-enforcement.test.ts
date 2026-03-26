@@ -297,5 +297,4 @@ describe("AgentSession compaction threshold enforcement", () => {
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		expect(events).toContainEqual(expect.objectContaining({ type: "auto_compaction_start", reason: "threshold" }));
 	});
-
 });

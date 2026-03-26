@@ -119,10 +119,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-				enforcePlanModeWrite(this.session, path, { op: "create" });
-				const absolutePath = resolvePlanPath(this.session, path);
-				await fs.mkdir(nodePath.dirname(absolutePath), { recursive: true });
-				const batchRequest = getLspBatchRequest(context?.toolCall);
+			enforcePlanModeWrite(this.session, path, { op: "create" });
+			const absolutePath = resolvePlanPath(this.session, path);
+			await fs.mkdir(nodePath.dirname(absolutePath), { recursive: true });
+			const batchRequest = getLspBatchRequest(context?.toolCall);
 
 			// Check if file exists and is auto-generated before overwriting
 			if (await fs.exists(absolutePath)) {

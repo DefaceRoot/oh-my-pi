@@ -53,7 +53,15 @@ mock.module("../../modes/theme/theme", () => ({
 import { CommandController } from "./command-controller";
 
 type HotkeyMap = Partial<
-	Record<"app.lazygit" | "app.editor.external" | "app.tools.expand" | "app.agent.cycleMode" | "app.plan.toggle" | "app.stt.toggle", string>
+	Record<
+		| "app.lazygit"
+		| "app.editor.external"
+		| "app.tools.expand"
+		| "app.agent.cycleMode"
+		| "app.plan.toggle"
+		| "app.stt.toggle",
+		string
+	>
 >;
 
 function renderHotkeys(bindings: HotkeyMap): string {

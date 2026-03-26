@@ -143,10 +143,12 @@ subagents:
 			...({ role: "explore" } as any),
 		});
 
-		expect(session.getActiveToolNames().filter(name => name.startsWith("mcp_")).sort()).toEqual([
-			"mcp_augment_codebase_retrieval",
-			"mcp_better_context_ask",
-		]);
+		expect(
+			session
+				.getActiveToolNames()
+				.filter(name => name.startsWith("mcp_"))
+				.sort(),
+		).toEqual(["mcp_augment_codebase_retrieval", "mcp_better_context_ask"]);
 		expect(session.systemPrompt).toContain("mcp_better_context_ask");
 		expect(session.systemPrompt).not.toContain("mcp_grafana_list_datasources");
 	});

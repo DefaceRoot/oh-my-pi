@@ -316,7 +316,10 @@ export class InputController {
 		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel();
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
 		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel({ temporary: true });
-		this.ctx.editor.setActionKeys("app.model.select.temporary", this.ctx.keybindings.getKeys("app.model.select.temporary"));
+		this.ctx.editor.setActionKeys(
+			"app.model.select.temporary",
+			this.ctx.keybindings.getKeys("app.model.select.temporary"),
+		);
 		this.ctx.editor.onQuickSelectModel = () => this.ctx.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
@@ -857,7 +860,7 @@ export class InputController {
 
 			// Generate session title on first message
 			const hasUserMessages = this.ctx.agent.state.messages.some((m: AgentMessage) => m.role === "user");
-				if (text && !hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+			if (text && !hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				const registry = this.ctx.session.modelRegistry;
 				const titleSessionId = this.ctx.session.sessionId;
 				generateSessionTitle(text, registry, this.ctx.settings, titleSessionId, this.ctx.session.model)

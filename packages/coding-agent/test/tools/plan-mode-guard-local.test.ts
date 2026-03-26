@@ -83,11 +83,9 @@ describe("enforcePlanModeWrite", () => {
 			),
 		).not.toThrow();
 		expect(() =>
-			enforcePlanModeWrite(
-				session,
-				".omp/sessions/plans/customer-a/artifacts/plan-verifier/p1/run1/findings.json",
-				{ op: "create" },
-			),
+			enforcePlanModeWrite(session, ".omp/sessions/plans/customer-a/artifacts/plan-verifier/p1/run1/findings.json", {
+				op: "create",
+			}),
 		).not.toThrow();
 
 		expect(() =>

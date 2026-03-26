@@ -50,7 +50,6 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	cancelledSubagents: new Map(),
 }));
 
-
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
 	discoverAgents: async () => ({
 		agents: [

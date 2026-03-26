@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	deriveSubagentOutcomeFromReviewData,
-	normalizeSubagentOutcome,
-} from "../../src/task/subagent-outcome";
+import { deriveSubagentOutcomeFromReviewData, normalizeSubagentOutcome } from "../../src/task/subagent-outcome";
 
 function resolveSubmitResultOutcomeForTest(item: { outcome?: unknown; data?: unknown }) {
 	return normalizeSubagentOutcome(item.outcome) ?? deriveSubagentOutcomeFromReviewData(item.data);
@@ -41,13 +38,13 @@ describe("deriveSubagentOutcomeFromReviewData", () => {
 	});
 
 	test("derives legacy pass/fail from overall_correctness", () => {
-		expect(
-			deriveSubagentOutcomeFromReviewData({ overall_correctness: "correct", explanation: "All clear" }),
-		).toEqual({
-			status: "pass",
-			label: "review",
-			summary: "All clear",
-		});
+		expect(deriveSubagentOutcomeFromReviewData({ overall_correctness: "correct", explanation: "All clear" })).toEqual(
+			{
+				status: "pass",
+				label: "review",
+				summary: "All clear",
+			},
+		);
 		expect(
 			deriveSubagentOutcomeFromReviewData({ overall_correctness: "incorrect", explanation: "Found regressions" }),
 		).toEqual({

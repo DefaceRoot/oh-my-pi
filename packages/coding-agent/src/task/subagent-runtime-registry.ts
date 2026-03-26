@@ -59,10 +59,7 @@ export async function stopSubagentRuntime(lookup: SubagentRuntimeLookup, reason:
 	return await runtime.stop(reason);
 }
 
-export async function resumeSubagentRuntime(
-	lookup: SubagentRuntimeLookup,
-	continueMessage?: string,
-	): Promise<boolean> {
+export async function resumeSubagentRuntime(lookup: SubagentRuntimeLookup, continueMessage?: string): Promise<boolean> {
 	const runtimeId = resolveRuntimeId(lookup);
 	if (!runtimeId) return false;
 	const runtime = runtimesById.get(runtimeId);

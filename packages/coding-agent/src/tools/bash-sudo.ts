@@ -37,10 +37,7 @@ export function isSudoCandidate(command: string): boolean {
  *
  * Safe to call concurrently — each call is a fresh one-shot subprocess.
  */
-export async function detectSudoNeedsPassword(
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<boolean> {
+export async function detectSudoNeedsPassword(cwd: string, signal?: AbortSignal): Promise<boolean> {
 	try {
 		const result = await executeBash("sudo -n -v", {
 			cwd,
@@ -53,11 +50,7 @@ export async function detectSudoNeedsPassword(
 		}
 		// Exit 1 typically means a password is required
 		const output = result.output.toLowerCase();
-		return (
-			output.includes("password is required") ||
-			output.includes("sorry, try again") ||
-			result.exitCode !== 0
-		);
+		return output.includes("password is required") || output.includes("sorry, try again") || result.exitCode !== 0;
 	} catch {
 		// If the probe itself fails for any reason (sudo not available, etc.),
 		// don't block normal execution — the agent will see the error naturally.

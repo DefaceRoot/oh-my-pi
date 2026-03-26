@@ -203,7 +203,6 @@ describe("SubagentSessionViewerComponent", () => {
 		expect(text).toContain("Hierarchy (h close)");
 		expect(text).toContain("(21) explore-agent |");
 		expect(text).toContain("CodeRabbitReview");
-
 	});
 
 	test("uses pane widths for transcript rendering when hierarchy sidebar toggles", () => {

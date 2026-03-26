@@ -225,7 +225,6 @@ describe("SubagentIndex", () => {
 		});
 	});
 
-
 	test("ingestTaskResults skips template boilerplate when deriving context preview", () => {
 		const index = new SubagentIndex({ artifactsDir });
 		const task = [

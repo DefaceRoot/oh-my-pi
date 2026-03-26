@@ -257,7 +257,6 @@ function summarizeAgentNames(agentNames: readonly string[]): string {
 	return uniqueAgentNames.join(", ");
 }
 
-
 function buildFallbackDelegationToon(session: ToolSession, delegate: string, task: TaskItem): string {
 	const inherited = collectDelegationContext(session);
 	const delegator = normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole ?? "unknown";
@@ -492,13 +491,23 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 		const blockingAgent = taskAgentSelections.find(selection => selection.agent?.blocking === true)?.agent;
 
+		// Isolated tasks must run via #executeSync so the whole batch shares one
+		// baseline capture and the post-task branch/patch merge happens correctly.
+		// The async background-job path cannot do either of those things.
+		const isolationMode = this.session.settings.get("task.isolation.mode");
+		const isIsolationRequested = "isolated" in params && params.isolated === true;
+		const isIsolated = isolationMode !== "none" && isIsolationRequested;
+
 		// Force async when timeout is set (so the orchestrator gets control back on timeout).
-		// Otherwise, use sync execution when async is disabled or one of the selected agents is blocking.
-		if (!hasTimeout && (!asyncEnabled || blockingAgent)) {
+		// Otherwise, use sync execution when async is disabled, one of the selected agents is
+		// blocking, or isolation is requested.
+		if (isIsolated || (!hasTimeout && (!asyncEnabled || blockingAgent))) {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
-		const boundaryAgent = taskAgentSelections.find(selection => this.#isBlockedByOrchestratorBoundary(selection.agent!.name))?.agent;
+		const boundaryAgent = taskAgentSelections.find(selection =>
+			this.#isBlockedByOrchestratorBoundary(selection.agent!.name),
+		)?.agent;
 		if (boundaryAgent) {
 			return {
 				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(boundaryAgent.name) }],
@@ -1000,7 +1009,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-
 		const taskExecutions: Array<{
 			task: TaskItem;
 			agent: AgentDefinition;
@@ -1016,7 +1024,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const taskLabel = task.id?.trim() || `task at index ${i}`;
 			if (!requestedAgentName) {
 				return {
-					content: [{ type: "text", text: `Task ${taskLabel} is missing an agent. Provide a top-level agent or set tasks[].agent.` }],
+					content: [
+						{
+							type: "text",
+							text: `Task ${taskLabel} is missing an agent. Provide a top-level agent or set tasks[].agent.`,
+						},
+					],
 					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
 				};
 			}
@@ -1024,21 +1037,38 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			if (!agent) {
 				const available = agents.map(candidate => candidate.name).join(", ") || "none";
 				return {
-					content: [{ type: "text", text: `Task ${taskLabel} requested unknown agent \"${requestedAgentName}\". Available: ${available}` }],
+					content: [
+						{
+							type: "text",
+							text: `Task ${taskLabel} requested unknown agent "${requestedAgentName}". Available: ${available}`,
+						},
+					],
 					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
 				};
 			}
 			if (disabledAgents.length > 0 && disabledAgents.includes(agent.name)) {
-				const enabled = agents.filter(candidate => !disabledAgents.includes(candidate.name)).map(candidate => candidate.name);
+				const enabled = agents
+					.filter(candidate => !disabledAgents.includes(candidate.name))
+					.map(candidate => candidate.name);
 				const requestedBy = tasks.length > 1 ? ` Requested by ${taskLabel}.` : "";
 				return {
-					content: [{ type: "text", text: `Agent \"${agent.name}\" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}${requestedBy}` }],
+					content: [
+						{
+							type: "text",
+							text: `Agent "${agent.name}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}${requestedBy}`,
+						},
+					],
 					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
 				};
 			}
 			if (this.#blockedAgent && agent.name === this.#blockedAgent) {
 				return {
-					content: [{ type: "text", text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.` }],
+					content: [
+						{
+							type: "text",
+							text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
+						},
+					],
 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}
@@ -1096,21 +1126,22 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		if (isIsolated) {
 			try {
 				repoRoot = await getRepoRoot(this.session.cwd);
-				baseline = await captureBaseline(repoRoot);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: `Isolated task execution requires a git repository. ${message}` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
+				};
+			}
+			try {
+				baseline = await captureBaseline(repoRoot!);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [
-						{
-							type: "text",
-							text: `Isolated task execution requires a git repository. ${message}`,
-						},
+						{ type: "text", text: `Isolated task execution: failed to capture repository baseline. ${message}` },
 					],
-					details: {
-						projectAgentsDir,
-						results: [],
-						totalDurationMs: Date.now() - startTime,
-					},
+					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}
 		}
@@ -1305,7 +1336,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			emitProgress();
 
 			const runTask = async (execution: (typeof tasksWithContext)[number], index: number) => {
-				const { taskItem, renderedTask, agent, effectiveAgent, modelOverride, thinkingLevelOverride, outputSchema: taskOutputSchema, subagentMcpManager } = execution;
+				const {
+					taskItem,
+					renderedTask,
+					agent,
+					effectiveAgent,
+					modelOverride,
+					thinkingLevelOverride,
+					outputSchema: taskOutputSchema,
+					subagentMcpManager,
+				} = execution;
 				const taskAbortController = new AbortController();
 				subtaskAbortControllers.set(taskItem.id, taskAbortController);
 				// Also register by declared task ID so stop events using the original ID are resolved.

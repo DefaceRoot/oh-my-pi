@@ -51,10 +51,10 @@ import { STTController, type SttState } from "../stt";
 import { resumeSubagentRuntime, stopSubagentRuntime } from "../task/subagent-runtime-registry";
 import { buildUserStoppedAbortReason } from "../task/subagent-stop";
 import {
+	type SingleResult,
 	TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL,
 	TASK_SUBAGENT_RESUME_REQUEST_CHANNEL,
 	TASK_SUBAGENT_STOP_REQUEST_CHANNEL,
-	type SingleResult,
 } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import { shortenPath } from "../tools/render-utils";
@@ -609,9 +609,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					}
 					// Deliver the result to the parent session so the orchestrator can react.
 					const status = result.exitCode === 0 && !result.aborted ? "completed" : "failed";
-					const lines: string[] = [
-						`Subagent ${result.id} (${result.agent}) was resumed and ${status}.`,
-					];
+					const lines: string[] = [`Subagent ${result.id} (${result.agent}) was resumed and ${status}.`];
 					if (result.aborted && result.abortReason) {
 						lines.push(`Abort reason: ${result.abortReason}`);
 					} else if (result.exitCode !== 0 && result.error) {
@@ -2157,7 +2155,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-
 		this.showStatus(`Resuming subagent ${ref.id}...`);
 		if (this.subagentViewActiveId === ref.id) {
 			await this.refreshActiveViewerTranscript();
@@ -2949,7 +2946,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				abortReason: selected.abortReason,
 				outcome: selected.outcome,
 				canStop: selected.status === "running" || selected.status === "pending",
-				canResume: (selected.status === "cancelled" || selected.status === "user_stopped" || selected.status === "failed") && !!selected.sessionPath,
+				canResume:
+					(selected.status === "cancelled" ||
+						selected.status === "user_stopped" ||
+						selected.status === "failed") &&
+					!!selected.sessionPath,
 				...(transcript.editStats ?? {}),
 			},
 		});

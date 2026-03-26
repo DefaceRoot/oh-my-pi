@@ -47,13 +47,35 @@ mock.module("@oh-my-pi/pi-coding-agent/task/executor", () => ({
 	},
 }));
 
+mock.module("@oh-my-pi/pi-coding-agent/task/worktree", () => ({
+	getRepoRoot: async () => "/tmp/test-repo",
+	captureBaseline: async () => ({
+		root: { repoRoot: "/tmp/test-repo", headCommit: "abc", staged: "", unstaged: "", untracked: [] },
+		nested: [],
+	}),
+	ensureWorktree: async (_root: string, id: string) => `/tmp/test-wt/${id}`,
+	applyBaseline: async () => {},
+	cleanupWorktree: async () => {},
+	commitToBranch: async () => null,
+	mergeTaskBranches: async () => ({ merged: [], failed: [], conflict: null }),
+	cleanupTaskBranches: async () => {},
+	captureDeltaPatch: async () => ({ rootPatch: "", nestedPatches: [] }),
+	applyNestedPatches: async () => {},
+	ensureFuseOverlay: async () => "",
+	cleanupFuseOverlay: async () => {},
+	ensureProjfsOverlay: async () => "",
+	cleanupProjfsOverlay: async () => {},
+	isProjfsUnavailableError: () => false,
+	getGitNoIndexNullPath: () => "/dev/null",
+}));
+
 mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
 	discoverAgents: async () => ({
 		agents: availableAgents,
 		projectAgentsDir: null,
 	}),
 	getAgent: (agents: Array<{ name: string }>, name: string | undefined) =>
-		typeof name === "string" ? agents.find(agent => agent.name === name) ?? null : null,
+		typeof name === "string" ? (agents.find(agent => agent.name === name) ?? null) : null,
 }));
 
 const { TaskTool } = await import("@oh-my-pi/pi-coding-agent/task");
@@ -96,12 +118,18 @@ class FakeAsyncJobManager {
 	}
 }
 
-function createSession(options: { asyncEnabled: boolean; asyncJobManager?: FakeAsyncJobManager }) {
+function createSession(options: {
+	asyncEnabled: boolean;
+	asyncJobManager?: FakeAsyncJobManager;
+	isolationMode?: string;
+}) {
 	return {
 		cwd: "/tmp/test-cwd",
 		hasUI: false,
 		settings: Settings.isolated({
-			"task.isolation.mode": "none",
+			"task.isolation.mode": options.isolationMode ?? "none",
+			"task.isolation.merge": "branch",
+			"task.isolation.commits": "generic",
 			"task.maxConcurrency": 4,
 			"task.disabledAgents": [],
 			"async.enabled": options.asyncEnabled,
@@ -171,5 +199,37 @@ describe("TaskTool mixed-agent batches", () => {
 		expect(result.details?.async?.state).toBe("running");
 		expect(result.details?.progress?.map(item => item.agent)).toEqual(["designer", "research"]);
 		expect(runSubprocessAgents).toEqual(["designer", "research"]);
+	});
+
+	test("isolated tasks with different agent roles use sync path even when async is enabled", async () => {
+		const asyncJobManager = new FakeAsyncJobManager();
+		const tool = await TaskTool.create(
+			createSession({ asyncEnabled: true, asyncJobManager, isolationMode: "worktree" }),
+		);
+
+		const result = await tool.execute("call-isolated-mixed", {
+			isolated: true,
+			tasks: [
+				{
+					id: "DesignNav",
+					agent: "designer",
+					description: "Design navigation",
+					assignment: "Review navigation layout.",
+				},
+				{
+					id: "ResearchDom",
+					agent: "research",
+					description: "Research DOM contract",
+					assignment: "Inspect sidebar DOM expectations.",
+				},
+			],
+		} as any);
+
+		// Sync path taken: result is fully resolved (not background-running).
+		expect(result.details?.async).toBeUndefined();
+		// Both per-task agents were dispatched correctly.
+		expect(runSubprocessAgents).toContain("designer");
+		expect(runSubprocessAgents).toContain("research");
+		expect(runSubprocessAgents).toHaveLength(2);
 	});
 });

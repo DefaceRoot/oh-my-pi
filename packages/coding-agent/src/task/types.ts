@@ -63,7 +63,6 @@ export interface SudoPtyResponse {
 	error?: string;
 }
 
-
 /** EventBus channel emitted when a standalone (post-execute) subagent resume finishes. */
 export const TASK_SUBAGENT_RESUME_COMPLETED_CHANNEL = "task:subagent:resume-complete";
 
@@ -90,7 +89,9 @@ export type TaskItem = Static<typeof taskItemSchema>;
 
 const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 	const properties = {
-		agent: Type.Optional(Type.String({ description: "Default subagent type for tasks that do not specify tasks[].agent" })),
+		agent: Type.Optional(
+			Type.String({ description: "Default subagent type for tasks that do not specify tasks[].agent" }),
+		),
 		context: Type.Optional(
 			Type.String({
 				description:
@@ -264,9 +265,7 @@ export interface SingleResult {
 	outputMeta?: { lineCount: number; charCount: number };
 }
 
-export type { TaskSubagentStopRequest };
-
-export type { SubagentResumeRequest };
+export type { SubagentResumeRequest, TaskSubagentStopRequest };
 
 /** Tool details for TUI rendering */
 export interface MergeAgentBranchSummary {

@@ -26,6 +26,7 @@ import type { ContextFileEntry } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
+import { buildNamedToolChoice } from "../utils/tool-choice";
 import { getTotalUsageTokens } from "../utils/usage-tokens";
 import { deriveSubagentOutcomeFromReviewData, type SubagentOutcome } from "./subagent-outcome";
 import {
@@ -34,7 +35,6 @@ import {
 	type SubagentRuntimeLookup,
 	unregisterSubagentRuntime,
 } from "./subagent-runtime-registry";
-import { buildNamedToolChoice } from "../utils/tool-choice";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { validateSuccessToolRequirements } from "./success-evidence";
 import {
@@ -158,7 +158,6 @@ const resumableSubagentIdsBySessionPath = new Map<string, string>();
 
 export const cancelledSubagents = new Map<string, ResumableSubagentMetadata>();
 
-
 function resolveResumableSubagentId(lookup: SubagentRuntimeLookup): string | undefined {
 	if (lookup.id && resumableSubagentsById.has(lookup.id)) {
 		return lookup.id;
@@ -193,9 +192,7 @@ function deleteResumableSubagent(id: string): void {
 	resumableSubagentIdsBySessionPath.delete(existing.sessionFile);
 }
 
-export function getResumableSubagentMetadata(
-	lookup: SubagentRuntimeLookup,
-): ResumableSubagentMetadata | undefined {
+export function getResumableSubagentMetadata(lookup: SubagentRuntimeLookup): ResumableSubagentMetadata | undefined {
 	const resumableId = resolveResumableSubagentId(lookup);
 	return resumableId ? resumableSubagentsById.get(resumableId) : undefined;
 }
@@ -211,10 +208,7 @@ function buildSubagentResumePrompt(continueMessage?: string): string {
 	return trimmed || DEFAULT_SUBAGENT_RESUME_PROMPT;
 }
 
-async function launchResumedSubagent(
-	metadata: ResumableSubagentMetadata,
-	continueMessage?: string,
-): Promise<boolean> {
+async function launchResumedSubagent(metadata: ResumableSubagentMetadata, continueMessage?: string): Promise<boolean> {
 	deleteResumableSubagent(metadata.id);
 	const resumeOptions: ExecutorOptions = {
 		...metadata.options,
@@ -231,10 +225,7 @@ async function launchResumedSubagent(
 	return true;
 }
 
-export async function resumeSubagent(
-	lookup: SubagentRuntimeLookup,
-	continueMessage?: string,
-): Promise<boolean> {
+export async function resumeSubagent(lookup: SubagentRuntimeLookup, continueMessage?: string): Promise<boolean> {
 	if (await resumeSubagentRuntime(lookup, continueMessage)) {
 		return true;
 	}
@@ -1035,7 +1026,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		resolveStoredMetadata = resolve;
 	});
 
-
 	const runSubagent = async (): Promise<{
 		exitCode: number;
 		error?: string;
@@ -1566,4 +1556,3 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		outputMeta,
 	};
 }
-

@@ -2,8 +2,11 @@
 set -euo pipefail
 
 candidates=(
+  "http://192.168.131.154"
   "http://192.168.131.154:3000"
+  "http://monocle-testing-c2"
   "http://monocle-testing-c2:3000"
+  "http://192.168.6.172"
   "http://192.168.6.172:3000"
 )
 

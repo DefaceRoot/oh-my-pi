@@ -37,7 +37,15 @@ export function renderTemplate(
 	}
 	const delegationContext = options.delegationContext?.trim();
 	if (delegationContext?.startsWith("delegation:")) {
-		return { task: delegationContext, assignment: delegationContext, id, description };
+		const outerContext = context?.trim();
+		if (!outerContext) {
+			// No outer context — TOON is the complete prompt
+			return { task: delegationContext, assignment: delegationContext, id, description };
+		}
+		// Outer context present — append it after the TOON so the subagent sees both.
+		// This preserves the documented task tool contract: context is "prepended to every task's assignment".
+		const combined = `${delegationContext}\n\n${outerContext}`;
+		return { task: combined, assignment: delegationContext, id, description };
 	}
 	const background = buildBackground(context, options.delegationContext);
 	if (!background || !assignment) {
