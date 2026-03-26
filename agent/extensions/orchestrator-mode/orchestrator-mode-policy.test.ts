@@ -201,9 +201,9 @@ describe("orchestrator-mode policy", () => {
 		expectBlocked(parentOrchestratorContext(), "mcp_chrome_devtools_take_snapshot");
 	});
 
-	it("blocks task until a detailed todo exists", () => {
+	it("still blocks task while allowing read to gather todo context", () => {
 		expectBlocked(emptyTodoContext(), "task", { agent: "implement" });
-		expectBlocked(emptyTodoContext(), "read", { path: "agent/AGENTS.md" });
+		expectAllowed(emptyTodoContext(), "read", { path: "agent/AGENTS.md" });
 		expectAllowed(emptyTodoContext(), "todo_write");
 	});
 
@@ -244,11 +244,12 @@ describe("orchestrator-mode policy", () => {
 		expectAllowed(parentOrchestratorContext(), "bash", { command: "git status --short" });
 	});
 
-	it("prompt requires immediate delegation without preamble", () => {
+	it("prompt requires immediate orchestration without preamble", () => {
 		const prompt = _testExports.buildOrchestratorPrompt();
 		expect(prompt).toContain("This role NEVER implements directly, even for tiny requests.");
 		expect(prompt).toContain("Skip the preamble. Do not output a numbered execution list before acting.");
 		expect(prompt).toContain("create a detailed phased todo list with todo_write");
+		expect(prompt).toContain("You MAY use up to 5 narrow read calls first when that context is required to build a comprehensive todo list.");
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");
 		expect(prompt).toContain("Never park on indefinite await. Every await call MUST set timeout");

@@ -200,6 +200,10 @@ function isTodoGateExceptionTool(toolName: string): boolean {
 	return toolName === "todo_write" || toolName === "await";
 }
 
+function isTodoBootstrapExceptionTool(event: OrchestratorPolicyEvent): boolean {
+	return isTodoGateExceptionTool(event.toolName) || event.toolName === "read";
+}
+
 function isAgentResultRead(event: OrchestratorPolicyEvent): boolean {
 	if (event.toolName !== "read") return false;
 	const input = (event.input ?? {}) as Record<string, unknown>;
@@ -242,9 +246,10 @@ function buildOrchestratorPrompt(): string {
 		"You are using the Orchestrator model role.",
 		"This role NEVER implements directly, even for tiny requests.",
 		"If work is small enough to do directly, switch back to the Default role instead of doing it here.",
-		"Your first action to any actionable request MUST be immediate delegation or creating the detailed todo list.",
+		"Your first action to any actionable request MUST be either a narrow context read, immediate delegation, or creating the detailed todo list.",
 		"Skip the preamble. Do not output a numbered execution list before acting.",
-		"Either spawn an exploration/research subagent immediately, or create a detailed phased todo list with todo_write.",
+		"You MAY use up to 5 narrow read calls first when that context is required to build a comprehensive todo list.",
+		"Then either spawn an exploration/research subagent immediately, or create a detailed phased todo list with todo_write.",
 		"That todo list is the live source of truth for the session. Keep it deep, specific, and continuously updated.",
 		"Do not keep a shallow todo list. Break every stage into concrete subtasks the user can follow.",
 		"After every subagent result or new user instruction, update todo_write before any other orchestration action.",
@@ -332,7 +337,7 @@ function shouldBlockTool(
 		};
 	}
 
-	if (context.todoBootstrapRequired && !isTodoGateExceptionTool(event.toolName)) {
+	if (context.todoBootstrapRequired && !isTodoBootstrapExceptionTool(event)) {
 		return {
 			block: true,
 			reason:

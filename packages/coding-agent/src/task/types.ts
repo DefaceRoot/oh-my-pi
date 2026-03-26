@@ -73,6 +73,11 @@ export const taskItemSchema = Type.Object({
 		description: "CamelCase identifier, max 48 chars",
 		maxLength: 48,
 	}),
+	agent: Type.Optional(
+		Type.String({
+			description: "Optional subagent type for this item. Falls back to the top-level agent when omitted.",
+		}),
+	),
 	description: Type.String({
 		description: "Short one-liner for UI display only — not seen by the subagent",
 	}),
@@ -85,7 +90,7 @@ export type TaskItem = Static<typeof taskItemSchema>;
 
 const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 	const properties = {
-		agent: Type.String({ description: "Agent type for all tasks in this batch" }),
+		agent: Type.Optional(Type.String({ description: "Default subagent type for tasks that do not specify tasks[].agent" })),
 		context: Type.Optional(
 			Type.String({
 				description:

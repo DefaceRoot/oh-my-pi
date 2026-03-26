@@ -215,4 +215,33 @@ describe("taskToolRenderer report_finding safety", () => {
 		expect(text).toContain("FAIL");
 		expect(text).toContain("Two blocking findings remain");
 	});
+	it("renders mixed-agent calls and tolerates partial task arguments", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const partialCall = taskToolRenderer.renderCall(
+			{ agent: "designer" } as never,
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+		expect(() => partialCall.render(120)).not.toThrow();
+
+		const mixedCall = taskToolRenderer.renderCall(
+			{
+				tasks: [
+					{ id: "DesignNav", agent: "designer", description: "Design navigation", assignment: "Review navigation layout." },
+					{ id: "ResearchDom", agent: "research", description: "Research DOM contract", assignment: "Inspect sidebar DOM expectations." },
+				],
+			} as never,
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+
+		const mixedText = mixedCall.render(140).join("\n");
+		expect(mixedText).toContain("designer");
+		expect(mixedText).toContain("research");
+	});
+
+
 });

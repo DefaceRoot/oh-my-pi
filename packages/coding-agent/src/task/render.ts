@@ -469,9 +469,23 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 /**
  * Render the tool call arguments.
  */
+function summarizeCallAgents(args: TaskParams): string | undefined {
+	const defaultAgent = typeof args.agent === "string" && args.agent.trim().length > 0 ? args.agent.trim() : undefined;
+	const agentNames = new Set<string>();
+	for (const task of args.tasks ?? []) {
+		const taskAgent = typeof task.agent === "string" && task.agent.trim().length > 0 ? task.agent.trim() : defaultAgent;
+		if (taskAgent) agentNames.add(taskAgent);
+	}
+	if (agentNames.size === 0 && defaultAgent) {
+		agentNames.add(defaultAgent);
+	}
+	return agentNames.size > 0 ? Array.from(agentNames).join(", ") : undefined;
+}
+
 export function renderCall(args: TaskParams, _options: RenderResultOptions, theme: Theme): Component {
 	const lines: string[] = [];
-	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
+	const agentSummary = summarizeCallAgents(args);
+	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: agentSummary }, theme));
 
 	const contextTemplate = args.context ?? "";
 	const context = contextTemplate.trim();
@@ -480,6 +494,7 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 	const last = theme.fg("dim", theme.tree.last);
 	const vertical = theme.fg("dim", theme.tree.vertical);
 	const showIsolated = "isolated" in args && args.isolated === true;
+	const taskCount = args.tasks?.length ?? 0;
 
 	if (hasContext) {
 		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
@@ -487,15 +502,19 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 			const content = line ? theme.fg("muted", replaceTabs(line)) : "";
 			lines.push(` ${vertical}  ${content}`);
 		}
-		const taskPrefix = showIsolated ? branch : last;
-		lines.push(` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks.length} agents`)}`);
+		if (taskCount > 0) {
+			const taskPrefix = showIsolated ? branch : last;
+			lines.push(` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${taskCount} agents`)}`);
+		}
 		if (showIsolated) {
 			lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 		}
 		return new Text(lines.join("\n"), 0, 0);
 	}
 
-	lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks.length} agents`)}`);
+	if (taskCount > 0) {
+		lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${taskCount} agents`)}`);
+	}
 	if (showIsolated) {
 		lines.push(`${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 	}

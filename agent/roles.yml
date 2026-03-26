@@ -33,6 +33,7 @@ roles:
       - bash
       - task
       - await
+      - cancel_job
       - todo_write
       - ask
     mcp: 

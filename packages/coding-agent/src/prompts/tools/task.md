@@ -3,10 +3,11 @@ Launch subagents to parallelize independent work.
 Subagents do not inherit your chat history. Put all required constraints, file paths, and acceptance criteria in `context` + per-task `assignment`.
 
 <parameters>
-- `agent`: subagent type used by all tasks.
+- `agent`: optional default subagent type for tasks that do not specify `tasks[].agent`.
 - `context`: shared background prepended to every task (goal, constraints, contract, global acceptance).
 - `tasks[]`:
   - `id`: CamelCase, <= 48 chars
+  - `agent`: optional per-task subagent override
   - `description`: short UI-only summary
   - `assignment`: complete, self-contained instructions for that task
 - `timeout`: optional, seconds. When set, waits up to this duration then returns current status. Tasks keep running in the background and can be polled with `await`. Use for long-running tasks where you need periodic control to assess progress or handle errors.

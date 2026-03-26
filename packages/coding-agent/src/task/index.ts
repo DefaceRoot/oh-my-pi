@@ -244,6 +244,20 @@ function buildDelegationTask(task: TaskItem): DelegationTask {
 	};
 }
 
+function getTaskRequestedAgentName(task: TaskItem, defaultAgentName: string | undefined): string | undefined {
+	const taskAgentName = typeof task.agent === "string" ? task.agent.trim() : "";
+	if (taskAgentName.length > 0) return taskAgentName;
+	const defaultName = typeof defaultAgentName === "string" ? defaultAgentName.trim() : "";
+	return defaultName.length > 0 ? defaultName : undefined;
+}
+
+function summarizeAgentNames(agentNames: readonly string[]): string {
+	const uniqueAgentNames = Array.from(new Set(agentNames.filter(name => name.length > 0)));
+	if (uniqueAgentNames.length === 0) return "unknown agent";
+	return uniqueAgentNames.join(", ");
+}
+
+
 function buildFallbackDelegationToon(session: ToolSession, delegate: string, task: TaskItem): string {
 	const inherited = collectDelegationContext(session);
 	const delegator = normalizeRuntimeRole(session.getRuntimeRole?.()) ?? inherited.parentRuntimeRole ?? "unknown";
@@ -463,19 +477,31 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
-		const selectedAgent = getAgent(this.#discoveredAgents, params.agent);
-		const effectiveAgentName = selectedAgent?.name ?? params.agent;
 		const hasTimeout = "timeout" in params && typeof params.timeout === "number" && params.timeout > 0;
+		const taskItems = params.tasks ?? [];
+		if (taskItems.length === 0) {
+			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
+		}
+		const taskAgentSelections = taskItems.map(taskItem => {
+			const requestedAgentName = getTaskRequestedAgentName(taskItem, params.agent);
+			const agent = requestedAgentName ? getAgent(this.#discoveredAgents, requestedAgentName) : null;
+			return { taskItem, requestedAgentName, agent };
+		});
+		if (taskAgentSelections.some(selection => !selection.requestedAgentName || !selection.agent)) {
+			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
+		}
+		const blockingAgent = taskAgentSelections.find(selection => selection.agent?.blocking === true)?.agent;
 
 		// Force async when timeout is set (so the orchestrator gets control back on timeout).
-		// Otherwise, use sync execution when async is disabled or agent is blocking.
-		if (!hasTimeout && (!asyncEnabled || selectedAgent?.blocking === true)) {
+		// Otherwise, use sync execution when async is disabled or one of the selected agents is blocking.
+		if (!hasTimeout && (!asyncEnabled || blockingAgent)) {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
-		if (this.#isBlockedByOrchestratorBoundary(effectiveAgentName)) {
+		const boundaryAgent = taskAgentSelections.find(selection => this.#isBlockedByOrchestratorBoundary(selection.agent!.name))?.agent;
+		if (boundaryAgent) {
 			return {
-				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(effectiveAgentName) }],
+				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(boundaryAgent.name) }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
@@ -483,7 +509,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			if (hasTimeout) {
-				// timeout requested but no async job manager \u2014 fall back to sync
+				// timeout requested but no async job manager — fall back to sync
 				return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 			}
 			return {
@@ -492,29 +518,25 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		const taskItems = params.tasks ?? [];
-		if (taskItems.length === 0) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
-		}
-
 		const outputManager =
 			this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
-		const fallbackAgentSource = selectedAgent?.source ?? "bundled";
 		const parentImages = this.session.getLastUserImages?.();
+		const batchAgentLabel = summarizeAgentNames(taskAgentSelections.map(selection => selection.agent!.name));
 		const renderedTasks = await Promise.all(
-			taskItems.map(taskItem =>
-				renderTaskWithDelegationToon(this.session, effectiveAgentName, taskItem, params.context),
+			taskAgentSelections.map(selection =>
+				renderTaskWithDelegationToon(this.session, selection.agent!.name, selection.taskItem, params.context),
 			),
 		);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
+			const taskAgentSelection = taskAgentSelections[index];
 			progressByTaskId.set(uniqueIds[index], {
 				index,
 				id: uniqueIds[index],
-				agent: effectiveAgentName,
-				agentSource: fallbackAgentSource,
+				agent: taskAgentSelection.agent!.name,
+				agentSource: taskAgentSelection.agent!.source,
 				status: "pending",
 				task: renderedTask.task,
 				assignment: renderedTask.assignment,
@@ -579,6 +601,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		for (let i = 0; i < taskItems.length; i++) {
 			const taskItem = taskItems[i];
+			const taskAgentSelection = taskAgentSelections[i];
 			const uniqueId = uniqueIds[i];
 			if (signal?.aborted) {
 				failedSchedules.push(`${taskItem.id}: cancelled before scheduling`);
@@ -586,7 +609,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				continue;
 			}
 
-			const singleParams: TaskParams = { ...params, context: renderedTasks[i].task, tasks: [taskItem] };
+			const singleParams: TaskParams = {
+				...params,
+				agent: taskAgentSelection.requestedAgentName!,
+				context: renderedTasks[i].task,
+				tasks: [taskItem],
+			};
 			const label = uniqueId;
 			try {
 				const jobId = manager.register(
@@ -845,7 +873,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			content: [
 				{
 					type: "text",
-					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${effectiveAgentName}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${batchAgentLabel}.${scheduleFailureSummary} Results will be delivered when complete.`,
 				},
 			],
 			details: {
@@ -870,7 +898,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
-		const { agent: requestedAgentName, context, schema: outputSchema } = params;
+		const { agent: defaultAgentName, context, schema: outputSchema } = params;
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -896,86 +924,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		// Validate agent exists
-		const agent = getAgent(agents, requestedAgentName);
-		if (!agent) {
-			const available = agents.map(a => a.name).join(", ") || "none";
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Unknown agent "${requestedAgentName}". Available: ${available}`,
-					},
-				],
-				details: {
-					projectAgentsDir,
-					results: [],
-					totalDurationMs: 0,
-				},
-			};
-		}
-		const agentName = agent.name;
-
-		// Check if agent is disabled in settings
-		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
-		if (disabledAgents.length > 0 && disabledAgents.includes(agentName)) {
-			const enabled = agents.filter(a => !disabledAgents.includes(a.name)).map(a => a.name);
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Agent "${agentName}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}`,
-					},
-				],
-				details: {
-					projectAgentsDir,
-					results: [],
-					totalDurationMs: 0,
-				},
-			};
-		}
-
-		const planModeState = this.session.getPlanModeState?.();
-		const effectiveAgent: typeof agent = planModeState?.enabled
-			? agent.name === "plan-verifier"
-				? {
-						...agent,
-						tools: [...PLAN_MODE_PLAN_VERIFIER_TOOLS],
-						spawns: undefined,
-					}
-				: {
-						...agent,
-						systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-						tools: [...PLAN_MODE_SUBAGENT_TOOLS],
-						spawns: undefined,
-					}
-			: agent;
-
-		const rolesConfig = new RolesConfig(path.join(this.session.settings.getAgentDir(), "roles.yml"));
-		const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
-		const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
-
-		// Apply per-agent model override from settings (highest priority), then role-based fallback
-		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides") as Record<string, string>;
-		const settingsModelOverride = agentModelOverrides[agentName]?.trim() || undefined;
-		const { modelOverride, thinkingLevelOverride } = resolveSubagentLaunchOverrides({
-			session: this.session,
-			agentName: effectiveAgent.name,
-			agentModel: effectiveAgent.model,
-			agentThinkingLevel: effectiveAgent.thinkingLevel,
-			settingsModelOverride,
-		});
-
-		// Output schema priority: agent frontmatter > params > inherited from parent session
-		const effectiveOutputSchema = effectiveAgent.output ?? outputSchema ?? this.session.outputSchema;
-
-		// Handle empty or missing tasks
 		if (!params.tasks || params.tasks.length === 0) {
 			return {
 				content: [
 					{
 						type: "text",
-						text: `No tasks provided. Use: { agent, context, tasks: [{id, description, args}, ...] }`,
+						text: "No tasks provided. Use: { agent?, context, tasks: [{ id, description, assignment, agent? }, ...] }",
 					},
 				],
 				details: {
@@ -987,6 +941,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		const tasks = params.tasks;
+		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
+		const planModeState = this.session.getPlanModeState?.();
+		const rolesConfig = new RolesConfig(path.join(this.session.settings.getAgentDir(), "roles.yml"));
+		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides") as Record<string, string>;
+		const parentSpawns = this.session.getSessionSpawns() ?? "*";
+		const allowedSpawns = parentSpawns.split(",").map(s => s.trim());
+		const isSpawnAllowed = (agentName: string): boolean => {
+			if (parentSpawns === "") return false;
+			if (parentSpawns === "*") return true;
+			return allowedSpawns.includes(agentName);
+		};
+
 		const missingTaskIndexes: number[] = [];
 		const idIndexes = new Map<string, number[]>();
 
@@ -1033,6 +999,97 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				},
 			};
 		}
+
+
+		const taskExecutions: Array<{
+			task: TaskItem;
+			agent: AgentDefinition;
+			effectiveAgent: AgentDefinition;
+			modelOverride: string | string[] | undefined;
+			thinkingLevelOverride: AgentDefinition["thinkingLevel"];
+			outputSchema: unknown;
+			subagentMcpManager: ToolSession["mcpManager"];
+		}> = [];
+		for (let i = 0; i < tasks.length; i++) {
+			const task = tasks[i];
+			const requestedAgentName = getTaskRequestedAgentName(task, defaultAgentName);
+			const taskLabel = task.id?.trim() || `task at index ${i}`;
+			if (!requestedAgentName) {
+				return {
+					content: [{ type: "text", text: `Task ${taskLabel} is missing an agent. Provide a top-level agent or set tasks[].agent.` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
+				};
+			}
+			const agent = getAgent(agents, requestedAgentName);
+			if (!agent) {
+				const available = agents.map(candidate => candidate.name).join(", ") || "none";
+				return {
+					content: [{ type: "text", text: `Task ${taskLabel} requested unknown agent \"${requestedAgentName}\". Available: ${available}` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
+				};
+			}
+			if (disabledAgents.length > 0 && disabledAgents.includes(agent.name)) {
+				const enabled = agents.filter(candidate => !disabledAgents.includes(candidate.name)).map(candidate => candidate.name);
+				const requestedBy = tasks.length > 1 ? ` Requested by ${taskLabel}.` : "";
+				return {
+					content: [{ type: "text", text: `Agent \"${agent.name}\" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}${requestedBy}` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: 0 },
+				};
+			}
+			if (this.#blockedAgent && agent.name === this.#blockedAgent) {
+				return {
+					content: [{ type: "text", text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
+				};
+			}
+			if (this.#isBlockedByOrchestratorBoundary(agent.name)) {
+				return {
+					content: [{ type: "text", text: this.#orchestratorBoundaryMessage(agent.name) }],
+					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
+				};
+			}
+			if (!isSpawnAllowed(agent.name)) {
+				const allowed = parentSpawns === "" ? "none (spawns disabled for this agent)" : parentSpawns;
+				return {
+					content: [{ type: "text", text: `Cannot spawn '${agent.name}'. Allowed: ${allowed}` }],
+					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
+				};
+			}
+			const effectiveAgent: typeof agent = planModeState?.enabled
+				? agent.name === "plan-verifier"
+					? {
+							...agent,
+							tools: [...PLAN_MODE_PLAN_VERIFIER_TOOLS],
+							spawns: undefined,
+						}
+					: {
+							...agent,
+							systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+							tools: [...PLAN_MODE_SUBAGENT_TOOLS],
+							spawns: undefined,
+						}
+				: agent;
+			const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
+			const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
+			const settingsModelOverride = agentModelOverrides[agent.name]?.trim() || undefined;
+			const { modelOverride, thinkingLevelOverride } = resolveSubagentLaunchOverrides({
+				session: this.session,
+				agentName: effectiveAgent.name,
+				agentModel: effectiveAgent.model,
+				agentThinkingLevel: effectiveAgent.thinkingLevel,
+				settingsModelOverride,
+			});
+			taskExecutions.push({
+				task,
+				agent,
+				effectiveAgent,
+				modelOverride,
+				thinkingLevelOverride,
+				outputSchema: effectiveAgent.output ?? outputSchema ?? this.session.outputSchema,
+				subagentMcpManager,
+			});
+		}
+		const batchAgentLabel = summarizeAgentNames(taskExecutions.map(execution => execution.agent.name));
 
 		let repoRoot: string | null = null;
 		let baseline: WorktreeBaseline | null = null;
@@ -1108,55 +1165,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		let disposeSudoPtyListener: (() => void) | undefined;
 
 		try {
-			// Check self-recursion prevention
-			if (this.#blockedAgent && agentName === this.#blockedAgent) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
-						},
-					],
-					details: {
-						projectAgentsDir,
-						results: [],
-						totalDurationMs: Date.now() - startTime,
-					},
-				};
-			}
-
-			if (this.#isBlockedByOrchestratorBoundary(agentName)) {
-				return {
-					content: [{ type: "text", text: this.#orchestratorBoundaryMessage(agentName) }],
-					details: {
-						projectAgentsDir,
-						results: [],
-						totalDurationMs: Date.now() - startTime,
-					},
-				};
-			}
-
-			// Check spawn restrictions from parent
-			const parentSpawns = this.session.getSessionSpawns() ?? "*";
-			const allowedSpawns = parentSpawns.split(",").map(s => s.trim());
-			const isSpawnAllowed = (): boolean => {
-				if (parentSpawns === "") return false; // Empty = deny all
-				if (parentSpawns === "*") return true; // Wildcard = allow all
-				return allowedSpawns.includes(agentName);
-			};
-
-			if (!isSpawnAllowed()) {
-				const allowed = parentSpawns === "" ? "none (spawns disabled for this agent)" : parentSpawns;
-				return {
-					content: [{ type: "text", text: `Cannot spawn '${agentName}'. Allowed: ${allowed}` }],
-					details: {
-						projectAgentsDir,
-						results: [],
-						totalDurationMs: Date.now() - startTime,
-					},
-				};
-			}
-
 			const subtaskAbortControllers = new Map<string, AbortController>();
 			const abortSubtask = (taskId: string | undefined, reason: string): boolean => {
 				if (!taskId) return false;
@@ -1258,13 +1266,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 				uniqueIds = await outputManager.allocateBatch(tasks.map(t => t.id));
 			}
-			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
-
-			// Build full prompts from delegation TOON
 			const tasksWithContext = await Promise.all(
-				tasksWithUniqueIds.map(taskItem =>
-					renderTaskWithDelegationToon(this.session, agentName, taskItem, context),
-				),
+				taskExecutions.map(async (execution, index) => {
+					const taskItem = { ...execution.task, id: uniqueIds[index] };
+					const renderedTask = await renderTaskWithDelegationToon(
+						this.session,
+						execution.effectiveAgent.name,
+						taskItem,
+						context,
+					);
+					return { ...execution, taskItem, renderedTask };
+				}),
 			);
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles;
@@ -1272,32 +1284,33 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 			// Initialize progress for all tasks
 			for (let i = 0; i < tasksWithContext.length; i++) {
-				const t = tasksWithContext[i];
+				const execution = tasksWithContext[i];
 				progressMap.set(i, {
 					index: i,
-					id: t.id,
-					agent: agentName,
-					agentSource: agent.source,
+					id: execution.taskItem.id,
+					agent: execution.agent.name,
+					agentSource: execution.agent.source,
 					status: "pending",
-					task: t.task,
-					assignment: t.assignment,
+					task: execution.renderedTask.task,
+					assignment: execution.renderedTask.assignment,
 					recentTools: [],
 					recentOutput: [],
 					toolCount: 0,
 					tokens: 0,
 					durationMs: 0,
-					modelOverride,
-					description: t.description,
+					modelOverride: execution.modelOverride,
+					description: execution.renderedTask.description,
 				});
 			}
 			emitProgress();
 
-			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
+			const runTask = async (execution: (typeof tasksWithContext)[number], index: number) => {
+				const { taskItem, renderedTask, agent, effectiveAgent, modelOverride, thinkingLevelOverride, outputSchema: taskOutputSchema, subagentMcpManager } = execution;
 				const taskAbortController = new AbortController();
-				subtaskAbortControllers.set(task.id, taskAbortController);
+				subtaskAbortControllers.set(taskItem.id, taskAbortController);
 				// Also register by declared task ID so stop events using the original ID are resolved.
 				const declaredTaskId = tasks[index]?.id;
-				if (declaredTaskId && declaredTaskId !== task.id) {
+				if (declaredTaskId && declaredTaskId !== taskItem.id) {
 					subtaskAbortControllers.set(declaredTaskId, taskAbortController);
 				}
 				const taskSignal = signal
@@ -1309,14 +1322,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							cwd: this.session.cwd,
 							agent: effectiveAgent,
 							runtimeRole: effectiveAgent.name,
-							task: task.task,
-							description: task.description,
+							task: renderedTask.task,
+							description: renderedTask.description,
 							index,
-							id: task.id,
+							id: taskItem.id,
 							taskDepth,
 							modelOverride,
 							thinkingLevel: thinkingLevelOverride,
-							outputSchema: effectiveOutputSchema,
+							outputSchema: taskOutputSchema,
 							sessionFile,
 							persistArtifacts: !!artifactsDir,
 							artifactsDir: effectiveArtifactsDir,
@@ -1350,11 +1363,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const taskBaseline = structuredClone(baseline);
 
 						if (effectiveIsolationMode === "fuse-overlay") {
-							isolationDir = await ensureFuseOverlay(repoRoot, task.id);
+							isolationDir = await ensureFuseOverlay(repoRoot, taskItem.id);
 						} else if (effectiveIsolationMode === "fuse-projfs") {
-							isolationDir = await ensureProjfsOverlay(repoRoot, task.id);
+							isolationDir = await ensureProjfsOverlay(repoRoot, taskItem.id);
 						} else {
-							isolationDir = await ensureWorktree(repoRoot, task.id);
+							isolationDir = await ensureWorktree(repoRoot, taskItem.id);
 							await applyBaseline(isolationDir, taskBaseline);
 						}
 
@@ -1363,14 +1376,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							worktree: isolationDir,
 							agent: effectiveAgent,
 							runtimeRole: effectiveAgent.name,
-							task: task.task,
-							description: task.description,
+							task: renderedTask.task,
+							description: renderedTask.description,
 							index,
-							id: task.id,
+							id: taskItem.id,
 							taskDepth,
 							modelOverride,
 							thinkingLevel: thinkingLevelOverride,
-							outputSchema: effectiveOutputSchema,
+							outputSchema: taskOutputSchema,
 							sessionFile,
 							persistArtifacts: !!artifactsDir,
 							artifactsDir: effectiveArtifactsDir,
@@ -1409,8 +1422,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								const commitResult = await commitToBranch(
 									isolationDir,
 									taskBaseline,
-									task.id,
-									task.description,
+									taskItem.id,
+									renderedTask.description,
 									commitMsg,
 								);
 								return {
@@ -1419,8 +1432,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 									nestedPatches: commitResult?.nestedPatches,
 								};
 							} catch (mergeErr) {
-								// Agent succeeded but branch commit failed — clean up stale branch
-								const branchName = `omp/task/${task.id}`;
+								const branchName = `omp/task/${taskItem.id}`;
 								await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
 								const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 								return { ...result, error: `Merge failed: ${msg}` };
@@ -1429,7 +1441,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						if (result.exitCode === 0) {
 							try {
 								const delta = await captureDeltaPatch(isolationDir, taskBaseline);
-								const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
+								const patchPath = path.join(effectiveArtifactsDir, `${taskItem.id}.patch`);
 								await Bun.write(patchPath, delta.rootPatch);
 								return {
 									...result,
@@ -1446,11 +1458,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						const message = err instanceof Error ? err.message : String(err);
 						return {
 							index,
-							id: task.id,
+							id: taskItem.id,
 							agent: agent.name,
 							agentSource: agent.source,
-							task: task.task,
-							description: task.description,
+							task: renderedTask.task,
+							description: renderedTask.description,
 							exitCode: 1,
 							output: "",
 							stderr: message,
@@ -1472,9 +1484,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						}
 					}
 				} finally {
-					subtaskAbortControllers.delete(task.id);
+					subtaskAbortControllers.delete(taskItem.id);
 					const declaredId = tasks[index]?.id;
-					if (declaredId && declaredId !== task.id) {
+					if (declaredId && declaredId !== taskItem.id) {
 						subtaskAbortControllers.delete(declaredId);
 					}
 				}
@@ -1508,22 +1520,22 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				if (result !== undefined) {
 					return result;
 				}
-				const task = tasksWithContext[index];
+				const execution = tasksWithContext[index];
 				return {
 					index,
-					id: task.id,
-					agent: agentName,
-					agentSource: agent.source,
-					task: task.task,
-					assignment: task.assignment,
-					description: task.description,
+					id: execution.taskItem.id,
+					agent: execution.agent.name,
+					agentSource: execution.agent.source,
+					task: execution.renderedTask.task,
+					assignment: execution.renderedTask.assignment,
+					description: execution.renderedTask.description,
 					exitCode: 1,
 					output: "",
 					stderr: "Skipped (cancelled before start)",
 					truncated: false,
 					durationMs: 0,
 					tokens: 0,
-					modelOverride,
+					modelOverride: execution.modelOverride,
 					error: "Cancelled before start",
 					aborted: true,
 					abortReason: "Cancelled before start",
@@ -1778,7 +1790,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				duration: formatDuration(totalDuration),
 				summaries,
 				outputIds,
-				agentName,
+				agentName: batchAgentLabel,
 				mergeSummary: `${backendSummaryPrefix}${mergeSummary}`,
 			});
 
