@@ -15,7 +15,7 @@ describe("personality setting schema", () => {
 		expect(SETTINGS_SCHEMA.personality.default).toBe("plain-english");
 	});
 
-	it("should appear in the appearance tab", () => {
-		expect(SETTINGS_SCHEMA.personality.ui?.tab).toBe("appearance");
+	it("should appear in the interaction tab", () => {
+		expect(SETTINGS_SCHEMA.personality.ui?.tab).toBe("interaction");
 	});
 });

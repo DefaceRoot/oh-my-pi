@@ -234,7 +234,7 @@ export const SETTINGS_SCHEMA = {
 		values: ["plain-english", "technical"] as const,
 		default: "plain-english",
 		ui: {
-			tab: "appearance",
+			tab: "interaction",
 			label: "Output Personality",
 			description: "Controls how responses are formatted for the user",
 			submenu: true,

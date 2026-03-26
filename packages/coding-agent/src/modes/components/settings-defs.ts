@@ -398,6 +398,15 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "none", label: "None", description: "Space only" },
 		{ value: "ascii", label: "ASCII", description: "Greater-than signs" },
 	],
+	// Output personality
+	personality: [
+		{
+			value: "plain-english",
+			label: "Plain English",
+			description: "Structured before/after/expect/verified summary for non-technical readers",
+		},
+		{ value: "technical", label: "Technical", description: "Concise: correctness first, brevity second" },
+	],
 };
 
 function createSubmenuSettingDef(base: Omit<SettingDef, "type" | "options">, provider: OptionProvider): SettingDef {
