@@ -207,6 +207,8 @@ export interface InteractiveModeContext {
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
+	applyDefaultPresetIfConfigured(options?: { forceApply?: boolean }): Promise<void>;
+
 
 	// Input handling
 	handleCtrlC(): void;

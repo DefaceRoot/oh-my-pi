@@ -64,6 +64,7 @@ function createClearContext() {
 		sessionManager: {
 			getCwd: () => "/tmp/project",
 			getSessionFile: () => "/tmp/project/.omp/session.jsonl",
+			getSessionName: () => undefined,
 		} as unknown as InteractiveModeContext["sessionManager"],
 		chatContainer: {
 			addChild: vi.fn(),
@@ -77,6 +78,7 @@ function createClearContext() {
 		} as unknown as InteractiveModeContext["statusContainer"],
 		statusLine: {
 			invalidate: vi.fn(),
+			setSessionStartTime: vi.fn(),
 		} as unknown as InteractiveModeContext["statusLine"],
 		pendingTools: new Map(),
 		compactionQueuedMessages: [],
@@ -91,10 +93,11 @@ function createClearContext() {
 		showWarning: vi.fn(),
 		reloadTodos: vi.fn(async () => {}),
 		updateEditorTopBorder: vi.fn(),
+		applyDefaultPresetIfConfigured: vi.fn(async () => {}),
 		handleSessionRootChange,
 	} as unknown as InteractiveModeContext;
 
-	return { controller: new CommandController(ctx), handleSessionRootChange, newSession };
+	return { controller: new CommandController(ctx), handleSessionRootChange, newSession, applyDefaultPresetIfConfigured: ctx.applyDefaultPresetIfConfigured as ReturnType<typeof vi.fn> };
 }
 
 describe("CommandController session-root-change reset", () => {
@@ -115,4 +118,21 @@ describe("CommandController session-root-change reset", () => {
 
 		expect(handleSessionRootChange).toHaveBeenCalledTimes(1);
 	});
+	it("calls applyDefaultPresetIfConfigured with forceApply after clear", async () => {
+		const { controller, applyDefaultPresetIfConfigured } = createClearContext();
+
+		await controller.handleClearCommand();
+
+		expect(applyDefaultPresetIfConfigured).toHaveBeenCalledWith({ forceApply: true });
+	});
+
+	it("skips handleSessionRootChange when newSession is cancelled", async () => {
+		const { controller, handleSessionRootChange, newSession } = createClearContext();
+		newSession.mockResolvedValueOnce(false);
+
+		await controller.handleClearCommand();
+
+		expect(handleSessionRootChange).not.toHaveBeenCalled();
+	});
+
 });

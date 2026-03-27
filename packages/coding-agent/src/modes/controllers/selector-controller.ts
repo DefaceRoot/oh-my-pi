@@ -3,7 +3,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders, modelsAreEqual, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { resolveAdvancedThinkingLevel, syncAdvancedConfigToSettings } from "../../config/advanced-config";
 import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES, type ModelRole } from "../../config/model-registry";
 import { PresetsConfig } from "../../config/presets-config";
@@ -118,6 +118,34 @@ export class SelectorController {
 		}
 		this.ctx.statusLine.setPresetsConfig(this.#sharedPresetsConfig);
 	}
+	/**
+	 * Applies the default preset if one is configured.
+	 *
+	 * @param options.forceApply - When true, applies even if a preset is already active.
+	 *   Use for explicit new-session operations (/clear, extension-triggered). The startup
+	 *   call passes false (default) so a resumed session's last-active preset is preserved.
+	 */
+	async applyDefaultPresetIfConfigured(options?: { forceApply?: boolean }): Promise<void> {
+		const { presetsConfig } = this.#getAgentConfigStores();
+		const defaultPreset = presetsConfig.getDefaultPreset();
+		const shouldApply = defaultPreset && (options?.forceApply || !presetsConfig.getActivePreset());
+		if (!shouldApply) {
+			return;
+		}
+		try {
+			await presetsConfig.applyPreset(defaultPreset);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (message.startsWith("Unknown preset:")) {
+				// Preset was deleted after being set as default — safe to skip.
+				logger.warn("Default preset no longer exists, skipping", { name: defaultPreset });
+			} else {
+				// Unexpected failure after partial state mutation — log at error level.
+				logger.error("Failed to apply default preset", { name: defaultPreset, error });
+			}
+		}
+	}
+
 	async #refreshOAuthProviderAuthState(): Promise<void> {
 		const oauthProviders = getOAuthProviders();
 		await Promise.all(

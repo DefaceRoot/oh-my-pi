@@ -13,10 +13,12 @@ type PresetStore = Pick<
 	| "captureCurrentConfig"
 	| "deletePreset"
 	| "getActivePreset"
+	| "getDefaultPreset"
 	| "getPreset"
 	| "listPresets"
 	| "renamePreset"
 	| "savePreset"
+	| "setDefaultPreset"
 >;
 type StatusTone = "success" | "warning" | "error";
 
@@ -88,10 +90,10 @@ export class PresetSelector implements Component {
 			...this.#renderStatusRows(innerWidth),
 			...this.#renderPromptRows(innerWidth),
 			...this.#renderPresetRows(innerWidth),
-			this.#frameRow(
-				theme.fg("dim", "↑/↓ move  / search  Enter apply  n new  r rename  e describe  d delete  Esc close"),
-				innerWidth,
-			),
+		this.#frameRow(
+			theme.fg("dim", "↑/↓ move  / search  Enter apply  n new  r rename  e describe  d delete  s default  Esc close"),
+			innerWidth,
+		),
 			this.#frameBottom(innerWidth),
 		];
 		return lines.map(line => theme.overlaySurface(line));
@@ -144,6 +146,10 @@ export class PresetSelector implements Component {
 		}
 		if (keyData === "e" || keyData === "E") {
 			this.#startDescriptionEdit();
+			return;
+		}
+		if (keyData === "s" || keyData === "S") {
+			this.#toggleDefaultPreset();
 			return;
 		}
 		if (matchesAppInterrupt(keyData)) {
@@ -380,6 +386,26 @@ export class PresetSelector implements Component {
 		this.#setStatus(`Saved ${name}.`, "success");
 	}
 
+	#toggleDefaultPreset(): void {
+		const preset = this.#currentPreset();
+		if (!preset) {
+			this.#setStatus("Choose a preset to set as default.", "warning");
+			return;
+		}
+		try {
+			const currentDefault = this.#presetsConfig.getDefaultPreset();
+			if (currentDefault === preset.name) {
+				this.#presetsConfig.setDefaultPreset(null);
+				this.#setStatus(`Cleared default (was ${preset.name}).`, "success");
+			} else {
+				this.#presetsConfig.setDefaultPreset(preset.name);
+				this.#setStatus(`${preset.name} set as default.`, "success");
+			}
+		} catch (error) {
+			this.#setStatus(error instanceof Error ? error.message : String(error), "error");
+		}
+	}
+
 	#refreshPresets(preferredName?: string): void {
 		this.#allPresets = this.#presetsConfig.listPresets();
 		let nextVisible = this.#filterPresets(this.#searchInput.getValue().trim());
@@ -472,16 +498,18 @@ export class PresetSelector implements Component {
 
 		const endIndex = Math.min(this.#scrollOffset + MAX_VISIBLE_PRESETS, this.#visiblePresets.length);
 		const activePreset = this.#presetsConfig.getActivePreset();
+		const defaultPreset = this.#presetsConfig.getDefaultPreset();
 		for (let index = this.#scrollOffset; index < endIndex; index += 1) {
 			const preset = this.#visiblePresets[index];
 			if (!preset) continue;
 			const selected = index === this.#selectedIndex;
 			const cursor = selected ? `${theme.fg("accent", `${theme.nav.cursor} `)}` : "  ";
 			const active = preset.name === activePreset ? theme.fg("accent", "●") : theme.fg("dim", "○");
+			const star = preset.name === defaultPreset ? theme.fg("accent", "★") : " ";
 			const name = selected ? theme.bold(theme.fg("accent", preset.name)) : preset.name;
 			const summary = preset.description?.trim() || "No description";
 			const meta = `${summary} ${theme.sep.dot} Updated: ${formatPresetDate(preset.updatedAt)}`;
-			rows.push(this.#frameRow(`${cursor}${active} ${name}`, innerWidth));
+			rows.push(this.#frameRow(`${cursor}${active}${star} ${name}`, innerWidth));
 			rows.push(this.#frameRow(theme.fg("dim", `  ${meta}`), innerWidth));
 		}
 

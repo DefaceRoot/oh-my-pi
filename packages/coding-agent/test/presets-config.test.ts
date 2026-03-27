@@ -787,4 +787,115 @@ describe("PresetsConfig", () => {
 		expect(presetsConfig.isModified()).toBe(false);
 		unsubscribe();
 	});
+	it("persists and retrieves the default preset", async () => {
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+		const snapshot = createSnapshot(modelKey);
+
+		expect(presetsConfig.getDefaultPreset()).toBeNull();
+
+		presetsConfig.savePreset("Work", snapshot);
+		presetsConfig.setDefaultPreset("Work");
+		expect(presetsConfig.getDefaultPreset()).toBe("Work");
+
+		// Clear the default
+		presetsConfig.setDefaultPreset(null);
+		expect(presetsConfig.getDefaultPreset()).toBeNull();
+	});
+
+	it("throws when setting a non-existent preset as default", async () => {
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+
+		expect(() => presetsConfig.setDefaultPreset("Ghost")).toThrow("Unknown preset: Ghost");
+	});
+
+	it("clears defaultPreset when that preset is deleted", async () => {
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+		const snapshot = createSnapshot(modelKey);
+
+		presetsConfig.savePreset("Work", snapshot);
+		presetsConfig.savePreset("Personal", snapshot);
+		presetsConfig.setDefaultPreset("Work");
+
+		presetsConfig.deletePreset("Work");
+		expect(presetsConfig.getDefaultPreset()).toBeNull();
+
+		// Deleting a non-default preset leaves the default intact
+		presetsConfig.savePreset("Work", snapshot);
+		presetsConfig.setDefaultPreset("Work");
+		presetsConfig.deletePreset("Personal");
+		expect(presetsConfig.getDefaultPreset()).toBe("Work");
+	});
+
+	it("updates defaultPreset when that preset is renamed", async () => {
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+		const snapshot = createSnapshot(modelKey);
+
+		presetsConfig.savePreset("OldName", snapshot);
+		presetsConfig.setDefaultPreset("OldName");
+
+		presetsConfig.renamePreset("OldName", "NewName");
+		expect(presetsConfig.getDefaultPreset()).toBe("NewName");
+
+		// Renaming a non-default preset leaves the default intact
+		presetsConfig.savePreset("Other", snapshot);
+		presetsConfig.renamePreset("Other", "OtherRenamed");
+		expect(presetsConfig.getDefaultPreset()).toBe("NewName");
+	});
+
+	it("returns null for defaultPreset when the named preset no longer exists in the store", async () => {
+		await Bun.write(
+			presetsPath,
+			YAML.stringify(
+				{
+					activePreset: null,
+					defaultPreset: "Ghost",
+					presets: {},
+				},
+				null,
+				2,
+			),
+		);
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+
+		// Ghost doesn't exist in the presets store — returns null defensively
+		expect(presetsConfig.getDefaultPreset()).toBeNull();
+
+		// Adding the preset makes it findable again
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		presetsConfig.savePreset("Ghost", createSnapshot(modelKey));
+		expect(presetsConfig.getDefaultPreset()).toBe("Ghost");
+	});
+
+	it("reads presets correctly from files written before defaultPreset was added", async () => {
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		const snapshot = createSnapshot(modelKey);
+		// Write a file in the legacy format (no defaultPreset field)
+		await Bun.write(
+			presetsPath,
+			YAML.stringify(
+				{
+					activePreset: "Baseline",
+					presets: { Baseline: snapshot },
+				},
+				null,
+				2,
+			),
+		);
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+
+		// Legacy file must validate successfully — existing presets stay intact
+		expect(presetsConfig.listPresets()).toHaveLength(1);
+		expect(presetsConfig.getActivePreset()).toBe("Baseline");
+		expect(presetsConfig.getDefaultPreset()).toBeNull();
+	});
+
 });

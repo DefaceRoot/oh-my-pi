@@ -43,6 +43,7 @@ class TestPresetsConfig {
 		subagents: {} as PresetSnapshot["subagents"],
 	};
 	activePreset: string | null;
+	defaultPreset: string | null = null;
 	readonly applyCalls: string[] = [];
 
 	constructor(initial: Record<string, PresetSnapshot>, activePreset: string | null = null) {
@@ -70,6 +71,17 @@ class TestPresetsConfig {
 
 	getActivePreset(): string | null {
 		return this.activePreset;
+	}
+
+	getDefaultPreset(): string | null {
+		return this.defaultPreset;
+	}
+
+	setDefaultPreset(name: string | null): void {
+		if (name !== null && !this.#presets.has(name)) {
+			throw new Error(`Unknown preset: ${name}`);
+		}
+		this.defaultPreset = name;
 	}
 
 	captureCurrentConfig(): Pick<PresetSnapshot, "modelRoles" | "roles" | "subagents"> {
@@ -312,7 +324,7 @@ describe("PresetSelector", () => {
 
 		const scrolled = renderText(selector, 90);
 		expect(scrolled).toContain("▲ more");
-		expect(scrolled).toContain("● Hotel");
+		expect(scrolled).toContain("●  Hotel");
 		expect(scrolled).not.toContain("Alpha");
 	});
 
@@ -331,7 +343,7 @@ describe("PresetSelector", () => {
 			now: () => "2026-03-27T12:00:00.000Z",
 		});
 
-		expect(renderText(selector)).toContain("● Alpha");
+		expect(renderText(selector)).toContain("●  Alpha");
 
 		selector.handleInput("r");
 		eraseInput(selector, "Alpha".length);
@@ -339,7 +351,7 @@ describe("PresetSelector", () => {
 		selector.handleInput("\n");
 
 		expect(presetsConfig.getActivePreset()).toBe("Active Alpha");
-		expect(renderText(selector)).toContain("● Active Alpha");
+		expect(renderText(selector)).toContain("●  Active Alpha");
 
 		selector.handleInput("d");
 		selector.handleInput("\n");

@@ -1749,8 +1749,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.selectorController.showDebugSelector();
 	}
 
-	applyDefaultPresetIfConfigured(): Promise<void> {
-		return this.selectorController.applyDefaultPresetIfConfigured();
+	applyDefaultPresetIfConfigured(options?: { forceApply?: boolean }): Promise<void> {
+		return this.selectorController.applyDefaultPresetIfConfigured(options);
 	}
 
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void> {

@@ -40,6 +40,7 @@ type CapturedPresetSnapshot = Omit<PresetSnapshot, keyof PresetMetadata>;
 
 export const PresetsConfigSchema = Type.Object({
 	activePreset: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+	defaultPreset: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
 	presets: Type.Record(Type.String({ minLength: 1 }), PresetSnapshotSchema),
 });
 
@@ -57,6 +58,7 @@ export interface PresetsChangedEvent {
 
 export const DEFAULT_PRESETS_CONFIG: PresetsConfigData = {
 	activePreset: null,
+	defaultPreset: null,
 	presets: {},
 };
 
@@ -206,6 +208,9 @@ export class PresetsConfig {
 		if (config.activePreset === name) {
 			config.activePreset = null;
 		}
+		if (config.defaultPreset === name) {
+			config.defaultPreset = null;
+		}
 		this.#persistConfig(config);
 	}
 
@@ -222,6 +227,9 @@ export class PresetsConfig {
 		delete config.presets[oldName];
 		if (config.activePreset === oldName) {
 			config.activePreset = newName;
+		}
+		if (config.defaultPreset === oldName) {
+			config.defaultPreset = newName;
 		}
 		this.#persistConfig(config);
 	}
@@ -277,6 +285,34 @@ export class PresetsConfig {
 			subagents: activePreset.subagents,
 		};
 		return stableSerialize(currentSnapshot) !== stableSerialize(activeSnapshot);
+	}
+
+	/**
+	 * Returns the configured default preset name, or null if none is set or the
+	 * named preset no longer exists in the store.
+	 */
+	getDefaultPreset(): string | null {
+		const defaultPreset = this.#getConfig().defaultPreset;
+		if (!defaultPreset) {
+			return null;
+		}
+		if (this.#getConfig().presets[defaultPreset] === undefined) {
+			logger.warn("Default preset missing from presets config", { name: defaultPreset });
+			return null;
+		}
+		return defaultPreset;
+	}
+
+	/**
+	 * Persists a new default preset. Pass null to clear the current default.
+	 */
+	setDefaultPreset(name: string | null): void {
+		const config = clonePresetsConfig(this.#getConfig());
+		if (name !== null && config.presets[name] === undefined) {
+			throw new Error(`Unknown preset: ${name}`);
+		}
+		config.defaultPreset = name;
+		this.#persistConfig(config);
 	}
 
 	async applyPreset(name: string): Promise<void> {

@@ -80,6 +80,16 @@ mock.module("../../config/presets-config", () => ({
 			presetsConfigInstances.push(this);
 		}
 
+		defaultPreset: string | null = null;
+
+		getDefaultPreset(): string | null {
+			return this.defaultPreset;
+		}
+
+		setDefaultPreset(name: string | null): void {
+			this.defaultPreset = name;
+		}
+
 		invalidateCache(): void {
 			presetsConfigInvalidations.push(this);
 		}
@@ -470,5 +480,52 @@ describe("SelectorController session-root-change reset", () => {
 
 		expect(switchSession).toHaveBeenCalledWith("/tmp/project/.omp/other-session.jsonl");
 		expect(handleSessionRootChange).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("SelectorController applyDefaultPresetIfConfigured", () => {
+	function createDefaultPresetContext(initialActive: string | null = null, defaultPresetName: string | null = "Work") {
+		const { controller } = createSelectorContext();
+		// Trigger lazy PresetsConfig construction (it's created on first store access).
+		controller.initPresetsForStatusLine();
+		const presetsConfig = presetsConfigInstances.at(-1) as {
+			activePreset: string | null;
+			defaultPreset: string | null;
+		};
+		presetsConfig.activePreset = initialActive;
+		presetsConfig.defaultPreset = defaultPresetName;
+		return { controller, presetsConfig };
+	}
+
+	it("applies default preset when no preset is currently active", async () => {
+		const { controller, presetsConfig } = createDefaultPresetContext(null, "Work");
+
+		await controller.applyDefaultPresetIfConfigured();
+
+		expect(presetsConfig.activePreset).toBe("Work");
+	});
+
+	it("does not apply default when a preset is already active", async () => {
+		const { controller, presetsConfig } = createDefaultPresetContext("Personal", "Work");
+
+		await controller.applyDefaultPresetIfConfigured();
+
+		expect(presetsConfig.activePreset).toBe("Personal");
+	});
+
+	it("applies default even when a different preset is active when forceApply is set", async () => {
+		const { controller, presetsConfig } = createDefaultPresetContext("Personal", "Work");
+
+		await controller.applyDefaultPresetIfConfigured({ forceApply: true });
+
+		expect(presetsConfig.activePreset).toBe("Work");
+	});
+
+	it("is a no-op when no default preset is configured", async () => {
+		const { controller, presetsConfig } = createDefaultPresetContext(null, null);
+
+		await controller.applyDefaultPresetIfConfigured({ forceApply: true });
+
+		expect(presetsConfig.activePreset).toBeNull();
 	});
 });

@@ -174,6 +174,7 @@ export class ExtensionUiController {
 					return { cancelled: true };
 				}
 				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
+				await this.ctx.applyDefaultPresetIfConfigured({ forceApply: true });
 
 				// Reset subagent state for new session root
 				this.ctx.handleSessionRootChange();
@@ -446,6 +447,7 @@ export class ExtensionUiController {
 				if (!success) {
 					return { cancelled: true };
 				}
+				await this.ctx.applyDefaultPresetIfConfigured({ forceApply: true });
 
 				// Reset subagent state for new session root
 				this.ctx.handleSessionRootChange();

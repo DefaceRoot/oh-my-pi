@@ -644,7 +644,11 @@ export class CommandController {
 				await Bun.sleep(10);
 			}
 		}
-		await this.ctx.session.newSession();
+		const started = await this.ctx.session.newSession();
+		if (!started) {
+			return;
+		}
+		await this.ctx.applyDefaultPresetIfConfigured({ forceApply: true });
 		this.ctx.handleSessionRootChange();
 		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
