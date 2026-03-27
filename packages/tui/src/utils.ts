@@ -1,5 +1,6 @@
 import { sliceWithWidth } from "@oh-my-pi/pi-natives";
 import { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
+import { stripCursorMarker } from "./cursor-marker";
 
 export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-natives";
 
@@ -73,7 +74,7 @@ export function visibleWidthRaw(str: string): number {
  */
 export function visibleWidth(str: string): number {
 	if (!str) return 0;
-	return visibleWidthRaw(str);
+	return visibleWidthRaw(stripCursorMarker(str));
 }
 
 const makeBoolArray = (chars: string): ReadonlyArray<boolean> => {

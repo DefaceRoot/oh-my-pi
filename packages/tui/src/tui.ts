@@ -8,6 +8,7 @@ import { isKeyRelease, matchesKey } from "./keys";
 import type { Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
 import { extractSegments, sliceByColumn, sliceWithWidth, truncateToWidth, visibleWidth } from "./utils";
+import { CURSOR_MARKER } from "./cursor-marker";
 
 const SEGMENT_RESET = "\x1b[0m";
 
@@ -65,7 +66,7 @@ export function isFocusable(component: Component | null): component is Component
  * Components emit this at the cursor position when focused.
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
-export const CURSOR_MARKER = "\x1b_pi:c\x1b\\";
+export { CURSOR_MARKER, hasCursorMarker, stripCursorMarker } from "./cursor-marker";
 
 export { visibleWidth };
 

@@ -1,4 +1,4 @@
-import { type Component, Input, matchesKey, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, hasCursorMarker, Input, matchesKey, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { PresetsConfig } from "../../../config/presets-config";
 import { fuzzyFilter } from "../../../utils/fuzzy";
 import { theme } from "../../theme/theme";
@@ -524,7 +524,9 @@ export class PresetSelector implements Component {
 	}
 
 	#frameRow(content: string, innerWidth: number): string {
-		const fitted = truncateToWidth(content, innerWidth);
+		// Focused inputs already render to the requested width. Re-truncating them here
+		// would count the hidden cursor marker as visible text and collapse the frame.
+		const fitted = hasCursorMarker(content) ? content : truncateToWidth(content, innerWidth);
 		const remaining = Math.max(0, innerWidth - visibleWidth(fitted));
 		const side = theme.fg("border", theme.boxSharp.vertical);
 		return `${side}${fitted}${padding(remaining)}${side}`;

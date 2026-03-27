@@ -7,8 +7,7 @@ import { getIndentation } from "@oh-my-pi/pi-utils";
 
 function renderedWidth(input: Input, width: number): number {
 	const [line] = input.render(width);
-	// TUI strips this marker before its width verification; tests should mimic that.
-	return visibleWidth(line.replaceAll(CURSOR_MARKER, ""));
+	return visibleWidth(line);
 }
 
 describe("Input component", () => {
@@ -28,6 +27,12 @@ describe("Input component", () => {
 		expect(CURSOR_MARKER.endsWith("\x1b\\")).toBeTrue();
 		expect(CURSOR_MARKER.includes("\x07")).toBeFalse();
 	});
+
+	it("treats the cursor marker as zero-width for layout math", () => {
+		expect(visibleWidth(CURSOR_MARKER)).toBe(0);
+		expect(visibleWidth(`ab${CURSOR_MARKER}cd`)).toBe(4);
+	});
+
 
 	it("moves by CJK and punctuation blocks (backward)", () => {
 		const text = "天气不错，去散步吧！";

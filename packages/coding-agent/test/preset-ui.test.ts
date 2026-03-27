@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { MODEL_ROLE_IDS } from "../src/config/model-registry";
 import type { PresetSnapshot } from "../src/config/presets-config";
 import { PresetBar } from "../src/modes/components/agent-config/preset-bar";
+import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { PresetSelector } from "../src/modes/components/agent-config/preset-selector";
 import { initTheme } from "../src/modes/theme/theme";
 
@@ -395,6 +396,25 @@ describe("PresetSelector", () => {
 		expect(presetsConfig.getPreset("Custom Saved")).toBeUndefined();
 		expect(renderText(selector)).toContain("Alpha");
 	});
+
+	test("keeps the save prompt frame aligned while typing a preset name", () => {
+		const presetsConfig = new TestPresetsConfig({ Alpha: createSnapshot() }, "Alpha");
+		const selector = new PresetSelector({
+			presetsConfig: presetsConfig as never,
+			onApply: () => {},
+			onClose: () => {},
+			now: () => "2026-03-27T12:00:00.000Z",
+		});
+
+		selector.handleInput("n");
+		for (const ch of "Preset Name") {
+			selector.handleInput(ch);
+			for (const line of selector.render(48)) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(48);
+			}
+		}
+	});
+
 
 	test("keeps the create prompt open and shows inline errors when saving fails", async () => {
 		const presetsConfig = new FailingPresetsConfig({ Alpha: createSnapshot() }, "Alpha");
