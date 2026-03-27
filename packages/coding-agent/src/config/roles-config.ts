@@ -34,6 +34,8 @@ const AdvancedConfigSchema = Type.Optional(
 		memoriesEnabled: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
 		grepContextBefore: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
 		grepContextAfter: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		compactionThresholdPercent: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		compactionThresholdTokens: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
 	}),
 );
 
@@ -45,6 +47,8 @@ export type AdvancedConfig = {
 	memoriesEnabled?: boolean | null;
 	grepContextBefore?: number | null;
 	grepContextAfter?: number | null;
+	compactionThresholdPercent?: number | null;
+	compactionThresholdTokens?: number | null;
 };
 
 // Accepts V1 format ("all", "none", { categories }) AND V2 format ({ auto, frontmatter })

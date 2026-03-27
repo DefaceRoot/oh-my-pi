@@ -49,6 +49,22 @@ export function applyAdvancedConfigToSettings(settings: Settings, config?: Advan
 	) {
 		settings.override("grep.contextAfter", config.grepContextAfter);
 	}
+
+	if (
+		typeof config.compactionThresholdPercent === "number" &&
+		Number.isInteger(config.compactionThresholdPercent) &&
+		config.compactionThresholdPercent >= -1
+	) {
+		settings.override("compaction.thresholdPercent", config.compactionThresholdPercent);
+	}
+
+	if (
+		typeof config.compactionThresholdTokens === "number" &&
+		Number.isInteger(config.compactionThresholdTokens) &&
+		config.compactionThresholdTokens >= -1
+	) {
+		settings.override("compaction.thresholdTokens", config.compactionThresholdTokens);
+	}
 }
 
 export function syncAdvancedConfigToSettings(settings: Settings, config?: AdvancedConfig | null): void {
@@ -97,6 +113,26 @@ export function syncAdvancedConfigToSettings(settings: Settings, config?: Advanc
 		settings.override("grep.contextAfter", config.grepContextAfter);
 	} else {
 		settings.clearOverride("grep.contextAfter");
+	}
+
+	if (
+		typeof config?.compactionThresholdPercent === "number" &&
+		Number.isInteger(config.compactionThresholdPercent) &&
+		config.compactionThresholdPercent >= -1
+	) {
+		settings.override("compaction.thresholdPercent", config.compactionThresholdPercent);
+	} else {
+		settings.clearOverride("compaction.thresholdPercent");
+	}
+
+	if (
+		typeof config?.compactionThresholdTokens === "number" &&
+		Number.isInteger(config.compactionThresholdTokens) &&
+		config.compactionThresholdTokens >= -1
+	) {
+		settings.override("compaction.thresholdTokens", config.compactionThresholdTokens);
+	} else {
+		settings.clearOverride("compaction.thresholdTokens");
 	}
 }
 

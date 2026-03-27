@@ -9,7 +9,7 @@ export type AdvancedCompactionStrategy = "context-full" | "handoff" | "off";
 
 type AdvancedFieldId = keyof AdvancedConfigPanelState;
 type ToggleFieldId = "thinkingLevel" | "compactionStrategy" | "memoriesEnabled";
-type NumericFieldId = "maxRecursionDepth" | "temperature" | "grepContextBefore" | "grepContextAfter";
+type NumericFieldId = "maxRecursionDepth" | "temperature" | "grepContextBefore" | "grepContextAfter" | "compactionThresholdPercent" | "compactionThresholdTokens";
 
 type AdvancedConfigPanelState = {
 	thinkingLevel?: ThinkingLevel;
@@ -19,6 +19,8 @@ type AdvancedConfigPanelState = {
 	memoriesEnabled?: boolean;
 	grepContextBefore?: number;
 	grepContextAfter?: number;
+	compactionThresholdPercent?: number;
+	compactionThresholdTokens?: number;
 };
 
 export interface AdvancedConfigPanelGlobalValues {
@@ -29,6 +31,8 @@ export interface AdvancedConfigPanelGlobalValues {
 	memoriesEnabled: boolean;
 	grepContextBefore: number;
 	grepContextAfter: number;
+	compactionThresholdPercent: number;
+	compactionThresholdTokens: number;
 }
 
 export interface AdvancedConfigPanelCallbacks {
@@ -51,12 +55,16 @@ const FIELD_LABELS: Record<AdvancedFieldId, string> = {
 	memoriesEnabled: "Memories",
 	grepContextBefore: "Grep Context Before",
 	grepContextAfter: "Grep Context After",
+	compactionThresholdPercent: "Compaction Threshold %",
+	compactionThresholdTokens: "Compaction Token Limit",
 };
 
 const FIELD_ORDER: AdvancedFieldId[] = [
 	"thinkingLevel",
 	"maxRecursionDepth",
 	"compactionStrategy",
+	"compactionThresholdPercent",
+	"compactionThresholdTokens",
 	"temperature",
 	"memoriesEnabled",
 	"grepContextBefore",
@@ -260,6 +268,20 @@ export class AdvancedConfigPanel implements Component {
 				}
 				return formatGlobalValue(formatContextLines(this.#globalValues.grepContextAfter));
 			}
+			case "compactionThresholdPercent": {
+				const explicit = this.#config.compactionThresholdPercent;
+				if (explicit !== undefined) {
+					return formatThresholdPercent(explicit);
+				}
+				return formatGlobalValue(formatThresholdPercent(this.#globalValues.compactionThresholdPercent));
+			}
+			case "compactionThresholdTokens": {
+				const explicit = this.#config.compactionThresholdTokens;
+				if (explicit !== undefined) {
+					return formatThresholdTokens(explicit);
+				}
+				return formatGlobalValue(formatThresholdTokens(this.#globalValues.compactionThresholdTokens));
+			}
 		}
 	}
 
@@ -362,6 +384,28 @@ export class AdvancedConfigPanel implements Component {
 				return;
 			}
 			this.#config.temperature = value;
+		} else if (fieldId === "compactionThresholdPercent") {
+			if (!isCompleteNumericDraft(fieldId, raw)) {
+				this.#errorMessage = "Compaction threshold must be an integer (-1 for default, or a value ≥ 0).";
+				return;
+			}
+			const value = Number(raw);
+			if (!Number.isInteger(value) || value < -1) {
+				this.#errorMessage = "Compaction threshold must be an integer (-1 for default, or a value ≥ 0).";
+				return;
+			}
+			this.#config.compactionThresholdPercent = value;
+		} else if (fieldId === "compactionThresholdTokens") {
+			if (!isCompleteNumericDraft(fieldId, raw)) {
+				this.#errorMessage = "Token limit must be an integer (-1 for default, or a positive number).";
+				return;
+			}
+			const value = Number(raw);
+			if (!Number.isInteger(value) || value < -1) {
+				this.#errorMessage = "Token limit must be an integer (-1 for default, or a positive number).";
+				return;
+			}
+			this.#config.compactionThresholdTokens = value;
 		} else {
 			if (!isCompleteNumericDraft(fieldId, raw)) {
 				this.#errorMessage = "Grep context must be a non-negative integer.";
@@ -410,6 +454,12 @@ export class AdvancedConfigPanel implements Component {
 			case "grepContextAfter":
 				delete this.#config.grepContextAfter;
 				break;
+			case "compactionThresholdPercent":
+				delete this.#config.compactionThresholdPercent;
+				break;
+			case "compactionThresholdTokens":
+				delete this.#config.compactionThresholdTokens;
+				break;
 		}
 		this.#emitChange();
 	}
@@ -419,7 +469,9 @@ export class AdvancedConfigPanel implements Component {
 			fieldId === "maxRecursionDepth" ||
 			fieldId === "temperature" ||
 			fieldId === "grepContextBefore" ||
-			fieldId === "grepContextAfter"
+			fieldId === "grepContextAfter" ||
+			fieldId === "compactionThresholdPercent" ||
+			fieldId === "compactionThresholdTokens"
 		);
 	}
 
@@ -433,6 +485,10 @@ export class AdvancedConfigPanel implements Component {
 				return this.#config.grepContextBefore?.toString() ?? "";
 			case "grepContextAfter":
 				return this.#config.grepContextAfter?.toString() ?? "";
+			case "compactionThresholdPercent":
+				return this.#config.compactionThresholdPercent?.toString() ?? "";
+			case "compactionThresholdTokens":
+				return this.#config.compactionThresholdTokens?.toString() ?? "";
 		}
 	}
 
@@ -446,6 +502,10 @@ export class AdvancedConfigPanel implements Component {
 				return formatContextLines(this.#globalValues.grepContextBefore);
 			case "grepContextAfter":
 				return formatContextLines(this.#globalValues.grepContextAfter);
+			case "compactionThresholdPercent":
+				return formatThresholdPercent(this.#globalValues.compactionThresholdPercent);
+			case "compactionThresholdTokens":
+				return formatThresholdTokens(this.#globalValues.compactionThresholdTokens);
 		}
 	}
 
@@ -502,6 +562,20 @@ function normalizeConfig(config: AdvancedConfig | null | undefined): AdvancedCon
 	) {
 		normalized.grepContextAfter = config.grepContextAfter;
 	}
+	if (
+		typeof config?.compactionThresholdPercent === "number" &&
+		Number.isInteger(config.compactionThresholdPercent) &&
+		config.compactionThresholdPercent >= -1
+	) {
+		normalized.compactionThresholdPercent = config.compactionThresholdPercent;
+	}
+	if (
+		typeof config?.compactionThresholdTokens === "number" &&
+		Number.isInteger(config.compactionThresholdTokens) &&
+		config.compactionThresholdTokens >= -1
+	) {
+		normalized.compactionThresholdTokens = config.compactionThresholdTokens;
+	}
 	return normalized;
 }
 
@@ -514,6 +588,8 @@ function toAdvancedConfig(config: AdvancedConfigPanelState): AdvancedConfig | nu
 	if (config.memoriesEnabled !== undefined) next.memoriesEnabled = config.memoriesEnabled;
 	if (config.grepContextBefore !== undefined) next.grepContextBefore = config.grepContextBefore;
 	if (config.grepContextAfter !== undefined) next.grepContextAfter = config.grepContextAfter;
+	if (config.compactionThresholdPercent !== undefined) next.compactionThresholdPercent = config.compactionThresholdPercent;
+	if (config.compactionThresholdTokens !== undefined) next.compactionThresholdTokens = config.compactionThresholdTokens;
 	return Object.keys(next).length > 0 ? next : null;
 }
 
@@ -524,7 +600,13 @@ function cycleValue<T>(values: Array<T | undefined>, current: T | undefined): T 
 }
 
 function isCompleteNumericDraft(fieldId: NumericFieldId, draft: string): boolean {
-	if (fieldId === "maxRecursionDepth" || fieldId === "grepContextBefore" || fieldId === "grepContextAfter") {
+	if (
+		fieldId === "maxRecursionDepth" ||
+		fieldId === "grepContextBefore" ||
+		fieldId === "grepContextAfter" ||
+		fieldId === "compactionThresholdPercent" ||
+		fieldId === "compactionThresholdTokens"
+	) {
 		return /^-?\d+$/.test(draft);
 	}
 	return /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(draft);
@@ -553,4 +635,12 @@ function formatBooleanState(value: boolean, trueLabel: string, falseLabel: strin
 
 function formatGlobalValue(value: string): string {
 	return `${theme.fg("dim", "global")} · ${theme.fg("muted", value)}`;
+}
+
+function formatThresholdPercent(value: number): string {
+	return value === -1 ? "default (-1)" : `${value}%`;
+}
+
+function formatThresholdTokens(value: number): string {
+	return value === -1 ? "default (-1)" : value.toString();
 }

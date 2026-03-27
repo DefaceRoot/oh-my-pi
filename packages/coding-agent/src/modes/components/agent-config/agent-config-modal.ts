@@ -647,6 +647,8 @@ export class AgentConfigModal implements Component {
 				memoriesEnabled: this.#settings.get("memories.enabled") ?? false,
 				grepContextBefore: this.#settings.get("grep.contextBefore") ?? 0,
 				grepContextAfter: this.#settings.get("grep.contextAfter") ?? 0,
+				compactionThresholdPercent: this.#settings.get("compaction.thresholdPercent") ?? -1,
+				compactionThresholdTokens: this.#settings.get("compaction.thresholdTokens") ?? -1,
 			},
 		};
 	}
