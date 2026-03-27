@@ -49,6 +49,7 @@ function createPathContext(): SegmentContext {
 			status: null,
 			pr: null,
 		},
+		presets: null,
 	};
 }
 

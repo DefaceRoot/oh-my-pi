@@ -44,6 +44,10 @@ export interface SegmentContext {
 		status: { staged: number; unstaged: number; untracked: number } | null;
 		pr: { number: number; url: string } | null;
 	};
+	presets: {
+		activePreset: string | null;
+		isModified: boolean;
+	} | null;
 }
 
 export interface RenderedSegment {

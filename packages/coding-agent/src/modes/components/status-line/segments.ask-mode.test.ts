@@ -63,6 +63,7 @@ function createContext(options: {
 			status: null,
 			pr: options.pr ?? null,
 		},
+		presets: null,
 	};
 }
 
@@ -131,7 +132,7 @@ describe("status-line model segment agent modes", () => {
 	it("renders PR and token rate segments when data is available", () => {
 		const ctx = createContext({
 			pr: { number: 42, url: "https://example.test/pr/42" },
-			tokenRate: 12.4,
+			tokenRate: 9.4,
 		});
 
 		const pr = renderSegment("pr", ctx);
@@ -140,6 +141,7 @@ describe("status-line model segment agent modes", () => {
 
 		const tokenRate = renderSegment("token_rate", ctx);
 		expect(tokenRate.visible).toBe(true);
-		expect(tokenRate.content).toContain("12.4/s");
+		// Rates below 10 show one decimal place; 9.4 → "9.4/s"
+		expect(tokenRate.content).toContain("9.4/s");
 	});
 });
