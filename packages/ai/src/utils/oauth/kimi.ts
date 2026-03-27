@@ -15,6 +15,7 @@ const DEFAULT_OAUTH_HOST = "https://auth.kimi.com";
 const DEVICE_ID_FILENAME = "kimi-device-id";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
+const TOKEN_EXPIRY_SAFETY_BUFFER_MS = 5 * 60 * 1000;
 
 interface DeviceAuthorizationResponse {
 	user_code?: string;
@@ -145,7 +146,7 @@ function parseTokenPayload(payload: TokenResponse, refreshTokenFallback?: string
 	return {
 		access: payload.access_token,
 		refresh,
-		expires: Date.now() + payload.expires_in * 1000,
+		expires: Date.now() + payload.expires_in * 1000 - TOKEN_EXPIRY_SAFETY_BUFFER_MS,
 	};
 }
 

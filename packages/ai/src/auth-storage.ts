@@ -185,6 +185,12 @@ type UsageRequestDescriptor = {
 	baseUrl?: string;
 };
 
+type UsageFetchResult = {
+	report: UsageReport | null;
+	credential: UsageCredential;
+};
+
+
 type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
@@ -260,6 +266,15 @@ class AuthStorageUsageCache implements UsageCache {
 
 type StoredCredential = { id: number; credential: AuthCredential };
 
+type OAuthCredentialIdentity = {
+	refresh?: string;
+	access?: string;
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+};
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,8 +299,9 @@ export class AuthStorage {
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
-	#usageRequestInFlight: Map<string, Promise<UsageReport | null>> = new Map();
+	#usageRequestInFlight: Map<string, Promise<UsageFetchResult>> = new Map();
 	#usageReportsInFlight: Map<string, Promise<UsageReport[]>> = new Map();
+	#oauthRefreshInFlight: Map<string, Promise<OAuthCredentials>> = new Map();
 	#usageFetch: typeof fetch;
 	#usageRequestTimeoutMs: number;
 	#usageLogger?: UsageLogger;
@@ -1065,39 +1081,79 @@ export class AuthStorage {
 		};
 	}
 
-	#persistRefreshedUsageCredential(provider: Provider, previous: UsageCredential, next: UsageCredential): void {
+	#buildOAuthRefreshKey(provider: Provider, credential: OAuthCredential): string {
+		if (credential.refresh.trim()) {
+			return `${provider}:refresh:${Bun.hash(credential.refresh).toString(16)}`;
+		}
+		const identityKey = this.#resolveOAuthDedupeIdentityKey(provider, credential);
+		if (identityKey) {
+			return `${provider}:identity:${identityKey}`;
+		}
+		return `${provider}:access:${Bun.hash(credential.access).toString(16)}`;
+	}
+
+	#getOAuthCredentialIdentity(credential: OAuthCredentials): OAuthCredentialIdentity {
+		return {
+			refresh: credential.refresh,
+			access: credential.access,
+			accountId: credential.accountId,
+			email: credential.email,
+			projectId: credential.projectId,
+		};
+	}
+
+
+	#findStoredOAuthCredentialIndexForCredential(provider: Provider, credential: OAuthCredentials): number {
+		return this.#findStoredOAuthCredentialIndex(provider, this.#getOAuthCredentialIdentity(credential));
+	}
+
+
+	#findStoredOAuthCredentialIndex(
+		provider: Provider,
+		previous: OAuthCredentialIdentity,
+	): number {
 		const entries = this.#getStoredCredentials(provider);
-		const index = entries.findIndex(entry => {
+		const hasStableIdentity = Boolean(previous.accountId || previous.email || previous.projectId);
+		return entries.findIndex(entry => {
 			if (entry.credential.type !== "oauth") return false;
-			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
-			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
+			if (previous.refresh && entry.credential.refresh === previous.refresh) return true;
+			if (previous.access && entry.credential.access === previous.access) return true;
+			if (!hasStableIdentity) return false;
 			return (
 				entry.credential.accountId === previous.accountId &&
 				entry.credential.email === previous.email &&
 				entry.credential.projectId === previous.projectId
 			);
 		});
+	}
+
+	#persistRefreshedOAuthCredential(
+		provider: Provider,
+		previous: OAuthCredentialIdentity,
+		next: OAuthCredentials,
+	): void {
+		const index = this.#findStoredOAuthCredentialIndex(provider, previous);
 		if (index === -1) return;
-		const existing = entries[index]!.credential;
-		if (existing.type !== "oauth") return;
+		const existing = this.#getStoredCredentials(provider)[index]?.credential;
+		if (existing?.type !== "oauth") return;
 		this.#replaceCredentialAt(provider, index, {
 			type: "oauth",
-			access: next.accessToken ?? existing.access,
-			refresh: next.refreshToken ?? existing.refresh,
-			expires: next.expiresAt ?? existing.expires,
-			accountId: next.accountId,
-			projectId: next.projectId,
-			email: next.email,
-			enterpriseUrl: next.enterpriseUrl,
+			access: next.access ?? existing.access,
+			refresh: next.refresh ?? existing.refresh,
+			expires: next.expires ?? existing.expires,
+			accountId: next.accountId ?? existing.accountId,
+			projectId: next.projectId ?? existing.projectId,
+			email: next.email ?? existing.email,
+			enterpriseUrl: next.enterpriseUrl ?? existing.enterpriseUrl,
 		});
 	}
 
-	async #fetchUsageUncached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageReport | null> {
+	async #fetchUsageUncached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageFetchResult> {
 		const resolver = this.#usageProviderResolver;
-		if (!resolver) return null;
+		if (!resolver) return { report: null, credential: request.credential };
 
 		const providerImpl = resolver(request.provider);
-		if (!providerImpl) return null;
+		if (!providerImpl) return { report: null, credential: request.credential };
 
 		const timeoutSignal =
 			typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -1115,10 +1171,34 @@ export class AuthStorage {
 				try {
 					const refreshed = await this.#refreshOAuthCredential(request.provider, refreshableCredential);
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
-					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
+					const lookupCandidates = [
+						{
+							refresh: refreshed.refresh,
+							access: refreshed.access,
+							accountId: refreshed.accountId ?? refreshableCredential.accountId,
+							email: refreshed.email ?? refreshableCredential.email,
+							projectId: refreshed.projectId ?? refreshableCredential.projectId,
+						},
+						{
+							refresh: refreshableCredential.refresh,
+							access: refreshableCredential.access,
+							accountId: refreshableCredential.accountId,
+							email: refreshableCredential.email,
+							projectId: refreshableCredential.projectId,
+						},
+					];
+					let latestUsageCredential: UsageCredential | undefined;
+					for (const candidate of lookupCandidates) {
+						const index = this.#findStoredOAuthCredentialIndex(request.provider, candidate);
+						if (index === -1) continue;
+						const latestStoredCredential = this.#getStoredCredentials(request.provider)[index]?.credential;
+						if (latestStoredCredential?.type !== "oauth") continue;
+						latestUsageCredential = this.#buildUsageCredential(latestStoredCredential);
+						break;
+					}
 					params = {
 						...params,
-						credential: refreshedCredential,
+						credential: latestUsageCredential ?? refreshedCredential,
 					};
 				} catch (error) {
 					this.#usageLogger?.debug("Usage credential refresh failed, using original credential", {
@@ -1129,40 +1209,43 @@ export class AuthStorage {
 			}
 		}
 
-		if (providerImpl.supports && !providerImpl.supports(params)) return null;
+		if (providerImpl.supports && !providerImpl.supports(params)) {
+			return { report: null, credential: params.credential };
+		}
 
 		try {
-			return await providerImpl.fetchUsage(params, {
+			const report = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
 			});
+			return { report, credential: params.credential };
 		} catch (error) {
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
 				error: String(error),
 			});
-			return null;
+			return { report: null, credential: params.credential };
 		}
 	}
 
-	async #fetchUsageCached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageReport | null> {
+	async #fetchUsageCached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageFetchResult> {
 		const cacheKey = this.#buildUsageReportCacheKey(request);
 		const now = Date.now();
 		const cached = this.#usageCache.get<UsageReport | null>(cacheKey);
 		if (cached && cached.expiresAt > now) {
-			return cached.value;
+			return { report: cached.value, credential: request.credential };
 		}
 
 		const inFlight = this.#usageRequestInFlight.get(cacheKey);
 		if (inFlight) return inFlight;
 
 		const promise = (async () => {
-			const report = await this.#fetchUsageUncached(request, timeoutMs);
-			if (report !== null) {
-				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
-				return report;
+			const result = await this.#fetchUsageUncached(request, timeoutMs);
+			if (result.report !== null) {
+				this.#usageCache.set(cacheKey, { value: result.report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
+				return result;
 			}
-			return cached?.value ?? null;
+			return { report: cached?.value ?? null, credential: result.credential };
 		})().finally(() => {
 			this.#usageRequestInFlight.delete(cacheKey);
 		});
@@ -1361,15 +1444,28 @@ export class AuthStorage {
 		return Math.min(...candidates);
 	}
 
+	async #getUsageReportWithCredential(
+		provider: Provider,
+		credential: OAuthCredential,
+		options?: { baseUrl?: string; timeoutMs?: number },
+	): Promise<{ report: UsageReport | null; credential: OAuthCredential }> {
+		const result = await this.#fetchUsageCached(
+			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
+		);
+		return {
+			report: result.report,
+			credential: this.#buildRefreshableOauthCredential(result.credential) ?? credential,
+		};
+	}
+
 	async #getUsageReport(
 		provider: Provider,
 		credential: OAuthCredential,
 		options?: { baseUrl?: string; timeoutMs?: number },
 	): Promise<UsageReport | null> {
-		return this.#fetchUsageCached(
-			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
-		);
+		const result = await this.#getUsageReportWithCredential(provider, credential, options);
+		return result.report;
 	}
 
 	async fetchUsageReports(options?: {
@@ -1408,7 +1504,7 @@ export class AuthStorage {
 			const results = await Promise.all(
 				requests.map(request => this.#fetchUsageCached(request, this.#usageRequestTimeoutMs)),
 			);
-			const reports = results.filter((report): report is UsageReport => report !== null);
+			const reports = results.map(result => result.report).filter((report): report is UsageReport => report !== null);
 			const deduped = this.#dedupeUsageReports(reports);
 			if (deduped.length > 0) {
 				this.#usageCache.set(cacheKey, { value: deduped, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
@@ -1555,26 +1651,44 @@ export class AuthStorage {
 			args.order.map(async idx => {
 				const selection = args.credentials[idx];
 				if (!selection) return null;
-				const blockedUntil = this.#getCredentialBlockedUntil(args.providerKey, selection.index);
+				const currentStoredIndex = this.#findStoredOAuthCredentialIndexForCredential(
+					args.provider,
+					selection.credential,
+				);
+				const blockedUntil =
+					currentStoredIndex === -1
+						? undefined
+						: this.#getCredentialBlockedUntil(args.providerKey, currentStoredIndex);
 				if (blockedUntil !== undefined) return { selection, usage: null, usageChecked: false, blockedUntil };
-				const usage = await this.#getUsageReport(args.provider, selection.credential, {
+				const usageResult = await this.#getUsageReportWithCredential(args.provider, selection.credential, {
 					...args.options,
 					timeoutMs: this.#usageRequestTimeoutMs,
 				});
-				return { selection, usage, usageChecked: true, blockedUntil: undefined as number | undefined };
+				return {
+					selection: { ...selection, credential: usageResult.credential },
+					usage: usageResult.report,
+					usageChecked: true,
+					blockedUntil: undefined as number | undefined,
+				};
 			}),
 		);
 
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
 			const result = usageResults[orderPos];
 			if (!result) continue;
-			const { selection, usage, usageChecked } = result;
+			const { selection, usage, usageChecked } = result
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
 			if (!blocked && usage && this.#isUsageLimitReached(usage)) {
 				const resetAtMs = this.#getUsageResetAtMs(usage, nowMs);
 				blockedUntil = resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs;
-				this.#markCredentialBlocked(args.providerKey, selection.index, blockedUntil);
+				const currentStoredIndex = this.#findStoredOAuthCredentialIndexForCredential(
+					args.provider,
+					selection.credential,
+				);
+				if (currentStoredIndex !== -1) {
+					this.#markCredentialBlocked(args.providerKey, currentStoredIndex, blockedUntil);
+				}
 				blocked = true;
 			}
 			const windows = usage ? strategy.findWindowLimits(usage) : undefined;
@@ -1678,16 +1792,17 @@ export class AuthStorage {
 		await Promise.all(
 			candidates.map(async candidate => {
 				if (Date.now() < candidate.selection.credential.expires) return;
-				const latestCredential = this.#getCredentialsForProvider(provider)[candidate.selection.index];
+				const latestStoredIndex = this.#findStoredOAuthCredentialIndexForCredential(
+					provider,
+					candidate.selection.credential,
+				);
+				const latestCredential = this.#getStoredCredentials(provider)[latestStoredIndex]?.credential;
 				if (latestCredential?.type === "oauth" && Date.now() < latestCredential.expires) {
 					candidate.selection.credential = latestCredential;
 					return;
 				}
 				try {
-					const refreshedCredentials = await this.#refreshOAuthCredential(
-						provider,
-						candidate.selection.credential,
-					);
+					const refreshedCredentials = await this.#refreshOAuthCredential(provider, candidate.selection.credential);
 					candidate.selection.credential = {
 						...candidate.selection.credential,
 						...refreshedCredentials,
@@ -1722,30 +1837,52 @@ export class AuthStorage {
 	}
 
 	async #refreshOAuthCredential(provider: Provider, credential: OAuthCredential): Promise<OAuthCredentials> {
-		if (Date.now() < credential.expires) return credential;
-		const customProvider = getOAuthProvider(provider);
-		let refreshPromise: Promise<OAuthCredentials>;
-		if (customProvider) {
-			if (!customProvider.refreshToken) {
-				throw new Error(`OAuth provider "${provider}" does not support token refresh`);
+		let currentCredential = credential;
+		const latestStoredIndex = this.#findStoredOAuthCredentialIndexForCredential(provider, credential);
+		const latestCredential = this.#getStoredCredentials(provider)[latestStoredIndex]?.credential;
+		if (latestCredential?.type === "oauth") {
+			currentCredential = latestCredential;
+		}
+		if (Date.now() < currentCredential.expires) return currentCredential;
+		const refreshKey = this.#buildOAuthRefreshKey(provider, currentCredential);
+		const inFlight = this.#oauthRefreshInFlight.get(refreshKey);
+		if (inFlight) return inFlight;
+
+		const refreshTask = (async () => {
+			const customProvider = getOAuthProvider(provider);
+			let refreshPromise: Promise<OAuthCredentials>;
+			if (customProvider) {
+				if (!customProvider.refreshToken) {
+					throw new Error(`OAuth provider "${provider}" does not support token refresh`);
+				}
+				refreshPromise = customProvider.refreshToken(currentCredential);
+			} else {
+				refreshPromise = refreshOAuthToken(provider as OAuthProvider, currentCredential);
 			}
-			refreshPromise = customProvider.refreshToken(credential);
-		} else {
-			refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
-		}
-		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
-		let timeout: NodeJS.Timeout | undefined;
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timeout = setTimeout(
-				() => reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
-				DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
-			);
+			// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
+			let timeout: NodeJS.Timeout | undefined;
+			const timeoutPromise = new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
+					DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+				);
+			});
+			try {
+				const refreshed = await Promise.race([refreshPromise, timeoutPromise]);
+				this.#persistRefreshedOAuthCredential(
+					provider,
+					this.#getOAuthCredentialIdentity(currentCredential),
+					refreshed,
+				);
+				return refreshed;
+			} finally {
+				if (timeout) clearTimeout(timeout);
+			}
+		})().finally(() => {
+			this.#oauthRefreshInFlight.delete(refreshKey);
 		});
-		try {
-			return await Promise.race([refreshPromise, timeoutPromise]);
-		} finally {
-			if (timeout) clearTimeout(timeout);
-		}
+		this.#oauthRefreshInFlight.set(refreshKey, refreshTask);
+		return refreshTask;
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
@@ -1763,7 +1900,11 @@ export class AuthStorage {
 		},
 	): Promise<string | undefined> {
 		const { checkUsage, allowBlocked, prefetchedUsage = null, usagePrechecked = false } = usageOptions;
-		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index)) {
+		let credentialForStateUpdates: OAuthCredential = selection.credential;
+		const resolveCurrentStoredIndex = () =>
+			this.#findStoredOAuthCredentialIndexForCredential(provider, credentialForStateUpdates);
+		const currentStoredIndex = resolveCurrentStoredIndex();
+		if (!allowBlocked && currentStoredIndex !== -1 && this.#isCredentialBlocked(providerKey, currentStoredIndex)) {
 			return undefined;
 		}
 
@@ -1775,22 +1916,28 @@ export class AuthStorage {
 				usage = prefetchedUsage;
 				usageChecked = true;
 			} else {
-				usage = await this.#getUsageReport(provider, selection.credential, {
+				const usageResult = await this.#getUsageReportWithCredential(provider, selection.credential, {
 					...options,
 					timeoutMs: this.#usageRequestTimeoutMs,
 				});
+				usage = usageResult.report;
+				credentialForStateUpdates = usageResult.credential;
+				selection.credential = usageResult.credential;
 				usageChecked = true;
 			}
 			if (usage && this.#isUsageLimitReached(usage)) {
 				const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
-				this.#markCredentialBlocked(
-					providerKey,
-					selection.index,
-					resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
-				);
+				const currentStoredIndex = resolveCurrentStoredIndex();
+				if (currentStoredIndex !== -1) {
+					this.#markCredentialBlocked(
+						providerKey,
+						currentStoredIndex,
+						resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
+					);
+				}
 				return undefined;
 			}
-		}
+			}
 
 		try {
 			let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
@@ -1808,36 +1955,51 @@ export class AuthStorage {
 				result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
 			}
 			if (!result) return undefined;
+			// Resolve the stored row by credential identity because concurrent refreshes can reorder entries
+			// before this await resumes.
+			const credentialIdentity = this.#getOAuthCredentialIdentity(selection.credential);
+			const latestStoredIndex = this.#findStoredOAuthCredentialIndex(provider, credentialIdentity);
+			const latestStoredCredential = this.#getStoredCredentials(provider)[latestStoredIndex]?.credential;
+			const persistedBase = latestStoredCredential?.type === "oauth" ? latestStoredCredential : selection.credential;
 			const updated: OAuthCredential = {
 				type: "oauth",
 				access: result.newCredentials.access,
 				refresh: result.newCredentials.refresh,
 				expires: result.newCredentials.expires,
-				accountId: result.newCredentials.accountId ?? selection.credential.accountId,
-				email: result.newCredentials.email ?? selection.credential.email,
-				projectId: result.newCredentials.projectId ?? selection.credential.projectId,
-				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
+				accountId: result.newCredentials.accountId ?? persistedBase.accountId,
+				email: result.newCredentials.email ?? persistedBase.email,
+				projectId: result.newCredentials.projectId ?? persistedBase.projectId,
+				enterpriseUrl: result.newCredentials.enterpriseUrl ?? persistedBase.enterpriseUrl,
 			};
-			this.#replaceCredentialAt(provider, selection.index, updated);
+			this.#persistRefreshedOAuthCredential(provider, credentialIdentity, updated);
+			credentialForStateUpdates = updated;
 			if (checkUsage && !allowBlocked) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
-					usage = await this.#getUsageReport(provider, updated, {
+					const usageResult = await this.#getUsageReportWithCredential(provider, updated, {
 						...options,
 						timeoutMs: this.#usageRequestTimeoutMs,
 					});
+					usage = usageResult.report;
+					credentialForStateUpdates = usageResult.credential;
 				}
 				if (usage && this.#isUsageLimitReached(usage)) {
 					const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
-					this.#markCredentialBlocked(
-						providerKey,
-						selection.index,
-						resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
-					);
+					const currentStoredIndex = resolveCurrentStoredIndex();
+					if (currentStoredIndex !== -1) {
+						this.#markCredentialBlocked(
+							providerKey,
+							currentStoredIndex,
+							resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
+						);
+					}
 					return undefined;
 				}
 			}
-			this.#recordSessionCredential(provider, sessionId, "oauth", selection.index);
+			const currentStoredIndex = resolveCurrentStoredIndex();
+			if (currentStoredIndex !== -1) {
+				this.#recordSessionCredential(provider, sessionId, "oauth", currentStoredIndex);
+			}
 			return result.apiKey;
 		} catch (error) {
 			const errorMsg = String(error);
@@ -1847,22 +2009,30 @@ export class AuthStorage {
 				/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i.test(errorMsg) ||
 				(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg));
 
+			const currentStoredIndex = this.#findStoredOAuthCredentialIndexForCredential(
+				provider,
+				credentialForStateUpdates,
+			);
 			logger.warn("OAuth token refresh failed", {
 				provider,
-				index: selection.index,
+				index: currentStoredIndex === -1 ? undefined : currentStoredIndex,
 				error: errorMsg,
 				isDefinitiveFailure,
 			});
 
 			if (isDefinitiveFailure) {
 				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
-				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
+				if (currentStoredIndex !== -1) {
+					this.#disableCredentialAt(provider, currentStoredIndex, `oauth refresh failed: ${errorMsg}`);
+				}
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
 					return this.getApiKey(provider, sessionId, options);
 				}
 			} else {
 				// Block temporarily for transient failures (5 minutes)
-				this.#markCredentialBlocked(providerKey, selection.index, Date.now() + 5 * 60 * 1000);
+				if (currentStoredIndex !== -1) {
+					this.#markCredentialBlocked(providerKey, currentStoredIndex, Date.now() + 5 * 60 * 1000);
+				}
 			}
 		}
 
