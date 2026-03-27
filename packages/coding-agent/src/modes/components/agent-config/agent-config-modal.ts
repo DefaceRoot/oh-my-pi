@@ -6,11 +6,18 @@ import {
 	resolveFallbackModel,
 	resolveModelRoleValue,
 } from "../../../config/model-resolver";
+import type {
+	PresetAppliedEvent,
+	PresetSnapshot,
+	PresetsChangedEvent,
+	PresetsConfig,
+} from "../../../config/presets-config";
 import type { AdvancedConfig, RolesConfig, ToolsInheritConfig } from "../../../config/roles-config";
 import type { Settings } from "../../../config/settings";
 import type { Skill } from "../../../extensibility/skills";
 import { resolveSubagentRole } from "../../../task/model-role";
 import { parseThinkingLevel } from "../../../thinking";
+import { isHiddenToolName } from "../../../tools";
 import { getTabBarTheme } from "../../shared";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
@@ -19,11 +26,15 @@ import { AdvancedConfigPanel } from "./advanced-config-panel";
 import { AgentListPanel } from "./agent-list-panel";
 import { FallbackModelPanel } from "./fallback-model-panel";
 import { McpPanel } from "./mcp-panel";
+import { PresetBar } from "./preset-bar";
+import { PresetSelector } from "./preset-selector";
 import { SkillConfigPanel } from "./skill-config-panel";
 import { type ToolsConfigChange, ToolsConfigPanel } from "./tools-config-panel";
 
 /** Fixed width of the agent list panel on the left side of the split. */
 const LEFT_PANEL_WIDTH = 28;
+const MIN_PRESET_SELECTOR_WIDTH = 28;
+const MAX_PRESET_SELECTOR_WIDTH = 96;
 
 /**
  * Core roles are non-subagents. Roles absent from this set use the subagent
@@ -49,6 +60,7 @@ export interface AgentConfigModalOptions {
 	settings: Settings;
 	rolesConfig: RolesConfig;
 	modelRegistry: ModelRegistry;
+	presetsConfig: PresetsConfig;
 	/** All configurable tool names known to the session. */
 	knownTools: string[];
 	/** Built-in default tool lists for subagents from discovered agent definitions. */
@@ -60,6 +72,10 @@ export interface AgentConfigModalOptions {
 	onDismiss: () => void;
 	/** Called whenever the modal mutates state that requires a repaint. */
 	onRequestRender: () => void;
+	/** Optional status surface owned by the caller (status line, toast, etc.). */
+	onShowStatus?: (message: string) => void;
+	/** Optional error surface owned by the caller (status line, toast, etc.). */
+	onShowError?: (message: string) => void;
 }
 
 /**
@@ -67,37 +83,45 @@ export interface AgentConfigModalOptions {
  *
  * Two-panel layout:
  *   Left  — AgentListPanel (~28 chars wide, fixed)
- *   Right — TabBar (Model / MCP / Skills / Tools / Advanced) + active tab content
+ *   Right — PresetBar + TabBar (Model / MCP / Skills / Tools / Advanced) + active tab content
  *
  * Focus model:
  *   Tab / Shift+Tab                       — toggle focus between left and right panels
  *   ←/→ arrows (right panel)              — switch between Model / MCP / Skills / Tools / Advanced tabs
  *   ↑/↓ (left panel)                      — navigate the agent list
  *   ↑/↓ (right panel, non-model tabs)     — navigate the active list or field editor
+ *   s / p / r                             — save, switch, or revert the active preset when available
  *   Space (right panel, Skills tab)       — cycle skill mode (disabled→auto→frontmatter)
  *   Space (right panel, Tools tab)        — toggle/cycle the selected tool
  *   Space (right panel, MCP tab)          — toggle MCP server on/off
  *   Space / Enter / r (Advanced tab)      — cycle, edit, or reset the selected override
- *   Escape                                — close
+ *   Escape                                — close current overlay or dismiss the modal
  */
 export class AgentConfigModal implements Component {
 	readonly #settings: Settings;
 	readonly #rolesConfig: RolesConfig;
 	readonly #modelRegistry: ModelRegistry;
-	readonly #knownTools: string[];
+	readonly #presetsConfig: PresetsConfig;
+	#knownTools: string[];
 	readonly #knownMcpServers: string[];
 	readonly #subagentDefaultTools: Partial<Record<ModelRole, string[]>>;
 	readonly #discoveredSkills: Skill[];
 	readonly #onDismiss: () => void;
 	readonly #onRequestRender: () => void;
+	readonly #onShowStatus: ((message: string) => void) | undefined;
+	readonly #onShowError: ((message: string) => void) | undefined;
+	readonly #unsubscribePresetApplied: () => void;
 
 	#activeRole: ModelRole = "default";
 	#activePanel: ActivePanel = "left";
+	#dismissed = false;
+	#presetSelector: PresetSelector | undefined;
 
 	readonly #configlessDirectSubagentTools = new Map<ModelRole, string[]>();
 	readonly #border: DynamicBorder;
 	readonly #agentListPanel: AgentListPanel;
 	readonly #tabBar: TabBar;
+	readonly #presetBar: PresetBar;
 	readonly #skillPanel: SkillConfigPanel;
 	readonly #toolsPanel: ToolsConfigPanel;
 	#mcpPanel: McpPanel; // rebuilt on each role switch to keep role/isSubagent in sync
@@ -105,10 +129,10 @@ export class AgentConfigModal implements Component {
 	readonly #modelTabPanel: FallbackModelPanel;
 
 	/**
-	 * Composite right-side component: TabBar rows, a separator line, then the
-	 * content of the currently-active tab. This object is stable across role
-	 * switches; switching tabs or roles is reflected because the accessors are
-	 * always evaluated at render time.
+	 * Composite right-side component: preset bar, tabs, separators, and the content
+	 * of the currently-active tab. This object is stable across role switches;
+	 * switching tabs or roles is reflected because the accessors are always
+	 * evaluated at render time.
 	 */
 	readonly #rightPanel: Component;
 
@@ -116,38 +140,62 @@ export class AgentConfigModal implements Component {
 		this.#settings = options.settings;
 		this.#rolesConfig = options.rolesConfig;
 		this.#modelRegistry = options.modelRegistry;
-		this.#knownTools = options.knownTools;
+		this.#presetsConfig = options.presetsConfig;
+		this.#knownTools = [...options.knownTools];
 		this.#knownMcpServers = options.knownMcpServers;
 		this.#subagentDefaultTools = options.subagentDefaultTools;
 		this.#discoveredSkills = options.discoveredSkills;
 		this.#onDismiss = options.onDismiss;
 		this.#onRequestRender = options.onRequestRender;
+		this.#onShowStatus = options.onShowStatus;
+		this.#onShowError = options.onShowError;
+		this.#mergeKnownToolsFromSnapshot(
+			this.#presetsConfig.getPreset(this.#presetsConfig.getActivePreset() ?? "") ?? null,
+		);
 
 		this.#border = new DynamicBorder();
+		this.#presetBar = new PresetBar({
+			activePreset: this.#presetsConfig.getActivePreset(),
+			isModified: this.#presetsConfig.isModified(),
+			onSave: () => {
+				void this.#saveActivePreset();
+			},
+			onSaveAs: () => this.#openPresetSelector({ startCreate: true }),
+			onSwitch: () => this.#openPresetSelector(),
+			onRevert: () => {
+				void this.#revertToActivePreset();
+			},
+		});
+		const unsubscribePresetApplied = this.#presetsConfig.on("preset_applied", event => {
+			void this.#handlePresetApplied(event);
+		});
+		const unsubscribePresetsChanged = this.#presetsConfig.on("presets_changed", (_event: PresetsChangedEvent) => {
+			this.#syncPresetState();
+			this.#onRequestRender();
+		});
+		this.#unsubscribePresetApplied = () => {
+			unsubscribePresetApplied();
+			unsubscribePresetsChanged();
+		};
 
 		// Left panel — agent list. Selection changes drive #switchToRole.
-
 		this.#agentListPanel = new AgentListPanel({
 			selectedRole: "default",
 			isCustomConfigured: role => this.#isCustomConfigured(role),
 			callbacks: {
 				onAgentSelect: role => this.#switchToRole(role),
-				onClose: () => this.#onDismiss(),
+				onClose: () => this.#dismiss(),
 			},
 		});
 
 		// Tab bar for the right panel.
-
 		// The shared theme says "(tab to cycle)" but this modal intercepts Tab for
-
 		// panel-focus toggling, so override the hint to show the actual binding.
-
 		const baseTabBarTheme = getTabBarTheme();
 		const agentConfigTabBarTheme = {
 			...baseTabBarTheme,
-			// Only advertise ←/→ when the right panel actually owns focus;
-			// when the left panel is active the arrows don't reach the tab bar.
-
+			// Only advertise ←/→ when the right panel actually owns focus; when the
+			// left panel is active the arrows don't reach the tab bar.
 			hint: () => (this.#activePanel === "right" ? theme.fg("dim", "(←/→ to cycle)") : ""),
 		};
 		this.#tabBar = new TabBar(
@@ -164,39 +212,35 @@ export class AgentConfigModal implements Component {
 		this.#tabBar.onTabChange = () => this.#onRequestRender();
 
 		// Skills tab panel — initialised for the default role.
-
 		const initialSkillConfig = this.#rolesConfig.getSkillConfigForRole("default") ?? { auto: [], frontmatter: [] };
 		this.#skillPanel = new SkillConfigPanel({
 			skills: options.discoveredSkills,
 			skillConfig: initialSkillConfig,
 			callbacks: {
 				onConfigChange: config => {
-					// Persist to the correct config section for the current role.
-
 					if (this.#isSubagentRole(this.#activeRole)) {
 						this.#rolesConfig.setSkillConfigForSubagent(this.#activeRole, config);
 					} else {
 						this.#rolesConfig.setSkillConfigForRole(this.#activeRole, config);
 					}
+					this.#syncPresetState();
 					this.#onRequestRender();
 				},
-				onClose: () => this.#onDismiss(),
+				onClose: () => this.#dismiss(),
 			},
 		});
 
 		// Tools tab panel — initialised for the default role.
-
 		const initialToolsState = this.#getToolsPanelState("default");
 		this.#toolsPanel = new ToolsConfigPanel({
 			...initialToolsState,
 			callbacks: {
 				onConfigChange: change => this.#handleToolsConfigChange(change),
-				onClose: () => this.#onDismiss(),
+				onClose: () => this.#dismiss(),
 			},
 		});
 
 		// MCP tab panel — initialised for the default role.
-
 		const initialEnabledServers = this.#rolesConfig.getMcpForRole("default");
 		this.#mcpPanel = new McpPanel({
 			knownServers: options.knownMcpServers,
@@ -204,47 +248,41 @@ export class AgentConfigModal implements Component {
 			rolesConfig: options.rolesConfig,
 			role: "default",
 			isSubagent: false,
-			onClose: () => this.#onDismiss(),
+			onClose: () => this.#dismiss(),
 		});
 
 		// Model tab — shows the effective primary and fallback model state, and allows
 		// selecting a per-agent fallback override inline.
-
 		this.#modelTabPanel = new FallbackModelPanel({
 			...this.#getModelPanelState("default"),
 			callbacks: {
 				onSelectFallback: fallback => this.#persistFallbackModel(this.#activeRole, fallback),
-				onClose: () => this.#onDismiss(),
+				onClose: () => this.#dismiss(),
 			},
 		});
 
 		// Advanced tab — per-agent overrides layered on top of global settings.
-
 		this.#advancedPanel = new AdvancedConfigPanel({
 			...this.#getAdvancedPanelState("default"),
 			callbacks: {
 				onConfigChange: config => this.#handleAdvancedConfigChange(config),
-				onClose: () => this.#onDismiss(),
+				onClose: () => this.#dismiss(),
 			},
 		});
 
-		// Composite right-side panel: tabs + separator + active content.
-
+		// Composite right-side panel: tabs + preset bar + separators + active content.
 		this.#rightPanel = {
-			render: (width: number): string[] => {
-				const tabLines = this.#tabBar.render(width);
-				const sep = theme.fg("border", theme.boxSharp.horizontal.repeat(Math.max(1, width)));
-				const contentLines = this.#activeContentPanel.render(width);
-				return [...tabLines, sep, ...contentLines];
-			},
+			render: (width: number): string[] => this.#renderRightPanel(width),
 			handleInput: () => {},
 			invalidate: () => {
 				this.#tabBar.invalidate();
+				this.#presetBar.invalidate();
 				this.#modelTabPanel.invalidate();
 				this.#mcpPanel.invalidate();
 				this.#skillPanel.invalidate();
 				this.#toolsPanel.invalidate();
 				this.#advancedPanel.invalidate();
+				this.#presetSelector?.invalidate();
 			},
 		};
 	}
@@ -279,6 +317,187 @@ export class AgentConfigModal implements Component {
 		return skillConfig !== undefined && (skillConfig.auto.length > 0 || skillConfig.frontmatter.length > 0);
 	}
 
+	#dismiss(): void {
+		if (this.#dismissed) {
+			return;
+		}
+		this.#dismissed = true;
+		this.#unsubscribePresetApplied();
+		this.#presetSelector = undefined;
+		this.#onDismiss();
+	}
+
+	#showStatus(message: string): void {
+		this.#onShowStatus?.(message);
+	}
+
+	#showError(message: string): void {
+		this.#onShowError?.(message);
+	}
+
+	async #handlePresetApplied(event: PresetAppliedEvent): Promise<void> {
+		this.#mergeKnownToolsFromSnapshot(event.snapshot);
+		if (this.#presetsConfig.isEventFromThisInstance(event)) {
+			this.#switchToRole(this.#activeRole);
+			return;
+		}
+		try {
+			await this.#settings.persistModelRolesAtomically(event.snapshot.modelRoles);
+			this.#rolesConfig.mergeConfig({ roles: event.snapshot.roles, subagents: event.snapshot.subagents });
+			this.#settings.clearOverride("modelRoles");
+			this.#switchToRole(this.#activeRole);
+		} catch (error) {
+			this.#showError(error instanceof Error ? error.message : String(error));
+			this.#onRequestRender();
+		}
+	}
+
+	#mergeKnownTools(tools: Iterable<string>): void {
+		const nextTools = [...this.#knownTools];
+		const seen = new Set(nextTools);
+		for (const tool of tools) {
+			if (!tool || isHiddenToolName(tool) || seen.has(tool)) {
+				continue;
+			}
+			seen.add(tool);
+			nextTools.push(tool);
+		}
+		nextTools.sort((left, right) => left.localeCompare(right));
+		this.#knownTools = nextTools;
+	}
+
+	#mergeKnownToolsFromSnapshot(snapshot: PresetSnapshot | null | undefined): void {
+		if (!snapshot) {
+			return;
+		}
+		this.#mergeKnownTools([
+			...Object.values(snapshot.roles).flatMap(roleConfig => roleConfig.tools),
+			...Object.values(snapshot.subagents).flatMap(subagentConfig => {
+				const tools = subagentConfig.tools;
+				if (tools === undefined) return [];
+				if (Array.isArray(tools)) return tools;
+				return [...(tools.add ?? []), ...(tools.remove ?? [])];
+			}),
+		]);
+	}
+
+	#syncPresetState(): void {
+		this.#presetBar.update({
+			activePreset: this.#presetsConfig.getActivePreset(),
+			isModified: this.#presetsConfig.isModified(),
+		});
+	}
+
+	#openPresetSelector(options: { startCreate?: boolean } = {}): void {
+		const createdSelector = this.#presetSelector === undefined;
+		if (createdSelector) {
+			this.#presetSelector = new PresetSelector({
+				presetsConfig: this.#presetsConfig,
+				onApply: async name => {
+					this.#presetSelector = undefined;
+					this.#showStatus(`Applied ${name}.`);
+					this.#syncPresetState();
+					this.#switchToRole(this.#activeRole);
+				},
+				onClose: () => {
+					this.#presetSelector = undefined;
+					this.#onRequestRender();
+				},
+			});
+		}
+		if (options.startCreate && createdSelector) {
+			this.#presetSelector?.handleInput("n");
+		}
+		this.#onRequestRender();
+	}
+
+	#renderRightPanel(width: number): string[] {
+		const tabLines = this.#tabBar.render(width);
+		const sep = theme.fg("border", theme.boxSharp.horizontal.repeat(Math.max(1, width)));
+		const presetLines = this.#presetBar.render(width);
+		const contentLines = this.#activeContentPanel.render(width);
+		const baseLines = [...tabLines, sep, ...presetLines, sep, ...contentLines];
+		return this.#presetSelector ? this.#renderPresetSelectorOverlay(baseLines, width) : baseLines;
+	}
+
+	#renderPresetSelectorOverlay(baseLines: string[], width: number): string[] {
+		if (!this.#presetSelector || width <= 0) {
+			return baseLines;
+		}
+		const overlayWidth =
+			width <= MIN_PRESET_SELECTOR_WIDTH
+				? width
+				: Math.min(Math.max(MIN_PRESET_SELECTOR_WIDTH, width - 2), MAX_PRESET_SELECTOR_WIDTH);
+		const overlayLines = this.#presetSelector.render(overlayWidth);
+		const maxTop = Math.max(0, baseLines.length - overlayLines.length);
+		const top = Math.min(Math.max(2, Math.floor((baseLines.length - overlayLines.length) / 2)), maxTop);
+		return baseLines.map((line, index) => {
+			const overlayIndex = index - top;
+			if (overlayIndex < 0 || overlayIndex >= overlayLines.length) {
+				return line;
+			}
+			const overlayLine = truncateToWidth(overlayLines[overlayIndex] ?? "", overlayWidth);
+			const leftPad = Math.max(0, Math.floor((width - visibleWidth(overlayLine)) / 2));
+			const rightPad = Math.max(0, width - leftPad - visibleWidth(overlayLine));
+			return `${padding(leftPad)}${overlayLine}${padding(rightPad)}`;
+		});
+	}
+
+	async #saveActivePreset(): Promise<void> {
+		const activePresetName = this.#presetsConfig.getActivePreset();
+		if (!activePresetName) {
+			this.#openPresetSelector({ startCreate: true });
+			return;
+		}
+		const existing = this.#presetsConfig.getPreset(activePresetName);
+		if (!existing) {
+			this.#syncPresetState();
+			this.#showError(`Preset ${activePresetName} no longer exists.`);
+			this.#onRequestRender();
+			return;
+		}
+		try {
+			this.#presetsConfig.savePreset(activePresetName, {
+				...this.#presetsConfig.captureCurrentConfig(),
+				description: existing.description,
+				createdAt: existing.createdAt,
+				updatedAt: new Date().toISOString(),
+			});
+			this.#syncPresetState();
+			this.#showStatus(`Saved ${activePresetName}.`);
+			this.#onRequestRender();
+		} catch (error) {
+			this.#showError(error instanceof Error ? error.message : String(error));
+			this.#onRequestRender();
+		}
+	}
+
+	async #revertToActivePreset(): Promise<void> {
+		const activePresetName = this.#presetsConfig.getActivePreset();
+		if (!activePresetName) {
+			return;
+		}
+		try {
+			await this.#presetsConfig.applyPreset(activePresetName);
+			this.#showStatus(`Reverted ${activePresetName}.`);
+		} catch (error) {
+			this.#showError(error instanceof Error ? error.message : String(error));
+			this.#onRequestRender();
+		}
+	}
+
+	#handlePresetShortcut(data: string): boolean {
+		const isSave = data === "s" || data === "S";
+		const isSwitch = data === "p" || data === "P";
+		const isRevert = data === "r" || data === "R";
+		const allowRevertShortcut = this.#activePanel === "left" || this.#tabBar.getActiveIndex() !== 4;
+		if (!isSave && !isSwitch && !(allowRevertShortcut && isRevert)) {
+			return false;
+		}
+		this.#presetBar.handleInput(data);
+		return true;
+	}
+
 	#persistFallbackModel(role: ModelRole, fallback: string | null): void {
 		const { primaryModelKey } = this.#resolveCurrentModelDisplay(role);
 		const normalizedFallback = fallback !== null && fallback === primaryModelKey ? null : fallback;
@@ -289,6 +508,7 @@ export class AgentConfigModal implements Component {
 		);
 		if (existingFallback === normalizedFallback) {
 			this.#modelTabPanel.update(this.#getModelPanelState(role));
+			this.#syncPresetState();
 			this.#onRequestRender();
 			return;
 		}
@@ -298,6 +518,7 @@ export class AgentConfigModal implements Component {
 			this.#rolesConfig.setFallbackForRole(role, normalizedFallback);
 		}
 		this.#modelTabPanel.update(this.#getModelPanelState(role));
+		this.#syncPresetState();
 		this.#onRequestRender();
 	}
 
@@ -404,6 +625,7 @@ export class AgentConfigModal implements Component {
 		} else {
 			this.#rolesConfig.setAdvancedForRole(this.#activeRole, config);
 		}
+		this.#syncPresetState();
 		this.#onRequestRender();
 	}
 
@@ -411,6 +633,7 @@ export class AgentConfigModal implements Component {
 		if (!this.#isSubagentRole(this.#activeRole)) {
 			if ("tools" in change) {
 				this.#rolesConfig.setToolsForRole(this.#activeRole, change.tools);
+				this.#syncPresetState();
 				this.#onRequestRender();
 			}
 			return;
@@ -423,18 +646,21 @@ export class AgentConfigModal implements Component {
 			} else {
 				this.#persistDirectSubagentTools(this.#activeRole, change.tools);
 			}
+			this.#syncPresetState();
 			this.#onRequestRender();
 			return;
 		}
 
 		if ("clearInheritConfig" in change) {
 			this.#clearSubagentToolsConfig(this.#activeRole);
+			this.#syncPresetState();
 			this.#onRequestRender();
 			return;
 		}
 
 		if ("inheritConfig" in change) {
 			this.#rolesConfig.setToolsForSubagent(this.#activeRole, change.inheritConfig);
+			this.#syncPresetState();
 			this.#onRequestRender();
 		}
 	}
@@ -595,7 +821,6 @@ export class AgentConfigModal implements Component {
 		this.#advancedPanel.update(this.#getAdvancedPanelState(role));
 
 		// Rebuild MCP panel so the persistence target is correct for the new role.
-
 		const enabledServers = isSubagent
 			? this.#rolesConfig.getMcpForSubagent(role)
 			: this.#rolesConfig.getMcpForRole(role);
@@ -605,10 +830,29 @@ export class AgentConfigModal implements Component {
 			rolesConfig: this.#rolesConfig,
 			role,
 			isSubagent,
-			onClose: () => this.#onDismiss(),
+			onClose: () => this.#dismiss(),
 		});
 
+		this.#syncPresetState();
 		this.#onRequestRender();
+	}
+
+	#getPresetHintParts(): string[] {
+		if (this.#presetSelector) {
+			return [];
+		}
+		const activePreset = this.#presetsConfig.getActivePreset();
+		if (activePreset === null) {
+			return [" s:save-as", " p:switch"];
+		}
+		const parts = [" p:switch"];
+		if (this.#presetsConfig.isModified()) {
+			parts.unshift(" s:save");
+			if (this.#activePanel === "left" || this.#tabBar.getActiveIndex() !== 4) {
+				parts.push(" r:revert");
+			}
+		}
+		return parts;
 	}
 
 	// ── Component interface ───────────────────────────────────────────────────
@@ -624,15 +868,12 @@ export class AgentConfigModal implements Component {
 		const rightWidth = Math.max(0, totalWidth - leftWidth - 1);
 
 		// ── Top border ──
-
 		lines.push(...this.#border.render(totalWidth));
 
 		// ── Title ──
-
 		lines.push(truncateToWidth(theme.fg("accent", " Agent Configuration"), totalWidth));
 
 		// ── Body: left panel + separator + right panel ──
-
 		const leftLines = this.#agentListPanel.render(leftWidth);
 		const rightLines = this.#rightPanel.render(rightWidth);
 		const maxLines = Math.max(leftLines.length, rightLines.length);
@@ -640,8 +881,6 @@ export class AgentConfigModal implements Component {
 		for (let i = 0; i < maxLines; i++) {
 			const left = truncateToWidth(leftLines[i] ?? "", leftWidth);
 			const right = truncateToWidth(rightLines[i] ?? "", rightWidth);
-			// Pad left column to exact width so the separator stays aligned.
-
 			const padAmount = Math.max(0, leftWidth - visibleWidth(left));
 			const paddedLeft = padAmount > 0 ? `${left}${padding(padAmount)}` : left;
 			if (rightWidth === 0) {
@@ -653,11 +892,8 @@ export class AgentConfigModal implements Component {
 		}
 
 		// ── Hint bar ──
-
-		// Show only the controls that are genuinely active in the current state.
-
 		const parts: string[] = [" tab:switch-panel"];
-		if (this.#activePanel === "right") {
+		if (this.#activePanel === "right" && !this.#presetSelector) {
 			parts.push(" ←/→:switch-tab");
 			const activeTabIdx = this.#tabBar.getActiveIndex();
 			if (activeTabIdx === 0) {
@@ -673,31 +909,41 @@ export class AgentConfigModal implements Component {
 			} else if (activeTabIdx === 4) {
 				parts.push(" ↑/↓:navigate  space:cycle  enter:edit  r:reset");
 			}
-		} else {
+		} else if (!this.#presetSelector) {
 			parts.push(" ↑/↓:navigate");
 		}
+		parts.push(...this.#getPresetHintParts());
 		parts.push(" esc:close");
 		lines.push(truncateToWidth(theme.fg("dim", parts.join(" ")), totalWidth));
 
 		// ── Bottom border ──
-
 		lines.push(...this.#border.render(totalWidth));
 
 		return lines;
 	}
 
 	handleInput(data: string): void {
-		// Escape closes the modal before any panel-specific handling.
+		if (this.#presetSelector) {
+			this.#presetSelector.handleInput(data);
+			this.#syncPresetState();
+			this.#onRequestRender();
+			return;
+		}
 
+		// Escape closes the modal before any panel-specific handling.
 		if (matchesAppInterrupt(data)) {
-			this.#onDismiss();
+			this.#dismiss();
 			return;
 		}
 
 		// Tab / Shift+Tab always toggle focus between the two panels.
-
 		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
 			this.#activePanel = this.#activePanel === "left" ? "right" : "left";
+			this.#onRequestRender();
+			return;
+		}
+
+		if (this.#handlePresetShortcut(data)) {
 			this.#onRequestRender();
 			return;
 		}
@@ -705,8 +951,6 @@ export class AgentConfigModal implements Component {
 		if (this.#activePanel === "left") {
 			const prevRole = this.#agentListPanel.selectedRole;
 			this.#agentListPanel.handleInput(data);
-			// If navigation moved to a different role, update right panels.
-
 			const newRole = this.#agentListPanel.selectedRole;
 			if (newRole !== undefined && newRole !== prevRole) {
 				this.#switchToRole(newRole);
@@ -714,16 +958,13 @@ export class AgentConfigModal implements Component {
 				this.#onRequestRender();
 			}
 		} else {
-			// Right panel: arrows switch tabs; everything else goes to the
-
-			// content panel (skills list / tools list / MCP list / model display).
-
 			if (matchesKey(data, "left") || matchesKey(data, "right")) {
 				this.#tabBar.handleInput(data);
 				this.#onRequestRender();
 				return;
 			}
 			this.#activeContentPanel.handleInput?.(data);
+			this.#syncPresetState();
 			this.#onRequestRender();
 		}
 	}

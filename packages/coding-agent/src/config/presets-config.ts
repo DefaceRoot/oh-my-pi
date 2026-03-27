@@ -48,11 +48,21 @@ export type PresetsConfigData = Static<typeof PresetsConfigSchema>;
 export interface PresetAppliedEvent {
 	name: string;
 	snapshot: PresetSnapshot;
+	sourceInstanceId: number;
+}
+
+export interface PresetsChangedEvent {
+	activePreset: string | null;
 }
 
 export const DEFAULT_PRESETS_CONFIG: PresetsConfigData = {
 	activePreset: null,
 	presets: {},
+};
+
+type PresetsConfigEventMap = {
+	preset_applied: PresetAppliedEvent;
+	presets_changed: PresetsChangedEvent;
 };
 
 export const PresetsConfigFile = new ConfigFile<PresetsConfigData>("presets", PresetsConfigSchema);
@@ -83,10 +93,28 @@ function stableSerialize(value: unknown): string {
 	return JSON.stringify(stableValue(value));
 }
 
+const presetConfigEvents = new Map<string, EventBus>();
+const presetConfigVersions = new Map<string, number>();
+let nextPresetConfigInstanceId = 1;
+
+function getPresetConfigEvents(configPath: string): EventBus {
+	const resolvedPath = path.resolve(configPath);
+	const existing = presetConfigEvents.get(resolvedPath);
+	if (existing) {
+		return existing;
+	}
+	const created = new EventBus();
+	presetConfigEvents.set(resolvedPath, created);
+	return created;
+}
+
 export class PresetsConfig {
 	#configFile: ConfigFile<PresetsConfigData>;
+	#configPathKey: string;
 	#resolved?: PresetsConfigData;
-	#events = new EventBus();
+	#configVersion: number;
+	#events: EventBus;
+	#instanceId: number;
 	#settings: Settings;
 	#rolesConfig: RolesConfig;
 	#modelRegistry: ModelRegistry;
@@ -98,17 +126,24 @@ export class PresetsConfig {
 		modelRegistry: ModelRegistry,
 	) {
 		this.#configFile = PresetsConfigFile.relocate(configPath);
+		this.#configPathKey = path.resolve(this.#configFile.path());
+		this.#configVersion = presetConfigVersions.get(this.#configPathKey) ?? 0;
+		this.#events = getPresetConfigEvents(this.#configPathKey);
+		this.#instanceId = nextPresetConfigInstanceId++;
 		this.#settings = settings;
 		this.#rolesConfig = rolesConfig;
 		this.#modelRegistry = modelRegistry;
 	}
 
 	#getConfig(): PresetsConfigData {
-		if (this.#resolved) {
+		const latestVersion = presetConfigVersions.get(this.#configPathKey) ?? 0;
+		if (this.#resolved && this.#configVersion === latestVersion) {
 			return this.#resolved;
 		}
+		this.#configFile.invalidate?.();
 		const loaded = this.#configFile.load();
 		this.#resolved = clonePresetsConfig(loaded ?? DEFAULT_PRESETS_CONFIG);
+		this.#configVersion = latestVersion;
 		return this.#resolved;
 	}
 
@@ -121,11 +156,21 @@ export class PresetsConfig {
 		fs.mkdirSync(path.dirname(configPath), { recursive: true });
 		fs.writeFileSync(configPath, serialized, "utf-8");
 		this.#configFile.invalidate?.();
+		const nextVersion = (presetConfigVersions.get(this.#configPathKey) ?? 0) + 1;
+		presetConfigVersions.set(this.#configPathKey, nextVersion);
+		this.#configVersion = nextVersion;
 		this.#resolved = clonePresetsConfig(config);
+		this.#events.emit("presets_changed", {
+			activePreset: config.activePreset,
+		} satisfies PresetsChangedEvent);
 	}
 
-	on(event: "preset_applied", handler: (event: PresetAppliedEvent) => void): () => void {
-		return this.#events.on(event, data => handler(data as PresetAppliedEvent));
+	on<E extends keyof PresetsConfigEventMap>(event: E, handler: (event: PresetsConfigEventMap[E]) => void): () => void {
+		return this.#events.on(event, data => handler(data as PresetsConfigEventMap[E]));
+	}
+
+	isEventFromThisInstance(event: PresetAppliedEvent): boolean {
+		return event.sourceInstanceId === this.#instanceId;
 	}
 
 	listPresets(): Array<{ name: string } & PresetMetadata> {
@@ -242,6 +287,7 @@ export class PresetsConfig {
 		this.#events.emit("preset_applied", {
 			name,
 			snapshot: clonePresetSnapshot(snapshot),
+			sourceInstanceId: this.#instanceId,
 		} satisfies PresetAppliedEvent);
 	}
 }

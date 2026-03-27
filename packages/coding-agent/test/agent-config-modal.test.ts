@@ -1,11 +1,15 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { ModelRegistry } from "../src/config/model-registry";
+import { PresetsConfig } from "../src/config/presets-config";
 import { RolesConfig } from "../src/config/roles-config";
+import { Settings } from "../src/config/settings";
 import { AgentConfigModal } from "../src/modes/components/agent-config";
 import { initTheme } from "../src/modes/theme/theme";
+import { AuthStorage } from "../src/session/auth-storage";
 
 beforeAll(() => {
 	initTheme();
@@ -56,12 +60,28 @@ function renderText(modal: AgentConfigModal, width = 140): string {
 	return Bun.stripANSI(modal.render(width).join("\n"));
 }
 
+function createStubPresetsConfig(): PresetsConfig {
+	return {
+		getActivePreset: () => null,
+		isModified: () => false,
+		on: () => () => {},
+		captureCurrentConfig: () => ({ modelRoles: {} as never, roles: {} as never, subagents: {} as never }),
+		getPreset: () => undefined,
+		savePreset: () => {},
+		listPresets: () => [],
+		applyPreset: async () => {},
+		deletePreset: () => {},
+		renamePreset: () => {},
+	} as never;
+}
+
 function createModal(
 	rolesConfig: RolesConfig,
 	options: {
 		subagentDefaultTools?: Partial<Record<string, string[]>>;
 		modelRoles?: Partial<Record<string, string>>;
 		values?: Record<string, unknown>;
+		presetsConfig?: PresetsConfig;
 	} = {},
 ): AgentConfigModal {
 	const subagentDefaultTools = options.subagentDefaultTools ?? {};
@@ -74,14 +94,15 @@ function createModal(
 			get: (key: string) => options.values?.[key],
 		} as never,
 		rolesConfig,
-		knownTools,
-		subagentDefaultTools,
-		knownMcpServers: [],
-		discoveredSkills: [],
 		modelRegistry: {
 			getAll: () => mockModels,
 			getAvailable: () => mockModels,
 		} as never,
+		presetsConfig: options.presetsConfig ?? createStubPresetsConfig(),
+		knownTools,
+		subagentDefaultTools,
+		knownMcpServers: [],
+		discoveredSkills: [],
 		onDismiss: () => {},
 		onRequestRender: () => {},
 	} as never);
@@ -834,6 +855,274 @@ describe("AgentConfigModal advanced integration", () => {
 			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("AgentConfigModal presets integration", () => {
+	type PresetModalHarness = {
+		tempDir: string;
+		authStorage: AuthStorage;
+		rolesConfig: RolesConfig;
+		settings: Settings;
+		modelRegistry: ModelRegistry;
+		presetsConfig: PresetsConfig;
+		modal: AgentConfigModal;
+	};
+
+	type PresetModalHarnessOptions = {
+		activePreset?: string | null;
+		onShowStatus?: (message: string) => void;
+		onShowError?: (message: string) => void;
+	};
+
+	async function createPresetModalHarness(options: PresetModalHarnessOptions = {}): Promise<PresetModalHarness> {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-presets-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		const presetsPath = path.join(tempDir, "presets.yml");
+		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		await fs.writeFile(
+			rolesPath,
+			`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`,
+			"utf8",
+		);
+		const rolesConfig = new RolesConfig(rolesPath);
+		const settings = Settings.isolated({
+			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+		});
+		const presetsConfig = new PresetsConfig(presetsPath, settings, rolesConfig, modelRegistry);
+		presetsConfig.savePreset("Baseline", {
+			...presetsConfig.captureCurrentConfig(),
+			description: "Original settings",
+			createdAt: "2026-03-27T00:00:00.000Z",
+			updatedAt: "2026-03-27T00:00:00.000Z",
+		});
+		if (options.activePreset !== null) {
+			await presetsConfig.applyPreset(options.activePreset ?? "Baseline");
+		}
+		const modal = new AgentConfigModal({
+			settings,
+			rolesConfig,
+			modelRegistry,
+			knownTools: ["read", "write"],
+			subagentDefaultTools: {},
+			knownMcpServers: [],
+			discoveredSkills: [],
+			presetsConfig,
+			onDismiss: () => {},
+			onRequestRender: () => {},
+			onShowStatus: options.onShowStatus,
+			onShowError: options.onShowError,
+		} as never);
+		return { tempDir, authStorage, rolesConfig, settings, modelRegistry, presetsConfig, modal };
+	}
+
+	test("renders the preset bar and marks the modal modified after config edits", async () => {
+		const harness = await createPresetModalHarness();
+		try {
+			const { modal } = harness;
+			expect(renderText(modal)).toContain("Preset: Baseline");
+			expect(renderText(modal)).not.toContain("Preset: Baseline *");
+
+			openToolsTab(modal);
+			modal.handleInput(" ");
+
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("opens a save-as prompt for custom configurations and can switch presets from the modal", async () => {
+		const harness = await createPresetModalHarness({ activePreset: null });
+		try {
+			const { modal } = harness;
+			modal.handleInput("\t");
+			modal.handleInput("s");
+			expect(renderText(modal)).toContain("Save current settings as");
+
+			modal.handleInput("\x1b");
+			modal.handleInput("p");
+			expect(renderText(modal)).toContain("Select Preset");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("refreshes an open modal when the active preset is applied externally", async () => {
+		const harness = await createPresetModalHarness();
+		try {
+			const { modal, rolesConfig, modelRegistry, presetsConfig, tempDir } = harness;
+			const externalSettings = Settings.isolated({
+				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+			});
+			const externalRolesConfig = new RolesConfig(path.join(tempDir, "roles.yml"));
+			const externalPresetsConfig = new PresetsConfig(
+				path.join(tempDir, "presets.yml"),
+				externalSettings,
+				externalRolesConfig,
+				modelRegistry,
+			);
+			const baseline = presetsConfig.getPreset("Baseline");
+			if (!baseline) {
+				throw new Error("Baseline preset missing");
+			}
+			externalPresetsConfig.savePreset("External", {
+				...baseline,
+				roles: {
+					...baseline.roles,
+					default: {
+						...baseline.roles.default,
+						tools: ["grep"],
+					},
+				},
+				updatedAt: "2026-03-27T01:00:00.000Z",
+			});
+			openToolsTab(modal);
+			modal.handleInput(" ");
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+			expect(renderText(modal)).toContain("Tools: 0 effective");
+
+			await externalPresetsConfig.applyPreset("External");
+			expect(renderText(modal)).toContain("Preset: External");
+			expect(renderText(modal)).not.toContain("Preset: External *");
+			expect(renderText(modal)).toContain("Tools: 1 effective");
+			expect(renderText(modal)).toContain("grep");
+
+			modal.handleInput(" ");
+			expect(renderText(modal)).toContain("Preset: External *");
+			modal.handleInput("r");
+			await Bun.sleep(0);
+			expect(rolesConfig.getToolsForRole("default")).toEqual(["grep"]);
+			expect(renderText(modal)).toContain("Preset: External");
+			expect(renderText(modal)).not.toContain("Preset: External *");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("reverts the active preset without replaying local apply side effects", async () => {
+		const errors: string[] = [];
+		const harness = await createPresetModalHarness({
+			onShowError: message => {
+				errors.push(message);
+			},
+		});
+		try {
+			const { modal, rolesConfig, settings } = harness;
+			const persistSpy = vi.spyOn(settings, "persistModelRolesAtomically");
+			const mergeSpy = vi.spyOn(rolesConfig, "mergeConfig");
+			openToolsTab(modal);
+			modal.handleInput(" ");
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+
+			modal.handleInput("r");
+			await Bun.sleep(0);
+
+			expect(persistSpy).toHaveBeenCalledTimes(1);
+			expect(mergeSpy).toHaveBeenCalledTimes(1);
+			expect(errors).toEqual([]);
+			expect(rolesConfig.getToolsForRole("default")).toEqual(["read"]);
+			expect(renderText(modal)).toContain("Preset: Baseline");
+			expect(renderText(modal)).not.toContain("Preset: Baseline *");
+		} finally {
+			vi.restoreAllMocks();
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("saves the active preset and reverts later changes from the modal", async () => {
+		const harness = await createPresetModalHarness();
+		try {
+			const { modal, presetsConfig, rolesConfig } = harness;
+			openToolsTab(modal);
+			modal.handleInput(" ");
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+
+			modal.handleInput("s");
+			expect(renderText(modal)).not.toContain("Preset: Baseline *");
+			expect(presetsConfig.getPreset("Baseline")?.roles.default?.tools).toEqual([]);
+
+			modal.handleInput(" ");
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+			expect(rolesConfig.getToolsForRole("default")).toEqual(["read"]);
+
+			modal.handleInput("r");
+			await Bun.sleep(0);
+			expect(rolesConfig.getToolsForRole("default")).toEqual([]);
+			expect(renderText(modal)).not.toContain("Preset: Baseline *");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps advanced-tab reset bound to the active field while a preset is modified", async () => {
+		const harness = await createPresetModalHarness();
+		try {
+			const { modal, rolesConfig } = harness;
+			openToolsTab(modal);
+			modal.handleInput(" ");
+			expect(rolesConfig.getToolsForRole("default")).toEqual([]);
+
+			modal.handleInput("\x1b[C");
+			modal.handleInput(" ");
+			expect(rolesConfig.getAdvancedForRole("default")).toEqual({ thinkingLevel: "off" });
+
+			modal.handleInput("r");
+			expect(rolesConfig.getAdvancedForRole("default")).toBeNull();
+			expect(rolesConfig.getToolsForRole("default")).toEqual([]);
+			expect(renderText(modal)).toContain("Preset: Baseline *");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("shows tools introduced by an externally applied preset", async () => {
+		const harness = await createPresetModalHarness();
+		try {
+			const { modal, presetsConfig } = harness;
+			const baseline = presetsConfig.getPreset("Baseline");
+			if (!baseline) {
+				throw new Error("Baseline preset missing");
+			}
+			presetsConfig.savePreset("External", {
+				...baseline,
+				roles: {
+					...baseline.roles,
+					default: {
+						...baseline.roles.default,
+						tools: ["grep"],
+					},
+				},
+				updatedAt: "2026-03-27T01:00:00.000Z",
+			});
+
+			await presetsConfig.applyPreset("External");
+			openToolsTab(modal);
+			expect(renderText(modal)).toContain("Tools: 1 effective");
+			expect(renderText(modal)).toContain("grep");
+		} finally {
+			harness.authStorage.close();
+			await fs.rm(harness.tempDir, { recursive: true, force: true });
 		}
 	});
 });

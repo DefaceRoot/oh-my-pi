@@ -5,6 +5,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES } from "../../config/model-registry";
+import { PresetsConfig } from "../../config/presets-config";
 import { RolesConfig } from "../../config/roles-config";
 import { settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
@@ -433,7 +434,14 @@ export class SelectorController {
 	}
 
 	async showAgentConfig(): Promise<void> {
-		const rolesConfig = new RolesConfig(path.join(this.ctx.settings.getAgentDir(), "roles.yml"));
+		const agentDir = this.ctx.settings.getAgentDir();
+		const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
+		const presetsConfig = new PresetsConfig(
+			path.join(agentDir, "presets.yml"),
+			this.ctx.settings,
+			rolesConfig,
+			this.ctx.session.modelRegistry,
+		);
 		// Build the canonical known-server list as the union of sources that cover
 		// all four namespaces where server names can be persisted:
 		//  1. project-config discovery (servers in .mcp.json / mcp.json files)
@@ -491,6 +499,7 @@ export class SelectorController {
 				settings: this.ctx.settings,
 				rolesConfig,
 				modelRegistry: this.ctx.session.modelRegistry,
+				presetsConfig,
 				knownTools,
 				subagentDefaultTools,
 				knownMcpServers,
@@ -501,6 +510,12 @@ export class SelectorController {
 				},
 				onRequestRender: () => {
 					this.ctx.ui.requestRender();
+				},
+				onShowStatus: message => {
+					this.ctx.showStatus(message);
+				},
+				onShowError: message => {
+					this.ctx.showError(message);
 				},
 			});
 			return { component: modal, focus: modal };

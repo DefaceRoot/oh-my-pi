@@ -351,7 +351,7 @@ describe("PresetsConfig", () => {
 		settings.setModelRole("orchestrator", `${presetModel}:low`);
 		await settings.flush();
 
-		presetsConfig.savePreset("Captured", {
+		const appliedSnapshot = {
 			...snapshot,
 			description: "Before mutation",
 			createdAt: "2026-03-27T01:00:00.000Z",
@@ -370,7 +370,8 @@ describe("PresetsConfig", () => {
 					mcp: ["augment", "ref"],
 				},
 			},
-		});
+		} satisfies PresetSnapshot;
+		presetsConfig.savePreset("Captured", appliedSnapshot);
 		await presetsConfig.applyPreset("Captured");
 
 		const configYaml = await readYaml(configPath);
@@ -385,10 +386,14 @@ describe("PresetsConfig", () => {
 		expect(rolesConfig.getMcpForSubagent("research")).toEqual(["augment"]);
 		expect(rolesConfig.getMcpForSubagent("lint")).toEqual(["augment", "ref"]);
 		const mergedConfig = rolesConfig.getFullConfig();
-		expect(mergedConfig.roles["retired-role"]).toBeUndefined();
-		expect(mergedConfig.subagents["retired-agent"]).toBeUndefined();
+		expect(mergedConfig.roles["retired-role"]).toEqual(appliedSnapshot.roles["retired-role"]);
+		expect(mergedConfig.subagents["retired-agent"]).toEqual(appliedSnapshot.subagents["retired-agent"]);
 		expect(presetsConfig.getActivePreset()).toBe("Captured");
-		expect(presetsConfig.captureCurrentConfig()).toEqual(snapshot);
+		expect(presetsConfig.captureCurrentConfig()).toEqual({
+			modelRoles: appliedSnapshot.modelRoles,
+			roles: appliedSnapshot.roles,
+			subagents: appliedSnapshot.subagents,
+		});
 	});
 
 	it("rejects apply when settings persistence fails and does not emit success", async () => {
