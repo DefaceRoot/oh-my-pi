@@ -132,6 +132,7 @@ export class StatusLineComponent implements Component {
 	// Git status caching (1s TTL)
 	private cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
 	private gitStatusLastFetch = 0;
+	private presetsConfig: { getActivePreset(): string | null; isModified(): boolean } | null = null;
 
 	constructor(private readonly session: AgentSession) {
 		this.settings = {
@@ -146,6 +147,10 @@ export class StatusLineComponent implements Component {
 
 	updateSettings(settings: StatusLineSettings): void {
 		this.settings = settings;
+	}
+
+	setPresetsConfig(presetsConfig: { getActivePreset(): string | null; isModified(): boolean } | null): void {
+		this.presetsConfig = presetsConfig;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -508,6 +513,12 @@ export class StatusLineComponent implements Component {
 				status: this.getGitStatus(),
 				pr: null,
 			},
+			presets: this.presetsConfig
+				? {
+						activePreset: this.presetsConfig.getActivePreset(),
+						isModified: this.presetsConfig.isModified(),
+					}
+				: null,
 		};
 	}
 
