@@ -27,6 +27,7 @@ BOLD='\033[1m'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 AGENT_DIR="$REPO_ROOT/agent"
+NATIVES_DIR="$REPO_ROOT/packages/natives/native"
 
 # Results
 TESTS_PASSED=0
@@ -78,6 +79,10 @@ test_bun_version() {
 
 test_node_modules() {
     [[ -d "$REPO_ROOT/node_modules" ]]
+}
+
+test_native_addon() {
+    compgen -G "$NATIVES_DIR/pi_natives.*.node" >/dev/null
 }
 
 test_agent_symlink() {
@@ -213,8 +218,7 @@ test_coding_agent_cli() {
 }
 
 test_cli_executable() {
-    bun --cwd="$REPO_ROOT/packages/coding-agent" src/cli.ts --help >/dev/null 2>&1 || \
-    [[ -f "$REPO_ROOT/packages/coding-agent/src/cli.ts" ]]
+    bun --cwd="$REPO_ROOT/packages/coding-agent" src/cli.ts --help >/dev/null 2>&1
 }
 
 test_pi_env_var() {
@@ -325,6 +329,7 @@ main() {
     run_test "Bun installed" test_bun_installed || true
     run_test "Bun version readable" test_bun_version || true
     run_test "Node modules installed" test_node_modules || true
+    run_test "Native addon built" test_native_addon || true
 
     # Installation
     log_header "Installation"

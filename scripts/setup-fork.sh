@@ -35,6 +35,7 @@ LAUNCHER_SOURCE="$REPO_ROOT/omp"
 LAUNCHER_LINK="$HOME/.local/bin/omp"
 BIN_DIR="$HOME/.local/bin"
 OMP_DIR="$HOME/.omp"
+NATIVES_DIR="$REPO_ROOT/packages/natives/native"
 
 # Minimum versions
 MIN_BUN_VERSION="1.3.7"
@@ -121,6 +122,20 @@ install_dependencies() {
     cd "$REPO_ROOT"
     bun install
     log_ok "Dependencies installed"
+}
+
+build_native_addon() {
+    log_step "Building native addon..."
+
+    if ! command -v cargo >/dev/null 2>&1; then
+        log_error "Cargo is required to build pi_natives but was not found in PATH"
+        log_info "Install Rust toolchain, then rerun setup"
+        exit 1
+    fi
+
+    cd "$REPO_ROOT"
+    bun --cwd=packages/natives run build:native
+    log_ok "Native addon built"
 }
 
 # ============================================================================
@@ -357,6 +372,14 @@ verify_installation() {
         ((errors++))
     fi
 
+    # Check native addon output
+    if compgen -G "$NATIVES_DIR/pi_natives.*.node" >/dev/null; then
+        log_ok "Native addon built"
+    else
+        log_error "Native addon missing - run 'bun --cwd=packages/natives run build:native'"
+        ((errors++))
+    fi
+
     # Check if omp is in PATH
     if command -v omp >/dev/null 2>&1; then
         local omp_path
@@ -421,10 +444,8 @@ test_features() {
         if bun --cwd="$REPO_ROOT/packages/coding-agent" src/cli.ts --help >/dev/null 2>&1; then
             log_ok "CLI can be invoked"
         else
-            # --help might not exist, try with version or just check file exists
-            if [[ -f "$REPO_ROOT/packages/coding-agent/src/cli.ts" ]]; then
-                log_ok "CLI entry point exists"
-            fi
+            log_error "CLI invocation failed - startup dependencies are incomplete"
+            return 1
         fi
     fi
 
@@ -503,6 +524,7 @@ main() {
     # Run setup steps
     ensure_bun
     install_dependencies
+    build_native_addon
     setup_agent_symlink
     setup_launcher_symlink
     configure_mcp
