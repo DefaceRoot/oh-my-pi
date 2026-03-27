@@ -280,6 +280,74 @@ describe("PresetSelector", () => {
 		expect(onApply).toHaveBeenCalledWith("Bravo");
 	});
 
+	test("scrolls long preset lists while keeping the active preset visible", () => {
+		const presetsConfig = new TestPresetsConfig(
+			{
+				Alpha: createSnapshot({ updatedAt: "2026-03-20T10:00:00.000Z" }),
+				Bravo: createSnapshot({ updatedAt: "2026-03-21T10:00:00.000Z" }),
+				Charlie: createSnapshot({ updatedAt: "2026-03-22T10:00:00.000Z" }),
+				Delta: createSnapshot({ updatedAt: "2026-03-23T10:00:00.000Z" }),
+				Echo: createSnapshot({ updatedAt: "2026-03-24T10:00:00.000Z" }),
+				Foxtrot: createSnapshot({ updatedAt: "2026-03-25T10:00:00.000Z" }),
+				Golf: createSnapshot({ updatedAt: "2026-03-26T10:00:00.000Z" }),
+				Hotel: createSnapshot({ updatedAt: "2026-03-27T10:00:00.000Z" }),
+			},
+			"Hotel",
+		);
+		const selector = new PresetSelector({
+			presetsConfig: presetsConfig as never,
+			onApply: () => {},
+			onClose: () => {},
+			now: () => "2026-03-27T12:00:00.000Z",
+		});
+
+		const initial = renderText(selector, 90);
+		expect(initial).toContain("▼ more");
+		expect(initial).not.toContain("Hotel");
+
+		for (let index = 0; index < 7; index += 1) {
+			selector.handleInput("j");
+		}
+
+		const scrolled = renderText(selector, 90);
+		expect(scrolled).toContain("▲ more");
+		expect(scrolled).toContain("● Hotel");
+		expect(scrolled).not.toContain("Alpha");
+	});
+
+	test("keeps active preset state accurate when renaming or deleting the active preset", () => {
+		const presetsConfig = new TestPresetsConfig(
+			{
+				Alpha: createSnapshot({ description: "First preset", updatedAt: "2026-03-24T10:00:00.000Z" }),
+				Bravo: createSnapshot({ description: "Second preset", updatedAt: "2026-03-25T10:00:00.000Z" }),
+			},
+			"Alpha",
+		);
+		const selector = new PresetSelector({
+			presetsConfig: presetsConfig as never,
+			onApply: () => {},
+			onClose: () => {},
+			now: () => "2026-03-27T12:00:00.000Z",
+		});
+
+		expect(renderText(selector)).toContain("● Alpha");
+
+		selector.handleInput("r");
+		eraseInput(selector, "Alpha".length);
+		for (const ch of "Active Alpha") selector.handleInput(ch);
+		selector.handleInput("\n");
+
+		expect(presetsConfig.getActivePreset()).toBe("Active Alpha");
+		expect(renderText(selector)).toContain("● Active Alpha");
+
+		selector.handleInput("d");
+		selector.handleInput("\n");
+
+		expect(presetsConfig.getActivePreset()).toBeNull();
+		expect(renderText(selector)).not.toContain("●");
+		expect(renderText(selector)).toContain("Bravo");
+	});
+
 	test("creates, renames, edits descriptions, and deletes presets", () => {
 		const presetsConfig = new TestPresetsConfig(
 			{
@@ -367,6 +435,25 @@ describe("PresetSelector", () => {
 		const rendered = renderText(selector);
 		expect(rendered).toContain("Rename Alpha");
 		expect(rendered).toContain("Rename failed");
+	});
+
+	test("reports when a preset disappears during inline editing", () => {
+		const presetsConfig = new TestPresetsConfig({ Alpha: createSnapshot() }, "Alpha");
+		const selector = new PresetSelector({
+			presetsConfig: presetsConfig as never,
+			onApply: () => {},
+			onClose: () => {},
+			now: () => "2026-03-27T12:00:00.000Z",
+		});
+
+		selector.handleInput("e");
+		presetsConfig.deletePreset("Alpha");
+		selector.handleInput("x");
+		selector.handleInput("\n");
+
+		const rendered = renderText(selector);
+		expect(rendered).toContain("Preset Alpha no longer exists.");
+		expect(rendered).toContain("No presets match. Press n to save the current configuration.");
 	});
 
 	test("closes on interrupt input", () => {

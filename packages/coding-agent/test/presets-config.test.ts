@@ -159,6 +159,123 @@ describe("PresetsConfig", () => {
 		expect(presetsConfig.getPreset("Baseline")).toBeUndefined();
 	});
 
+	it("treats missing and empty preset files as an empty preset store", async () => {
+		await initConfigState();
+		let presetsConfig = createPresetsConfig();
+
+		expect(presetsConfig.listPresets()).toEqual([]);
+		expect(presetsConfig.getActivePreset()).toBeNull();
+
+		await Bun.write(presetsPath, "");
+		presetsConfig = createPresetsConfig();
+
+		expect(presetsConfig.listPresets()).toEqual([]);
+		expect(presetsConfig.getActivePreset()).toBeNull();
+		expect(presetsConfig.getPreset("Baseline")).toBeUndefined();
+	});
+
+	it("ignores dangling active preset entries until a real preset is selected", async () => {
+		const modelKey = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		await Bun.write(
+			presetsPath,
+			YAML.stringify(
+				{
+					activePreset: "Ghost",
+					presets: {},
+				},
+				null,
+				2,
+			),
+		);
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+
+		expect(presetsConfig.getActivePreset()).toBeNull();
+		expect(presetsConfig.listPresets()).toEqual([]);
+
+		presetsConfig.savePreset("Baseline", createSnapshot(modelKey));
+		presetsConfig.setActivePreset("Baseline");
+
+		expect(presetsConfig.getActivePreset()).toBe("Baseline");
+	});
+
+	it("switches between multiple presets and restores each saved snapshot", async () => {
+		const baselineModel = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		const presetModel = getRequiredModel("anthropic", "claude-opus-4-5");
+		await writeYaml(configPath, {
+			modelRoles: {
+				default: `${baselineModel}:high`,
+			},
+		});
+		await writeYaml(rolesPath, {
+			roles: {
+				default: {
+					tools: ["read"],
+					mcp: ["augment"],
+					skills: "all",
+				},
+			},
+			subagents: {
+				_default: {
+					mcp: ["augment"],
+				},
+				research: {
+					mcp: ["augment", "ref"],
+				},
+			},
+		});
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+		const baselineSnapshot = presetsConfig.captureCurrentConfig();
+		presetsConfig.savePreset("Baseline", {
+			...baselineSnapshot,
+			createdAt: "2026-03-27T01:00:00.000Z",
+			updatedAt: "2026-03-27T01:00:00.000Z",
+		});
+		presetsConfig.savePreset("Review", {
+			...baselineSnapshot,
+			description: "Legacy review flow",
+			createdAt: "2026-03-27T02:00:00.000Z",
+			updatedAt: "2026-03-27T02:00:00.000Z",
+			modelRoles: {
+				...baselineSnapshot.modelRoles,
+				default: `${presetModel}:low`,
+				ask: `${presetModel}:medium`,
+			},
+			roles: {
+				...baselineSnapshot.roles,
+				default: {
+					...baselineSnapshot.roles.default,
+					tools: ["read", "grep"],
+					fallback: "custom/missing-default",
+				},
+			},
+			subagents: {
+				...baselineSnapshot.subagents,
+				research: {
+					...baselineSnapshot.subagents.research,
+					fallback: "custom/missing-research",
+				},
+			},
+		});
+
+		await presetsConfig.applyPreset("Review");
+
+		expect(settings.getModelRole("default")).toBe(`${presetModel}:low`);
+		expect(rolesConfig.getToolsForRole("default")).toEqual(["read", "grep"]);
+		expect(rolesConfig.getFallbackForRole("default")).toBe("custom/missing-default");
+		expect(rolesConfig.getFallbackForSubagent("research")).toBe("custom/missing-research");
+		expect(presetsConfig.getActivePreset()).toBe("Review");
+
+		await presetsConfig.applyPreset("Baseline");
+
+		expect(settings.getModelRole("default")).toBe(baselineSnapshot.modelRoles.default);
+		expect(rolesConfig.getToolsForRole("default")).toEqual(baselineSnapshot.roles.default.tools);
+		expect(rolesConfig.getFallbackForRole("default")).toBeNull();
+		expect(rolesConfig.getFallbackForSubagent("research")).toBeNull();
+		expect(presetsConfig.getActivePreset()).toBe("Baseline");
+	});
+
 	it("captures current config with resolved model roles and deep-cloned roles data", async () => {
 		const defaultModel = getRequiredModel("anthropic", "claude-sonnet-4-5");
 		const orchestratorModel = getRequiredModel("anthropic", "claude-opus-4-5");
@@ -453,6 +570,86 @@ describe("PresetsConfig", () => {
 		await settings.flush();
 		const afterLaterFlush = await readYaml(configPath);
 		expect(((afterLaterFlush.modelRoles ?? {}) as Record<string, string>).default).toBe(beforeModelRoles.default);
+	});
+
+	it("reflects external preset changes across config instances", async () => {
+		await initConfigState();
+		const primary = createPresetsConfig();
+		const secondary = createPresetsConfig();
+		const baselineModel = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		const reviewModel = getRequiredModel("anthropic", "claude-opus-4-5");
+
+		primary.savePreset("Baseline", createSnapshot(baselineModel));
+		secondary.savePreset("Review", {
+			...createSnapshot(reviewModel),
+			description: "Second preset",
+			createdAt: "2026-03-27T06:00:00.000Z",
+			updatedAt: "2026-03-27T06:00:00.000Z",
+		});
+
+		expect(primary.listPresets().map(preset => preset.name)).toEqual(["Baseline", "Review"]);
+
+		primary.setActivePreset("Baseline");
+		secondary.renamePreset("Baseline", "Baseline Renamed");
+
+		expect(primary.getActivePreset()).toBe("Baseline Renamed");
+		expect(primary.getPreset("Baseline")).toBeUndefined();
+		expect(primary.getPreset("Baseline Renamed")).toBeDefined();
+
+		secondary.deletePreset("Baseline Renamed");
+
+		expect(primary.getActivePreset()).toBeNull();
+		expect(primary.listPresets().map(preset => preset.name)).toEqual(["Review"]);
+	});
+
+	it("treats role and subagent changes as preset modifications", async () => {
+		const baselineModel = getRequiredModel("anthropic", "claude-sonnet-4-5");
+		await writeYaml(configPath, {
+			modelRoles: {
+				default: `${baselineModel}:high`,
+			},
+		});
+		await writeYaml(rolesPath, {
+			roles: {
+				default: {
+					tools: ["read"],
+					mcp: ["augment"],
+					skills: "all",
+				},
+			},
+			subagents: {
+				_default: {
+					mcp: ["augment"],
+				},
+				research: {
+					mcp: ["augment", "ref"],
+				},
+			},
+		});
+		await initConfigState();
+		const presetsConfig = createPresetsConfig();
+		const snapshot = presetsConfig.captureCurrentConfig();
+		presetsConfig.savePreset("Baseline", {
+			...snapshot,
+			createdAt: "2026-03-27T07:00:00.000Z",
+			updatedAt: "2026-03-27T07:00:00.000Z",
+		});
+		presetsConfig.setActivePreset("Baseline");
+
+		expect(presetsConfig.isModified()).toBe(false);
+
+		rolesConfig.setToolsForRole("default", ["read", "write"]);
+		expect(presetsConfig.isModified()).toBe(true);
+
+		await presetsConfig.applyPreset("Baseline");
+		expect(presetsConfig.isModified()).toBe(false);
+
+		rolesConfig.setAdvancedForSubagent("research", { thinkingLevel: "off" });
+		expect(presetsConfig.isModified()).toBe(true);
+
+		await presetsConfig.applyPreset("Baseline");
+		expect(rolesConfig.getAdvancedForSubagent("research")).toBeNull();
+		expect(presetsConfig.isModified()).toBe(false);
 	});
 
 	it("ignores project-level model role overrides when checking preset modified state", async () => {
