@@ -54,7 +54,7 @@ import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-u
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
-import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
+import { extractExplicitThinkingSelector, parseModelString, resolveFallbackModel, resolveModelRoleValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
@@ -182,6 +182,7 @@ export type AgentSessionEvent =
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| { type: "auto_retry_fallback"; fallbackModel: string; primaryModel: string; role: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" };
@@ -252,6 +253,14 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Pending action store for preview/apply workflows */
 	pendingActionStore?: PendingActionStore;
+	/** Session role name (used for fallback model resolution). Defaults to "default". */
+	role?: string;
+	/**
+	 * Resolve fallback model for automatic retry-based model switching.
+	 * Called with the primary model key ("provider/id") at the retry threshold.
+	 * Returns a fallback Model, or null when no fallback is configured.
+	 */
+	resolveFallbackModel?: (primaryModelKey: string) => Model | null;
 }
 
 /** Options for AgentSession.prompt() */
@@ -447,6 +456,12 @@ export class AgentSession {
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 
+	// Fallback model state (auto-retry threshold switching)
+	#fallbackActive = false;
+	#primaryModel: Model | null = null;
+	#sessionRole = "default";
+	#resolveFallbackModel: ((primaryModelKey: string) => Model | null) | undefined = undefined;
+
 	// Todo completion reminder state
 	#todoReminderCount = 0;
 	#todoPhases: TodoPhase[] = [];
@@ -629,6 +644,8 @@ export class AgentSession {
 		});
 		this.#syncTodoPhasesFromBranch();
 		this.#enforceServiceTierForCurrentModel(false);
+		this.#sessionRole = config.role ?? "default";
+		this.#resolveFallbackModel = config.resolveFallbackModel;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -988,6 +1005,12 @@ export class AgentSession {
 			}
 			this.#resolveRetry();
 
+			// Restore primary model after fallback usage (before tool dispatch or final yield).
+			// This runs on every non-retried agent_end so the next LLM call uses the primary model.
+			if (this.#fallbackActive) {
+				await this.#restorePrimaryModel();
+			}
+
 			if (msg.stopReason === "aborted" && this.#checkpointState) {
 				this.#checkpointState = undefined;
 				this.#pendingRewindReport = undefined;
@@ -1015,6 +1038,37 @@ export class AgentSession {
 			this.#retryResolve();
 			this.#retryResolve = undefined;
 			this.#retryPromise = undefined;
+		}
+	}
+
+	/**
+	 * Restore the primary model after a fallback model was used for one API round-trip.
+	 *
+	 * State is cleared only after the restore attempt so the session never enters a state
+	 * where `#fallbackActive` is false but `setModelTemporary` never ran (pre-clear + throw).
+	 * On failure the session remains on the fallback model; state is still cleared to avoid
+	 * an infinite retry loop on subsequent turns.
+	 */
+	async #restorePrimaryModel(): Promise<void> {
+		if (!this.#fallbackActive) return;
+		const primary = this.#primaryModel;
+		if (!primary) {
+			this.#fallbackActive = false;
+			return;
+		}
+		try {
+			await this.setModelTemporary(primary);
+			// Restore succeeded — session is back on the primary model.
+			this.#fallbackActive = false;
+			this.#primaryModel = null;
+		} catch (err) {
+			// Restore failed (e.g. no API key for primary provider). Clear state to prevent
+			// infinite retry loops on subsequent turns; session remains on the fallback model.
+			this.#fallbackActive = false;
+			this.#primaryModel = null;
+			logger.warn("Primary model restore failed after fallback; remaining on fallback model", {
+				error: String(err),
+			});
 		}
 	}
 
@@ -4978,6 +5032,7 @@ export class AgentSession {
 		const errorMessage = message.errorMessage || "Unknown error";
 		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
 
+		let accountSwitched = false;
 		if (this.model && isUsageLimitError(errorMessage)) {
 			const retryAfterMs =
 				this.#parseRetryAfterMsFromError(errorMessage) ??
@@ -4992,9 +5047,40 @@ export class AgentSession {
 			);
 			if (switched) {
 				delayMs = 0;
+				accountSwitched = true;
 			} else if (retryAfterMs > delayMs) {
 				// No more accounts to switch to — wait out the backoff
 				delayMs = retryAfterMs;
+			}
+		}
+
+		// At threshold: switch to fallback model when one is available and account rotation did not fire.
+		// Guards: only activates once per retry sequence (!#fallbackActive), and skips when an account
+		// was just rotated (usage limit precedence per spec).
+		if (
+			!this.#fallbackActive &&
+			!accountSwitched &&
+			this.#retryAttempt === retrySettings.maxRetriesBeforeFallback &&
+			this.#resolveFallbackModel
+		) {
+			const primaryModelKey = this.model ? `${this.model.provider}/${this.model.id}` : "";
+			const fallbackModel = this.#resolveFallbackModel(primaryModelKey);
+			if (fallbackModel) {
+				this.#primaryModel = this.model ?? null;
+				try {
+					await this.setModelTemporary(fallbackModel);
+					this.#fallbackActive = true;
+					await this.#emitSessionEvent({
+						type: "auto_retry_fallback",
+						fallbackModel: `${fallbackModel.provider}/${fallbackModel.id}`,
+						primaryModel: primaryModelKey,
+						role: this.#sessionRole,
+					});
+				} catch (err) {
+					// Fallback activation failed — log and continue with current model
+					logger.warn("Failed to activate fallback model during retry", { error: String(err) });
+					this.#primaryModel = null;
+				}
 			}
 		}
 

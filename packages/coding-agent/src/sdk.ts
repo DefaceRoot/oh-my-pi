@@ -19,7 +19,7 @@ import { loadCapability } from "./capability";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry, RolesConfig } from "./config/model-registry";
 import type { SkillConfig } from "./config/roles-config";
-import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
+import { formatModelString, parseModelPattern, parseModelString, resolveFallbackModel, resolveModelRoleValue } from "./config/model-resolver";
 import {
 	loadPromptTemplates as loadPromptTemplatesInternal,
 	type PromptTemplate,
@@ -1723,6 +1723,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		obfuscator,
 		asyncJobManager,
 		pendingActionStore,
+		role: resolveRoleName(options.role),
+		resolveFallbackModel: primaryModelKey =>
+			resolveFallbackModel(
+				resolveRoleName(options.role), // agentName (same as role for main sessions)
+				resolveRoleName(options.role),
+				taskDepth > 0, // isSubagent
+				rolesConfig,
+				settings,
+				modelRegistry,
+				primaryModelKey,
+			),
 	});
 
 	if (model?.api === "openai-codex-responses") {

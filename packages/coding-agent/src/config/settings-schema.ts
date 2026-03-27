@@ -1688,6 +1688,7 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	maxRetriesBeforeFallback: number;
 }
 
 export interface MemoriesSettings {
