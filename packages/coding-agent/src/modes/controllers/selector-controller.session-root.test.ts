@@ -205,7 +205,26 @@ mock.module("../components/user-message-selector", () => ({
 
 import { SelectorController } from "./selector-controller";
 
-function createSelectorContext() {
+type MockModel = {
+	provider: string;
+	id: string;
+	name: string;
+};
+
+function createModel(provider: string, id: string, name = id): MockModel {
+	return { provider, id, name };
+}
+
+
+type CreateSelectorContextOptions = {
+	activeRole?: "default" | "ask" | "orchestrator" | "plan";
+	configuredRoleModels?: Record<string, string | undefined>;
+	resolvedRoleModels?: Record<string, MockModel | undefined>;
+	currentModel?: MockModel | undefined;
+};
+
+
+function createSelectorContext(options: CreateSelectorContextOptions = {}) {
 	const editorContainer = {
 		addChild: vi.fn(),
 		clear: vi.fn(),
@@ -217,31 +236,63 @@ function createSelectorContext() {
 	} as unknown as InteractiveModeContext["ui"];
 	const showStatus = vi.fn();
 	const showError = vi.fn();
+	const activeRole = options.activeRole ?? "default";
+	const configuredRoleModels: Record<string, string | undefined> = {
+		default: "anthropic/claude-sonnet-4-5",
+		...(options.configuredRoleModels ?? {}),
+	};
+	const resolvedRoleModels: Record<string, MockModel | undefined> = {
+		default: createModel("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5"),
+		...(options.resolvedRoleModels ?? {}),
+	};
+	let currentModel = options.currentModel ?? resolvedRoleModels[activeRole] ?? resolvedRoleModels.default;
+	const setModelTemporary = vi.fn(async (model: MockModel) => {
+		currentModel = model;
+	});
+	const statusLineInvalidate = vi.fn();
+	const updateEditorBorderColor = vi.fn();
+	const sessionManager = {
+		getLastModelChangeRole: () => activeRole,
+	} as unknown as InteractiveModeContext["sessionManager"];
 	const ctx = {
 		editorContainer,
 		editor,
 		ui,
+		statusLine: { invalidate: statusLineInvalidate, setPresetsConfig: vi.fn() },
+		updateEditorBorderColor,
 		showStatus,
 		showError,
+		sessionManager,
 		settings: {
 			getAgentDir: () => "/tmp/agent",
 			getCwd: () => "/tmp/project",
+			getModelRole: (role: string) => configuredRoleModels[role],
 			get: vi.fn(() => true),
 		} as unknown as InteractiveModeContext["settings"],
 		session: {
 			modelRegistry: {},
 			skills: [],
+			get model() {
+				return currentModel;
+			},
+			resolveRoleModel: (role: string) => resolvedRoleModels[role],
+			setModelTemporary,
 		} as unknown as InteractiveModeContext["session"],
 		mcpManager: { getAllServerNames: () => [] } as unknown as InteractiveModeContext["mcpManager"],
 	} as unknown as InteractiveModeContext;
 
 	return {
 		controller: new SelectorController(ctx),
+		configuredRoleModels,
 		editor,
 		editorContainer,
+		resolvedRoleModels,
+		setModelTemporary,
 		showError,
 		showStatus,
+		statusLineInvalidate,
 		ui,
+		updateEditorBorderColor,
 	};
 }
 
@@ -354,6 +405,60 @@ describe("SelectorController preset selector", () => {
 		expect(editorContainer.addChild).toHaveBeenLastCalledWith(editor);
 		expect(ui.setFocus).toHaveBeenLastCalledWith(editor);
 		expect(ui.requestRender).toHaveBeenCalled();
+	});
+
+	it("refreshes the live session model after config closes with a new model", async () => {
+		const {
+			controller,
+			configuredRoleModels,
+			resolvedRoleModels,
+			setModelTemporary,
+			statusLineInvalidate,
+			updateEditorBorderColor,
+		} = createSelectorContext();
+
+		await controller.showAgentConfig();
+		const modalOptions = agentConfigModalOptions.at(-1) as {
+			onDismiss?: () => Promise<void> | void;
+		};
+		expect(modalOptions?.onDismiss).toBeDefined();
+
+		const refreshedModel = createModel("openai", "gpt-5", "GPT-5");
+		configuredRoleModels.default = "openai/gpt-5";
+		resolvedRoleModels.default = refreshedModel;
+
+		await modalOptions.onDismiss?.();
+
+		expect(setModelTemporary).toHaveBeenCalledWith(refreshedModel, "default");
+		expect(statusLineInvalidate).toHaveBeenCalledTimes(1);
+		expect(updateEditorBorderColor).toHaveBeenCalledTimes(1);
+	});
+
+	it("refreshes ask mode when it inherits the default model", async () => {
+		const {
+			controller,
+			configuredRoleModels,
+			resolvedRoleModels,
+			setModelTemporary,
+			statusLineInvalidate,
+			updateEditorBorderColor,
+		} = createSelectorContext({ activeRole: "ask" });
+
+		await controller.showAgentConfig();
+		const modalOptions = agentConfigModalOptions.at(-1) as {
+			onDismiss?: () => Promise<void> | void;
+		};
+		expect(modalOptions?.onDismiss).toBeDefined();
+
+		const refreshedDefaultModel = createModel("openai", "gpt-5", "GPT-5");
+		configuredRoleModels.default = "openai/gpt-5";
+		resolvedRoleModels.default = refreshedDefaultModel;
+
+		await modalOptions.onDismiss?.();
+
+		expect(setModelTemporary).toHaveBeenCalledWith(refreshedDefaultModel, "ask");
+		expect(statusLineInvalidate).toHaveBeenCalledTimes(1);
+		expect(updateEditorBorderColor).toHaveBeenCalledTimes(1);
 	});
 });
 

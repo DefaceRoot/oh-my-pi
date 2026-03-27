@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders, modelsAreEqual, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -62,6 +62,13 @@ const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
 
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
+const MAIN_AGENT_ROLES = ["default", "ask", "orchestrator", "plan"] as const satisfies readonly ModelRole[];
+
+type MainAgentRole = (typeof MAIN_AGENT_ROLES)[number];
+
+function isMainAgentRole(role: string | undefined): role is MainAgentRole {
+	return role === "default" || role === "ask" || role === "orchestrator" || role === "plan";
+}
 export class SelectorController {
 	#sharedAgentConfigDir?: string;
 	#sharedRolesConfig?: RolesConfig;
@@ -81,6 +88,8 @@ export class SelectorController {
 				rolesConfig,
 				this.ctx.session.modelRegistry,
 			);
+			// Wire the new instance so the preset status-line segment stays current.
+			this.ctx.statusLine.setPresetsConfig(this.#sharedPresetsConfig);
 		}
 		// Reuse one shared store instance so modal and standalone selectors stay in sync,
 		// but drop cached file contents each time either surface reopens.
@@ -88,6 +97,26 @@ export class SelectorController {
 		this.#sharedPresetsConfig.invalidateCache();
 
 		return { rolesConfig: this.#sharedRolesConfig, presetsConfig: this.#sharedPresetsConfig };
+	}
+
+	/**
+	 * Eagerly create the presetsConfig and wire it to the status line.
+	 * Called once at startup so the preset segment is visible immediately.
+	 */
+	initPresetsForStatusLine(): void {
+		const agentDir = this.ctx.settings.getAgentDir();
+		if (this.#sharedAgentConfigDir !== agentDir || !this.#sharedPresetsConfig) {
+			const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
+			this.#sharedAgentConfigDir = agentDir;
+			this.#sharedRolesConfig = rolesConfig;
+			this.#sharedPresetsConfig = new PresetsConfig(
+				path.join(agentDir, "presets.yml"),
+				this.ctx.settings,
+				rolesConfig,
+				this.ctx.session.modelRegistry,
+			);
+		}
+		this.ctx.statusLine.setPresetsConfig(this.#sharedPresetsConfig);
 	}
 	async #refreshOAuthProviderAuthState(): Promise<void> {
 		const oauthProviders = getOAuthProviders();
@@ -480,12 +509,41 @@ export class SelectorController {
 		});
 	}
 
+	#captureConfiguredMainModels(): Record<MainAgentRole, string | undefined> {
+		return {
+			default: this.ctx.settings.getModelRole("default"),
+			ask: this.ctx.settings.getModelRole("ask"),
+			orchestrator: this.ctx.settings.getModelRole("orchestrator"),
+			plan: this.ctx.settings.getModelRole("plan"),
+		};
+	}
+
+	#didConfiguredMainModelsChange(initialConfiguredModels: Record<MainAgentRole, string | undefined>): boolean {
+		return MAIN_AGENT_ROLES.some(role => this.ctx.settings.getModelRole(role) !== initialConfiguredModels[role]);
+	}
+
+	async #refreshLiveConfiguredModel(): Promise<void> {
+		const activeRole = this.ctx.sessionManager.getLastModelChangeRole();
+		if (!isMainAgentRole(activeRole)) return;
+
+		const defaultModel = activeRole === "ask" ? this.ctx.session.resolveRoleModel("default") : undefined;
+		const nextModel =
+			activeRole === "ask" ? this.ctx.session.resolveRoleModel("ask") ?? defaultModel : this.ctx.session.resolveRoleModel(activeRole);
+		if (!nextModel) return;
+		const currentModel = this.ctx.session.model;
+		if (currentModel && modelsAreEqual(currentModel, nextModel)) return;
+
+		await this.ctx.session.setModelTemporary(nextModel, activeRole);
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
+		this.ctx.ui.requestRender();
+	}
 	async #applyLiveAgentConfigChange(
 		role: ModelRole,
 		section: "tools" | "advanced",
 		rolesConfig: RolesConfig,
 	): Promise<void> {
-		if (role !== "default" && role !== "orchestrator" && role !== "plan" && role !== "ask") return;
+		if (!isMainAgentRole(role)) return;
 		if (this.ctx.sessionManager.getLastModelChangeRole() !== role) return;
 		const session = this.ctx.session as InteractiveModeContext["session"] & {
 			settings: Settings;
@@ -512,6 +570,7 @@ export class SelectorController {
 	}
 
 	async showAgentConfig(): Promise<void> {
+		const initialConfiguredModels = this.#captureConfiguredMainModels();
 		const { rolesConfig, presetsConfig } = this.#getAgentConfigStores();
 		// Build the canonical known-server list as the union of sources that cover
 		// all four namespaces where server names can be persisted:
@@ -603,9 +662,15 @@ export class SelectorController {
 				},
 
 				discoveredSkills,
-				onDismiss: () => {
+				onDismiss: async () => {
 					done();
 					this.ctx.ui.requestRender();
+					if (!this.#didConfiguredMainModelsChange(initialConfiguredModels)) return;
+					try {
+						await this.#refreshLiveConfiguredModel();
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
 				},
 				onRequestRender: () => {
 					this.ctx.ui.requestRender();

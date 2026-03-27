@@ -119,12 +119,14 @@ function createSelectorContext() {
 		editorContainer: { addChild: vi.fn(), clear: vi.fn() },
 		editor: { setText: vi.fn() },
 		ui: { requestRender: vi.fn(), setFocus: vi.fn() },
+		statusLine: { setPresetsConfig: vi.fn() },
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		sessionManager: { getLastModelChangeRole: () => "default" },
 		settings: {
 			getAgentDir: () => tempAgentDir,
 			getCwd: () => "/tmp/project",
+			getModelRole: vi.fn(() => undefined),
 			get: vi.fn((key: string) => (key === "defaultThinkingLevel" ? "high" : true)),
 		} as unknown as InteractiveModeContext["settings"],
 		session: {
@@ -211,4 +213,5 @@ subagents:
 		expect(refreshBaseSystemPrompt).toHaveBeenCalled();
 		expect(sessionSettings.clearOverride).toHaveBeenCalled();
 	});
+
 });
