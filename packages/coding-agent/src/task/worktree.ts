@@ -68,6 +68,47 @@ export async function getRepoRoot(cwd: string): Promise<string> {
 
 const PROJFS_UNAVAILABLE_PREFIX = "PROJFS_UNAVAILABLE:";
 const GIT_NO_INDEX_NULL_PATH = process.platform === "win32" ? "NUL" : "/dev/null";
+const OMP_MANAGED_WORKTREE_BRANCH_PREFIX = "omp/worktree/";
+
+const managedWorktreeBranches = new Map<string, string>();
+
+const SYNTHETIC_BASELINE_COMMIT_ENV = {
+	GIT_AUTHOR_NAME: "Oh My Pi",
+	GIT_AUTHOR_EMAIL: "omp-baseline@local.invalid",
+	GIT_COMMITTER_NAME: "Oh My Pi",
+	GIT_COMMITTER_EMAIL: "omp-baseline@local.invalid",
+};
+
+function isUnbornHeadError(stderr: string): boolean {
+	const normalized = stderr.toLowerCase();
+	return (
+		normalized.includes("ambiguous argument 'head'") ||
+		normalized.includes("unknown revision or path not in the working tree") ||
+		normalized.includes("bad revision 'head'")
+	);
+}
+
+async function getHeadCommit(repoRoot: string): Promise<string> {
+	const result = await $`git rev-parse HEAD`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return result.text().trim();
+	const stderr = result.stderr.toString().trim();
+	if (result.exitCode === 128 && isUnbornHeadError(stderr)) return "";
+	throw new Error(stderr || `Failed to resolve git HEAD for ${repoRoot}.`);
+}
+
+async function branchExists(repoRoot: string, branchName: string): Promise<boolean> {
+	const result = await $`git show-ref --verify --quiet refs/heads/${branchName}`.cwd(repoRoot).quiet().nothrow();
+	return result.exitCode === 0;
+}
+
+async function createManagedWorktreeBranchName(repoRoot: string, id: string): Promise<string> {
+	const branchBase = `${OMP_MANAGED_WORKTREE_BRANCH_PREFIX}${id}`;
+	let branchName = `${branchBase}-${Snowflake.next()}`;
+	while (await branchExists(repoRoot, branchName)) {
+		branchName = `${branchBase}-${Snowflake.next()}`;
+	}
+	return branchName;
+}
 
 export function isProjfsUnavailableError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes(PROJFS_UNAVAILABLE_PREFIX);
@@ -81,10 +122,20 @@ export async function ensureWorktree(baseCwd: string, id: string): Promise<strin
 	const repoRoot = await getRepoRoot(baseCwd);
 	const encodedProject = getEncodedProjectName(repoRoot);
 	const worktreeDir = getWorktreeDir(encodedProject, id);
+	const normalizedWorktreeDir = path.resolve(worktreeDir);
+	const headCommit = await getHeadCommit(repoRoot);
 	await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
 	await $`git worktree remove -f ${worktreeDir}`.cwd(repoRoot).quiet().nothrow();
 	await fs.rm(worktreeDir, { recursive: true, force: true });
-	await $`git worktree add --detach ${worktreeDir} HEAD`.cwd(repoRoot).quiet();
+	managedWorktreeBranches.delete(normalizedWorktreeDir);
+	if (headCommit) {
+		await $`git worktree add --detach ${worktreeDir} HEAD`.cwd(repoRoot).quiet();
+	} else {
+		const branchName = await createManagedWorktreeBranchName(repoRoot, id);
+		// Unborn repos cannot detach HEAD; use a disposable managed branch instead.
+		await $`git worktree add -b ${branchName} ${worktreeDir}`.cwd(repoRoot).quiet();
+		managedWorktreeBranches.set(normalizedWorktreeDir, branchName);
+	}
 	return worktreeDir;
 }
 
@@ -137,7 +188,7 @@ async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 }
 
 async function captureRepoBaseline(repoRoot: string): Promise<RepoBaseline> {
-	const headCommit = (await $`git rev-parse HEAD`.cwd(repoRoot).quiet().text()).trim();
+	const headCommit = await getHeadCommit(repoRoot);
 	const staged = await $`git diff --cached --binary`.cwd(repoRoot).quiet().text();
 	const unstaged = await $`git diff --binary`.cwd(repoRoot).quiet().text();
 	const untrackedRaw = await $`git ls-files --others --exclude-standard`.cwd(repoRoot).quiet().text();
@@ -147,9 +198,19 @@ async function captureRepoBaseline(repoRoot: string): Promise<RepoBaseline> {
 		.filter(line => line.length > 0);
 	return { repoRoot, headCommit, staged, unstaged, untracked };
 }
+function isNestedRepoEntry(entry: string, nestedPaths: string[]): boolean {
+	const normalizedEntry = path.normalize(entry);
+	return nestedPaths.some(nestedPath => {
+		const normalizedNestedPath = path.normalize(nestedPath);
+		return (
+			normalizedEntry === normalizedNestedPath || normalizedEntry.startsWith(`${normalizedNestedPath}${path.sep}`)
+		);
+	});
+}
 
 export async function captureBaseline(repoRoot: string): Promise<WorktreeBaseline> {
 	const [root, nestedPaths] = await Promise.all([captureRepoBaseline(repoRoot), discoverNestedRepos(repoRoot)]);
+	root.untracked = root.untracked.filter(entry => !isNestedRepoEntry(entry, nestedPaths));
 	const nested = await Promise.all(
 		nestedPaths.map(async relativePath => ({
 			relativePath,
@@ -202,8 +263,23 @@ async function applyRepoBaseline(worktreeDir: string, rb: RepoBaseline, sourceRo
 	}
 }
 
+async function commitSyntheticBaseline(repoDir: string, baseline: RepoBaseline): Promise<void> {
+	const hasChanges = (
+		await $`git --no-optional-locks status --porcelain`.cwd(repoDir).quiet().nothrow().text()
+	).trim();
+	if (!hasChanges) return;
+	await $`git add -A`.cwd(repoDir).quiet();
+	await $`git commit -m omp-baseline --allow-empty`.cwd(repoDir).env(SYNTHETIC_BASELINE_COMMIT_ENV).quiet();
+	// Update the baseline so later patch capture subtracts the synthetic commit, not the empty repo.
+	baseline.headCommit = await getHeadCommit(repoDir);
+	baseline.staged = "";
+	baseline.unstaged = "";
+	baseline.untracked = [];
+}
+
 export async function applyBaseline(worktreeDir: string, baseline: WorktreeBaseline): Promise<void> {
 	await applyRepoBaseline(worktreeDir, baseline.root, baseline.root.repoRoot);
+	await commitSyntheticBaseline(worktreeDir, baseline.root);
 
 	// Restore nested repos into the worktree
 	for (const entry of baseline.nested) {
@@ -218,22 +294,7 @@ export async function applyBaseline(worktreeDir: string, baseline: WorktreeBasel
 		}
 		// Apply any uncommitted changes from the nested baseline
 		await applyRepoBaseline(nestedDir, entry.baseline, entry.baseline.repoRoot);
-		// Commit baseline state so captureRepoDeltaPatch can cleanly subtract it.
-		// Without this, `git add -A && git commit` by the task would include
-		// baseline untracked files in the diff-tree output.
-		const hasChanges = (
-			await $`git --no-optional-locks status --porcelain`.cwd(nestedDir).quiet().nothrow().text()
-		).trim();
-		if (hasChanges) {
-			await $`git add -A`.cwd(nestedDir).quiet();
-			await $`git commit -m omp-baseline --allow-empty`.cwd(nestedDir).quiet();
-			// Update baseline to reflect the committed state — prevents double-apply
-			// in captureRepoDeltaPatch's temp-index path
-			entry.baseline.headCommit = (await $`git rev-parse HEAD`.cwd(nestedDir).quiet().text()).trim();
-			entry.baseline.staged = "";
-			entry.baseline.unstaged = "";
-			entry.baseline.untracked = [];
-		}
+		await commitSyntheticBaseline(nestedDir, entry.baseline);
 	}
 }
 
@@ -260,21 +321,41 @@ async function listUntracked(cwd: string): Promise<string[]> {
 		.filter(line => line.length > 0);
 }
 
-async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise<string> {
+async function captureCommittedDiff(repoDir: string, baseHeadCommit: string, currentHead: string): Promise<string> {
+	const result = baseHeadCommit
+		? await $`git diff-tree -r -p --binary ${baseHeadCommit} ${currentHead}`.cwd(repoDir).quiet().nothrow()
+		: await $`git diff-tree --root -r -p --binary ${currentHead}`.cwd(repoDir).quiet().nothrow();
+	if (result.exitCode !== 0) {
+		const stderr = result.stderr.toString().trim();
+		throw new Error(stderr || `Failed to capture committed changes for ${repoDir}.`);
+	}
+	return result.text();
+}
+
+async function seedTempIndex(repoDir: string, headCommit: string, indexFile: string): Promise<void> {
+	const env = { GIT_INDEX_FILE: indexFile };
+	if (headCommit) {
+		await $`git read-tree ${headCommit}`.cwd(repoDir).env(env).quiet();
+		return;
+	}
+	await $`git read-tree --empty`.cwd(repoDir).env(env).quiet();
+}
+
+async function captureRepoDeltaPatch(
+	repoDir: string,
+	rb: RepoBaseline,
+	ignoredUntrackedPaths: string[] = [],
+): Promise<string> {
 	// Check if HEAD advanced (task committed changes)
-	const currentHead = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().nothrow().text()).trim();
-	const headAdvanced = currentHead && currentHead !== rb.headCommit;
+	const currentHead = await getHeadCommit(repoDir);
+	const headAdvanced = currentHead.length > 0 && currentHead !== rb.headCommit;
 
 	if (headAdvanced) {
 		// HEAD moved: use diff-tree to capture committed changes, plus any uncommitted on top
 		const parts: string[] = [];
 
 		// Committed changes since baseline
-		const committedDiff = await $`git diff-tree -r -p --binary ${rb.headCommit} ${currentHead}`
-			.cwd(repoDir)
-			.quiet()
-			.nothrow()
-			.text();
+		const committedDiff = await captureCommittedDiff(repoDir, rb.headCommit, currentHead);
 		if (committedDiff.trim()) parts.push(committedDiff);
 
 		// Uncommitted changes on top of the new HEAD
@@ -286,7 +367,9 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 		// New untracked files (relative to both baseline and current tracking)
 		const currentUntracked = await listUntracked(repoDir);
 		const baselineUntracked = new Set(rb.untracked);
-		const newUntracked = currentUntracked.filter(entry => !baselineUntracked.has(entry));
+		const newUntracked = currentUntracked.filter(
+			entry => !baselineUntracked.has(entry) && !isNestedRepoEntry(entry, ignoredUntrackedPaths),
+		);
 		if (newUntracked.length > 0) {
 			const nullPath = getGitNoIndexNullPath();
 			const untrackedDiffs = await Promise.all(
@@ -303,14 +386,16 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 	// HEAD unchanged: use temp index approach (subtracts baseline from delta)
 	const tempIndex = path.join(os.tmpdir(), `omp-task-index-${Snowflake.next()}`);
 	try {
-		await $`git read-tree ${rb.headCommit}`.cwd(repoDir).env({ GIT_INDEX_FILE: tempIndex });
+		await seedTempIndex(repoDir, rb.headCommit, tempIndex);
 		await applyPatchToIndex(repoDir, rb.staged, tempIndex);
 		await applyPatchToIndex(repoDir, rb.unstaged, tempIndex);
 		const diff = await $`git diff --binary`.cwd(repoDir).env({ GIT_INDEX_FILE: tempIndex }).quiet().text();
 
 		const currentUntracked = await listUntracked(repoDir);
 		const baselineUntracked = new Set(rb.untracked);
-		const newUntracked = currentUntracked.filter(entry => !baselineUntracked.has(entry));
+		const newUntracked = currentUntracked.filter(
+			entry => !baselineUntracked.has(entry) && !isNestedRepoEntry(entry, ignoredUntrackedPaths),
+		);
 
 		if (newUntracked.length === 0) return diff;
 
@@ -337,7 +422,8 @@ export interface DeltaPatchResult {
 }
 
 export async function captureDeltaPatch(isolationDir: string, baseline: WorktreeBaseline): Promise<DeltaPatchResult> {
-	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root);
+	const nestedRepoPaths = baseline.nested.map(entry => entry.relativePath);
+	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root, nestedRepoPaths);
 	const nestedPatches: NestedRepoPatch[] = [];
 
 	for (const { relativePath, baseline: nb } of baseline.nested) {
@@ -725,8 +811,12 @@ export async function cleanupSelectedWorktrees(
 }
 
 export async function cleanupWorktree(repoRoot: string, dir: string): Promise<void> {
+	const resolvedDir = path.resolve(dir);
+	const managedBranchName = managedWorktreeBranches.get(resolvedDir);
+	managedWorktreeBranches.delete(resolvedDir);
+
 	try {
-		const result = await $`git worktree remove -f ${dir}`.cwd(repoRoot).quiet().nothrow();
+		const result = await $`git worktree remove -f ${resolvedDir}`.cwd(repoRoot).quiet().nothrow();
 		if (result.exitCode !== 0) {
 			const stderr = result.stderr.toString().trim();
 			if (stderr && !isMissingWorktreeError(stderr)) {
@@ -734,7 +824,10 @@ export async function cleanupWorktree(repoRoot: string, dir: string): Promise<vo
 			}
 		}
 	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
+		await fs.rm(resolvedDir, { recursive: true, force: true });
+		if (managedBranchName) {
+			await $`git branch -D ${managedBranchName}`.cwd(repoRoot).quiet().nothrow();
+		}
 	}
 }
 
