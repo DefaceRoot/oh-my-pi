@@ -28,7 +28,6 @@ import type { Settings } from "../../config/settings";
 import { discoverMCPServerNames } from "../../mcp/config";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { getThinkingLevelMetadata } from "../../thinking";
-import { fuzzyFilter } from "../../utils/fuzzy";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -78,6 +77,23 @@ function mcpServerListsMatch(left: readonly string[], right: readonly string[]):
 		if (left[index] !== right[index]) return false;
 	}
 	return true;
+}
+
+/** Normalize a model search string: punctuation → hyphen, collapse whitespace, lowercase. */
+function normalizeForSearch(s: string): string {
+	return s.toLowerCase().replace(/[._]/g, '-').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Token-based substring match with punctuation normalization.
+ * Splits the query on whitespace; ALL tokens must be substrings of the normalized candidate.
+ * This means `opus 4.6` matches `claude-opus-4-6` because `4.6` normalizes to `4-6`.
+ */
+function fuzzyMatchModel(query: string, modelId: string, provider: string): boolean {
+	const normalizedQuery = normalizeForSearch(query);
+	const candidate = normalizeForSearch(`${modelId} ${provider}`);
+	const tokens = normalizedQuery.split(' ').filter(t => t.length > 0);
+	return tokens.length === 0 || tokens.every(token => candidate.includes(token));
 }
 
 interface ModelItem {
@@ -443,7 +459,7 @@ export class ModelSelectorComponent extends Container {
 				this.#updateTabBar();
 				baseModels = this.#allModels;
 			}
-			const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${id} ${provider}`);
+			const fuzzyMatches = baseModels.filter(({ id, provider }) => fuzzyMatchModel(query, id, provider));
 			this.#sortModels(fuzzyMatches);
 			this.#filteredModels = fuzzyMatches;
 		} else {

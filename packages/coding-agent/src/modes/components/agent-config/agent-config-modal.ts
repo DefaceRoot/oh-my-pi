@@ -24,7 +24,7 @@ import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { DynamicBorder } from "../dynamic-border";
 import { AdvancedConfigPanel } from "./advanced-config-panel";
 import { AgentListPanel } from "./agent-list-panel";
-import { FallbackModelPanel } from "./fallback-model-panel";
+import { ModelPanel } from "./model-panel";
 import { McpPanel } from "./mcp-panel";
 import { PresetBar } from "./preset-bar";
 import { PresetSelector } from "./preset-selector";
@@ -135,7 +135,7 @@ export class AgentConfigModal implements Component {
 	readonly #toolsPanel: ToolsConfigPanel;
 	#mcpPanel: McpPanel; // rebuilt on each role switch to keep role/isSubagent in sync
 	readonly #advancedPanel: AdvancedConfigPanel;
-	readonly #modelTabPanel: FallbackModelPanel;
+	readonly #modelTabPanel: ModelPanel;
 
 	/**
 	 * Composite right-side component: preset bar, tabs, separators, and the content
@@ -265,9 +265,10 @@ export class AgentConfigModal implements Component {
 
 		// Model tab — shows the effective primary and fallback model state, and allows
 		// selecting a per-agent fallback override inline.
-		this.#modelTabPanel = new FallbackModelPanel({
+		this.#modelTabPanel = new ModelPanel({
 			...this.#getModelPanelState("default"),
 			callbacks: {
+				onSelectPrimary: modelKey => this.#persistPrimaryModel(this.#activeRole, modelKey),
 				onSelectFallback: fallback => this.#persistFallbackModel(this.#activeRole, fallback),
 				onClose: () => this.#dismiss(),
 			},
@@ -510,6 +511,21 @@ export class AgentConfigModal implements Component {
 		return true;
 	}
 
+	#persistPrimaryModel(role: ModelRole, modelKey: string): void {
+		const existingPrimary = this.#settings.getModelRole(role);
+		if (existingPrimary === modelKey) {
+			// No change — refresh display in case list state drifted.
+			this.#modelTabPanel.update(this.#getModelPanelState(role));
+			this.#syncPresetState();
+			this.#onRequestRender();
+			return;
+		}
+		this.#settings.setModelRole(role, modelKey);
+		this.#modelTabPanel.update(this.#getModelPanelState(role));
+		this.#syncPresetState();
+		this.#onRequestRender();
+	}
+
 	#persistFallbackModel(role: ModelRole, fallback: string | null): void {
 		const { primaryModelKey } = this.#resolveCurrentModelDisplay(role);
 		const normalizedFallback = fallback !== null && fallback === primaryModelKey ? null : fallback;
@@ -605,6 +621,7 @@ export class AgentConfigModal implements Component {
 		return {
 			currentModelLabel,
 			currentModelSourceLabel,
+			primaryModelKey,
 			currentFallbackLabel: effectiveFallback
 				? `${formatModelString(effectiveFallback)} (${fallbackSource})`
 				: "none",
