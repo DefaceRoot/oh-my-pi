@@ -24,7 +24,8 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
-import type { ModelRole } from "../config/model-registry";
+import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
+import { resolveModelRoleValue } from "../config/model-resolver";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { type EditMode, normalizeEditMode } from "../patch";
@@ -274,6 +275,9 @@ export class Settings {
 		if (this.#modified.size > 0) {
 			await this.#saveNow();
 		}
+		if (this.#modified.size > 0) {
+			throw new Error("Settings flush failed: pending changes remain after save attempt");
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -367,17 +371,104 @@ export class Settings {
 		return this.get("modelRoles");
 	}
 
+	#resolveCompleteModelRoles(modelRegistry: ModelRegistry, roles: Record<string, string>): Record<string, string> {
+		const models = modelRegistry.getAvailable();
+		const fallbackModels = models.length > 0 ? models : modelRegistry.getAll();
+		const matchPreferences = { usageOrder: this.#storage?.getModelUsageOrder() };
+		const defaultRoleValue = roles.default;
+		const resolvedEntries = MODEL_ROLE_IDS.map(role => {
+			const configured = roles[role] ?? defaultRoleValue;
+			const resolution = configured
+				? resolveModelRoleValue(configured, fallbackModels, { settings: this, matchPreferences })
+				: { explicitThinkingLevel: false, model: fallbackModels[0], thinkingLevel: undefined };
+			if (!resolution.model) {
+				throw new Error(`Cannot resolve model for role ${role}`);
+			}
+			const modelKey = `${resolution.model.provider}/${resolution.model.id}`;
+			const resolvedValue =
+				resolution.explicitThinkingLevel && resolution.thinkingLevel !== undefined
+					? `${modelKey}:${resolution.thinkingLevel}`
+					: modelKey;
+			return [role, resolvedValue] as const;
+		});
+		return Object.fromEntries(resolvedEntries);
+	}
+
+	/**
+	 * Persist model role overrides into config.yml without affecting runtime-only overrides.
+	 */
+	persistModelRoles(roles: Record<string, string>): void {
+		const stored = getByPath(this.#global, ["modelRoles"]);
+		const current =
+			stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, string>) : {};
+		this.set("modelRoles", { ...current, ...roles });
+	}
+
+	async persistModelRolesAtomically(roles: Record<string, string>): Promise<void> {
+		if (!this.#persist || !this.#configPath) {
+			this.persistModelRoles(roles);
+			return;
+		}
+
+		const configPath = this.#configPath;
+		const pendingPaths = [...this.#modified].filter(path => path !== "modelRoles");
+		const pendingGlobal = this.#global;
+
+		await withFileLock(configPath, async () => {
+			const currentConfig = await this.#loadYaml(configPath);
+			const stored = getByPath(currentConfig, ["modelRoles"]);
+			const current =
+				stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, string>) : {};
+			setByPath(currentConfig, ["modelRoles"], { ...current, ...roles });
+			for (const pendingPath of pendingPaths) {
+				const segments = parsePath(pendingPath);
+				setByPath(currentConfig, segments, getByPath(pendingGlobal, segments));
+			}
+			await Bun.write(configPath, YAML.stringify(currentConfig, null, 2));
+			this.#global = currentConfig;
+		});
+
+		this.#modified.delete("modelRoles");
+		this.#rebuildMerged();
+	}
+
+	/**
+	 * Resolve the persisted model-role record from config.yml, filling any unset roles from the default selection.
+	 */
+	getResolvedModelRoles(modelRegistry: ModelRegistry): Record<string, string> {
+		const stored = getByPath(this.#global, ["modelRoles"]);
+		const storedRoles =
+			stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, string>) : {};
+		return this.#resolveCompleteModelRoles(modelRegistry, storedRoles);
+	}
+
+	#getSessionModelRoles(): Record<string, string> {
+		const merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#overrides);
+		const current = getByPath(merged, ["modelRoles"]);
+		return current && typeof current === "object" && !Array.isArray(current)
+			? (current as Record<string, string>)
+			: {};
+	}
+
+	/**
+	 * Resolve the current session's model-role record, combining persisted global settings with runtime overrides only.
+	 * Project-level settings are intentionally excluded because presets do not capture or apply them.
+	 */
+	getSessionResolvedModelRoles(modelRegistry: ModelRegistry): Record<string, string> {
+		return this.#resolveCompleteModelRoles(modelRegistry, this.#getSessionModelRoles());
+	}
+
 	/*
 	 * Override model roles (helper for modelRoles record).
 	 */
 	overrideModelRoles(roles: ReadOnlyDict<string>): void {
-		const prev = this.get("modelRoles");
+		const next = { ...this.#getSessionModelRoles() };
 		for (const [role, modelId] of Object.entries(roles)) {
 			if (modelId) {
-				prev[role] = modelId;
+				next[role] = modelId;
 			}
 		}
-		this.override("modelRoles", prev);
+		this.override("modelRoles", next);
 	}
 
 	/**

@@ -215,6 +215,14 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	resolve: s => new ResolveTool(s),
 };
 
+export function getManagedToolNames(): string[] {
+	return [...Object.keys(BUILTIN_TOOLS)];
+}
+
+export function isHiddenToolName(name: string): boolean {
+	return name in HIDDEN_TOOLS;
+}
+
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
 type ManagedToolName = keyof typeof BUILTIN_TOOLS | keyof typeof HIDDEN_TOOLS;

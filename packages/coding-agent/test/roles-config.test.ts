@@ -1075,7 +1075,7 @@ describe("RolesConfig full snapshot restore", () => {
 	      - ref
 	`);
 		const rolesConfig = new RolesConfig(rolesPath);
-		rolesConfig.replaceConfig(original as never);
+		rolesConfig.mergeConfig(original as never);
 
 		expect(rolesConfig.getFullConfig()).toEqual(original);
 	});

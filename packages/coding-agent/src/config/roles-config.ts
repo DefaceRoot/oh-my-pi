@@ -635,6 +635,18 @@ export class RolesConfig {
 	}
 
 	mergeConfig(configPatch: Partial<Pick<RolesConfigData, "roles" | "subagents">>): void {
+		if (configPatch.roles !== undefined && configPatch.subagents !== undefined) {
+			this.#persistConfig({
+				roles: Object.fromEntries(
+					Object.entries(configPatch.roles).map(([roleName, roleConfig]) => [roleName, cloneRoleConfig(roleConfig)]),
+				),
+				subagents: Object.fromEntries(
+					Object.entries(configPatch.subagents).map(([agentName, subagentConfig]) => [agentName, cloneSubagentConfig(subagentConfig)]),
+				),
+			});
+			return;
+		}
+
 		const config = cloneRolesConfig(this.#getConfig());
 
 		for (const [roleName, roleConfig] of Object.entries(configPatch.roles ?? {})) {

@@ -333,4 +333,23 @@ subagents:
 	});
 
 
+	test("keeps unrelated pending settings while model roles persist atomically", async () => {
+		const configPath = path.join(tempDir, "config.yml");
+		const sharedSettings = await Settings.init({ cwd: tempDir, agentDir: tempDir });
+		sharedSettings.set("temperature", 0.7);
+
+		await sharedSettings.persistModelRolesAtomically({
+			default: "anthropic/claude-opus-4-5:medium",
+		});
+		await sharedSettings.flush();
+
+		const persisted = YAML.parse(fs.readFileSync(configPath, "utf8")) as {
+			temperature?: number;
+			modelRoles?: Record<string, string>;
+		};
+		expect(persisted.temperature).toBe(0.7);
+		expect(persisted.modelRoles?.default).toBe("anthropic/claude-opus-4-5:medium");
+	});
+
+
 });
