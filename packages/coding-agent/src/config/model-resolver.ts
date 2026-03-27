@@ -3,6 +3,8 @@
  */
 
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { RolesConfig } from "./roles-config";
+
 import {
 	type Api,
 	clampThinkingLevelForModel,
@@ -1036,4 +1038,37 @@ export async function findOrchestratorModel(
 
 	// 3. Fallback to first available (same as default)
 	return availableModels[0];
+}
+
+
+/**
+ * Resolves the effective fallback model for an agent.
+ * Precedence: per-agent fallback > global defaultFallback > null (no fallback)
+ * Guard: returns null if the resolved fallback key matches the primary model key.
+ */
+export function resolveFallbackModel(
+	agentName: string,
+	role: string,
+	isSubagent: boolean,
+	rolesConfig: RolesConfig,
+	settings: Settings,
+	modelRegistry: ModelRegistry,
+	primaryModelKey: string,
+): Model<Api> | null {
+	// 1. Per-agent fallback (role entry for named roles, subagent entry otherwise)
+	const perAgent = isSubagent
+		? rolesConfig.getFallbackForSubagent(agentName)
+		: rolesConfig.getFallbackForRole(role);
+
+	// 2. Global default fallback (empty string default → treat as absent)
+	const globalDefault = settings.get("model.defaultFallback") || null;
+
+	const fallbackKey = perAgent ?? globalDefault;
+	if (!fallbackKey) return null;
+
+	// Guard: fallback is the same model as primary — no benefit
+	if (fallbackKey === primaryModelKey) return null;
+
+	// Resolve model from registry via exact reference match (provider/modelId or bare id)
+	return findExactModelReferenceMatch(fallbackKey, modelRegistry.getAll()) ?? null;
 }

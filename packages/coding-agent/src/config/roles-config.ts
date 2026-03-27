@@ -526,6 +526,40 @@ export class RolesConfig {
 		this.#persistConfig(config);
 	}
 
+	/** Returns the stored fallback model key for a role, or null if not configured. */
+	getFallbackForRole(role: string): string | null {
+		const fallback = this.#getRole(role).fallback;
+		return typeof fallback === "string" ? fallback : null;
+	}
+
+	/** Sets the fallback model key for a role and persists. Pass null to clear. */
+	setFallbackForRole(role: string, fallback: string | null): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		config.roles[role] = {
+			...cloneRoleConfig(roleConfig),
+			fallback: fallback ?? undefined,
+		};
+		this.#persistConfig(config);
+	}
+
+	/** Returns the stored fallback model key for a subagent, or null if not configured. */
+	getFallbackForSubagent(agent: string): string | null {
+		const fallback = this.#getConfig().subagents[agent]?.fallback;
+		return typeof fallback === "string" ? fallback : null;
+	}
+
+	/** Sets the fallback model key for a subagent and persists. Pass null to clear. */
+	setFallbackForSubagent(agent: string, fallback: string | null): void {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
+		config.subagents[agent] = {
+			...cloneSubagentConfig(subagentConfig),
+			fallback: fallback ?? undefined,
+		};
+		this.#persistConfig(config);
+	}
+
 	/**
 	 * Routes a partial config write to the correct section.
 	 *

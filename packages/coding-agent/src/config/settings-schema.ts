@@ -500,6 +500,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"model.defaultFallback": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "model",
+			label: "Default Fallback Model",
+			description: "Fallback model used when primary model fails (provider/modelId format, blank to disable)",
+			submenu: true,
+		},
+	},
+
 	// Retries
 	"retry.enabled": { type: "boolean", default: true },
 
@@ -515,6 +526,8 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
+	"retry.maxRetriesBeforeFallback": { type: "number", default: 2 },
+
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Interaction

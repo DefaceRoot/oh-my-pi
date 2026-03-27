@@ -17,6 +17,11 @@ type RolesConfigContract = {
 	setToolsForSubagent(agent: string, config: { inherit?: string; add?: string[]; remove?: string[] }): void;
 	setMcpForSubagent(agent: string, servers: string[]): void;
 	setConfigForAgent(agentName: string, config: Record<string, unknown>): void;
+	// Fallback accessors
+	getFallbackForRole(role: string): string | null;
+	setFallbackForRole(role: string, fallback: string | null): void;
+	getFallbackForSubagent(agent: string): string | null;
+	setFallbackForSubagent(agent: string, fallback: string | null): void;
 };
 
 type RolesConfigModuleContract = {
@@ -434,5 +439,189 @@ subagents:
 		rolesConfig.setConfigForAgent("brand-new", { mcp: ["ref"] });
 		const fresh3 = new RolesConfig(rolesPath);
 		expect(fresh3.getMcpForSubagent("brand-new")).toContain("ref");
+	});
+});
+
+
+describe("RolesConfig fallback accessors", () => {
+	let tempDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-fallback-${Snowflake.next()}`);
+		await fs.mkdir(tempDir, { recursive: true });
+		rolesPath = path.join(tempDir, "roles.yml");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	const writeRoles = async (content: string) => {
+		await fs.writeFile(rolesPath, content, "utf8");
+	};
+
+	it("getFallbackForRole returns null when not configured", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		expect(rolesConfig.getFallbackForRole("default")).toBeNull();
+		expect(rolesConfig.getFallbackForRole("nonexistent")).toBeNull();
+	});
+
+	it("setFallbackForRole persists and getFallbackForRole round-trips", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setFallbackForRole("default", "openai/gpt-4o");
+
+		// Verify via fresh instance (proves persistence)
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForRole("default")).toBe("openai/gpt-4o");
+	});
+
+	it("setFallbackForRole clears fallback when passed null", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+    fallback: openai/gpt-4o
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		expect(rolesConfig.getFallbackForRole("default")).toBe("openai/gpt-4o");
+		rolesConfig.setFallbackForRole("default", null);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForRole("default")).toBeNull();
+	});
+
+	it("getFallbackForSubagent returns null when not configured", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  research:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		expect(rolesConfig.getFallbackForSubagent("research")).toBeNull();
+		expect(rolesConfig.getFallbackForSubagent("nonexistent")).toBeNull();
+	});
+
+	it("setFallbackForSubagent persists and getFallbackForSubagent round-trips", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  research:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setFallbackForSubagent("research", "anthropic/claude-haiku");
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForSubagent("research")).toBe("anthropic/claude-haiku");
+	});
+
+	it("setFallbackForSubagent clears fallback when passed null", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  research:
+    mcp:
+      - augment
+    fallback: openai/gpt-4o
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		expect(rolesConfig.getFallbackForSubagent("research")).toBe("openai/gpt-4o");
+		rolesConfig.setFallbackForSubagent("research", null);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForSubagent("research")).toBeNull();
+	});
+
+	it("schema accepts fallback field in roles and subagents", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+    fallback: anthropic/claude-haiku
+subagents:
+  _default:
+    mcp:
+      - augment
+  research:
+    mcp:
+      - augment
+    fallback: openai/gpt-4o
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		expect(rolesConfig.getFallbackForRole("default")).toBe("anthropic/claude-haiku");
+		expect(rolesConfig.getFallbackForSubagent("research")).toBe("openai/gpt-4o");
 	});
 });

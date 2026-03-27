@@ -9,6 +9,7 @@ import {
 	resolveModelFromString,
 	resolveModelOverride,
 	resolveModelRoleValue,
+	resolveFallbackModel,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
@@ -651,4 +652,134 @@ describe("expandRoleAlias", () => {
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
 	});
+});
+
+
+describe("resolveFallbackModel", () => {
+	const sonnet = mockModels[0]; // anthropic/claude-sonnet-4-5
+	const gpt4o = mockModels[1]; // openai/gpt-4o
+
+	// Minimal fake implementations — tests care only about fallback resolution
+	function makeRegistry(models: typeof mockModels) {
+		return { getAll: () => models } as Parameters<typeof resolveFallbackModel>[5];
+	}
+
+	function makeRoles(roleFallback: string | null, subagentFallback: string | null) {
+		return {
+			getFallbackForRole: () => roleFallback,
+			getFallbackForSubagent: () => subagentFallback,
+		} as unknown as Parameters<typeof resolveFallbackModel>[3];
+	}
+
+	test("returns null when no fallback configured anywhere", () => {
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles(null, null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result).toBeNull();
+	});
+
+	test("per-agent role fallback resolves correctly", () => {
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles("openai/gpt-4o", null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result?.id).toBe(gpt4o.id);
+		expect(result?.provider).toBe(gpt4o.provider);
+	});
+
+	test("per-subagent fallback takes precedence over global default", () => {
+		// Global default points at sonnet, subagent fallback points at gpt-4o
+		const settings = Settings.isolated({ "model.defaultFallback": "anthropic/claude-sonnet-4-5" });
+		const result = resolveFallbackModel(
+			"implement", "implement", true,
+			makeRoles(null, "openai/gpt-4o"),
+			settings,
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		// Per-subagent fallback (gpt-4o) is used, not global (sonnet)
+		expect(result?.id).toBe(gpt4o.id);
+	});
+
+	test("global default used when no per-agent fallback", () => {
+		const settings = Settings.isolated({ "model.defaultFallback": "openai/gpt-4o" });
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles(null, null),
+			settings,
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result?.id).toBe(gpt4o.id);
+	});
+
+	test("returns null when fallback key matches primary model key", () => {
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles("anthropic/claude-sonnet-4-5", null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result).toBeNull();
+	});
+
+	test("returns null when fallback model not found in registry", () => {
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles("unknown/no-such-model", null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result).toBeNull();
+	});
+
+	test("isSubagent=true reads subagent fallback, not role fallback", () => {
+		// Role fallback set to gpt-4o, subagent fallback not set (null)
+		const result = resolveFallbackModel(
+			"implement", "implement", true,
+			makeRoles("openai/gpt-4o", null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		// isSubagent=true reads getFallbackForSubagent (null) → no fallback
+		expect(result).toBeNull();
+	});
+
+	test("isSubagent=false reads role fallback, not subagent fallback", () => {
+		// Subagent fallback set to gpt-4o, role fallback not set (null)
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles(null, "openai/gpt-4o"),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		// isSubagent=false reads getFallbackForRole (null) → no fallback
+		expect(result).toBeNull();
+	});
+
+	test("empty global default treated as absent", () => {
+		const settings = Settings.isolated({ "model.defaultFallback": "" });
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles(null, null),
+			settings,
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result).toBeNull();
+	});
+
+	// Silence lint about unused variable captured only for type narrowing
+	void sonnet;
 });
