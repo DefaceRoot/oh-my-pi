@@ -18,13 +18,19 @@ import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry, RolesConfig } from "./config/model-registry";
-import type { SkillConfig } from "./config/roles-config";
-import { formatModelString, parseModelPattern, parseModelString, resolveFallbackModel, resolveModelRoleValue } from "./config/model-resolver";
+import {
+	formatModelString,
+	parseModelPattern,
+	parseModelString,
+	resolveFallbackModel,
+	resolveModelRoleValue,
+} from "./config/model-resolver";
 import {
 	loadPromptTemplates as loadPromptTemplatesInternal,
 	type PromptTemplate,
 	renderPromptTemplate,
 } from "./config/prompt-templates";
+import type { SkillConfig } from "./config/roles-config";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
@@ -52,7 +58,12 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { loadSkills as loadSkillsInternal, loadSkillsWithConfig, type Skill, type SkillWarning } from "./extensibility/skills";
+import {
+	loadSkills as loadSkillsInternal,
+	loadSkillsWithConfig,
+	type Skill,
+	type SkillWarning,
+} from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
 	AgentProtocolHandler,
@@ -545,6 +556,18 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 				ctx,
 			),
 		);
+		api.on("auto_retry_fallback", async (event, ctx) =>
+			runOnSession(
+				{
+					reason: "auto_retry_fallback",
+					fallbackModel: event.fallbackModel,
+					primaryModel: event.primaryModel,
+					role: event.role,
+				},
+				ctx,
+			),
+		);
+
 		api.on("ttsr_triggered", async (event, ctx) =>
 			runOnSession({ reason: "ttsr_triggered", rules: event.rules }, ctx),
 		);

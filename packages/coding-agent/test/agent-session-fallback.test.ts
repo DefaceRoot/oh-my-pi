@@ -10,17 +10,15 @@
  * - Usage limit errors try account rotation first
  */
 
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, getBundledModel } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	AgentSession,
-	type AgentSessionEvent,
-} from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -64,6 +62,17 @@ function makeSuccessMessage(provider = "anthropic", modelId = "claude-sonnet-4-5
 	};
 }
 
+function isFallbackRelayEvent(event: unknown): event is {
+	type: "auto_retry_fallback";
+	fallbackModel: string;
+	primaryModel: string;
+	role: string;
+} {
+	if (!event || typeof event !== "object") return false;
+	const value = event as Partial<{ type: string; fallbackModel: string; primaryModel: string; role: string }>;
+	return value.type === "auto_retry_fallback";
+}
+
 describe("AgentSession fallback model intercept", () => {
 	let tempDir: TempDir;
 	let session: AgentSession;
@@ -89,6 +98,7 @@ describe("AgentSession fallback model intercept", () => {
 		maxRetriesBeforeFallback?: number;
 		maxRetries?: number;
 		role?: string;
+		extensionRunner?: ExtensionRunner;
 	}): Promise<{ session: AgentSession; events: AgentSessionEvent[] }> {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let callIndex = 0;
@@ -134,6 +144,7 @@ describe("AgentSession fallback model intercept", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated(settingsOverrides),
 			modelRegistry,
+			extensionRunner: options.extensionRunner,
 			role: options.role ?? "default",
 			resolveFallbackModel: options.resolveFallbackModel
 				? key => options.resolveFallbackModel!(key) ?? null
@@ -174,10 +185,92 @@ describe("AgentSession fallback model intercept", () => {
 			expect(fallbackEvents.length).toBe(1);
 
 			// setModelTemporary was called: first call activates fallback
-			const fallbackCall = setModelSpy.mock.calls.find(
-				call => call[0]?.id === fallbackModel.id,
-			);
+			const fallbackCall = setModelSpy.mock.calls.find(call => call[0]?.id === fallbackModel.id);
 			expect(fallbackCall).toBeDefined();
+		} finally {
+			setModelSpy.mockRestore();
+		}
+	});
+
+	it("relays auto_retry_fallback to the extension event surface", async () => {
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		const emit = vi.fn(async (_event: unknown) => undefined);
+		const extensionRunner = {
+			emit,
+			emitBeforeAgentStart: vi.fn(async () => ({})),
+		} as unknown as ExtensionRunner;
+
+		const { session: s } = await createSession({
+			streamSequence: [
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeSuccessMessage("anthropic", fallbackModel.id),
+			],
+			maxRetriesBeforeFallback: 2,
+			maxRetries: 5,
+			role: "worker",
+			extensionRunner,
+			resolveFallbackModel: _key => fallbackModel,
+		});
+		session = s;
+
+		await session.prompt("Hello");
+
+		const fallbackRelay = emit.mock.calls.map(([event]) => event).find(isFallbackRelayEvent);
+		expect(fallbackRelay).toMatchObject({
+			type: "auto_retry_fallback",
+			fallbackModel: `anthropic/${fallbackModel.id}`,
+			primaryModel: "anthropic/claude-sonnet-4-5",
+			role: "worker",
+		});
+	});
+
+	it("re-emits fallback after retry end when primary restore fails", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		const originalSetModelTemporary = AgentSession.prototype.setModelTemporary;
+		const setModelSpy = spyOn(AgentSession.prototype, "setModelTemporary").mockImplementation(function (
+			this: AgentSession,
+			model,
+		) {
+			if (model.id === primaryModel.id) {
+				return Promise.reject(new Error("restore failed"));
+			}
+			return originalSetModelTemporary.call(this, model);
+		});
+
+		try {
+			const { session: s, events } = await createSession({
+				streamSequence: [
+					() => makeErrorMessage("overloaded_error: overloaded"),
+					() => makeErrorMessage("overloaded_error: overloaded"),
+					() => makeSuccessMessage("anthropic", fallbackModel.id),
+				],
+				maxRetriesBeforeFallback: 2,
+				maxRetries: 5,
+				resolveFallbackModel: _key => fallbackModel,
+			});
+			session = s;
+
+			await session.prompt("Hello");
+
+			const fallbackIndices = events.flatMap((event, index) =>
+				event.type === "auto_retry_fallback" ? [index] : [],
+			);
+			const retryEndIndex = events.findIndex(event => event.type === "auto_retry_end");
+			expect(fallbackIndices).toHaveLength(2);
+			expect(retryEndIndex).toBeGreaterThan(fallbackIndices[0]!);
+			expect(fallbackIndices[1]).toBeGreaterThan(retryEndIndex);
+			expect(events[fallbackIndices[1]!]!).toMatchObject({
+				type: "auto_retry_fallback",
+				fallbackModel: `anthropic/${fallbackModel.id}`,
+				primaryModel: `anthropic/${primaryModel.id}`,
+			});
+			expect(session.model?.id).toBe(fallbackModel.id);
 		} finally {
 			setModelSpy.mockRestore();
 		}
@@ -220,9 +313,7 @@ describe("AgentSession fallback model intercept", () => {
 			// Context overflow is NOT retryable — should not trigger fallback
 			streamSequence: [
 				() =>
-					makeErrorMessage(
-						"context_length_exceeded: This request would exceed the context window of this model.",
-					),
+					makeErrorMessage("context_length_exceeded: This request would exceed the context window of this model."),
 				() => makeSuccessMessage(),
 			],
 			maxRetriesBeforeFallback: 1,

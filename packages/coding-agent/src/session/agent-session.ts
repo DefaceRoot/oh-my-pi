@@ -54,7 +54,7 @@ import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-u
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
-import { extractExplicitThinkingSelector, parseModelString, resolveFallbackModel, resolveModelRoleValue } from "../config/model-resolver";
+import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
@@ -119,7 +119,6 @@ import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
 import {
-	getLatestTodoPhasesFromEntries,
 	getLatestTodoPhasesFromEntriesOrUndefined,
 	type TodoItem,
 	type TodoPhase,
@@ -910,18 +909,6 @@ export class AgentSession {
 				if (this.#handoffAbortController) {
 					this.#skipPostTurnMaintenanceAssistantTimestamp = assistantMsg.timestamp;
 				}
-				if (
-					assistantMsg.stopReason !== "error" &&
-					assistantMsg.stopReason !== "aborted" &&
-					this.#retryAttempt > 0
-				) {
-					await this.#emitSessionEvent({
-						type: "auto_retry_end",
-						success: true,
-						attempt: this.#retryAttempt,
-					});
-					this.#retryAttempt = 0;
-				}
 			}
 
 			if (event.message.role === "toolResult") {
@@ -1003,13 +990,17 @@ export class AgentSession {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) return; // Retry was initiated, don't proceed to compaction
 			}
-			this.#resolveRetry();
-
-			// Restore primary model after fallback usage (before tool dispatch or final yield).
-			// This runs on every non-retried agent_end so the next LLM call uses the primary model.
-			if (this.#fallbackActive) {
+			const completedRetryAttempt =
+				msg.stopReason !== "error" && msg.stopReason !== "aborted" && this.#retryAttempt > 0
+					? this.#retryAttempt
+					: undefined;
+			if (completedRetryAttempt) {
+				this.#retryAttempt = 0;
+				await this.#emitAutoRetryEnd({ success: true, attempt: completedRetryAttempt });
+			} else if (this.#fallbackActive) {
 				await this.#restorePrimaryModel();
 			}
+			this.#resolveRetry();
 
 			if (msg.stopReason === "aborted" && this.#checkpointState) {
 				this.#checkpointState = undefined;
@@ -1041,34 +1032,44 @@ export class AgentSession {
 		}
 	}
 
+	async #emitAutoRetryEnd(event: { success: boolean; attempt: number; finalError?: string }): Promise<void> {
+		const fallbackEvent = this.#fallbackActive ? await this.#restorePrimaryModel() : undefined;
+		await this.#emitSessionEvent({ type: "auto_retry_end", ...event });
+		if (fallbackEvent) {
+			await this.#emitSessionEvent({ type: "auto_retry_fallback", ...fallbackEvent });
+		}
+	}
+
 	/**
 	 * Restore the primary model after a fallback model was used for one API round-trip.
 	 *
-	 * State is cleared only after the restore attempt so the session never enters a state
-	 * where `#fallbackActive` is false but `setModelTemporary` never ran (pre-clear + throw).
-	 * On failure the session remains on the fallback model; state is still cleared to avoid
-	 * an infinite retry loop on subsequent turns.
+	 * Returns a fallback event payload when restoration fails and the session remains on the
+	 * fallback model, so the UI can keep showing the active fallback state after retry ends.
 	 */
-	async #restorePrimaryModel(): Promise<void> {
-		if (!this.#fallbackActive) return;
+	async #restorePrimaryModel(): Promise<{ fallbackModel: string; primaryModel: string; role: string } | undefined> {
+		if (!this.#fallbackActive) return undefined;
 		const primary = this.#primaryModel;
 		if (!primary) {
 			this.#fallbackActive = false;
-			return;
+			return undefined;
 		}
+		const primaryModel = `${primary.provider}/${primary.id}`;
+		const fallbackModel = this.model ? `${this.model.provider}/${this.model.id}` : undefined;
 		try {
 			await this.setModelTemporary(primary);
 			// Restore succeeded — session is back on the primary model.
 			this.#fallbackActive = false;
 			this.#primaryModel = null;
+			return undefined;
 		} catch (err) {
-			// Restore failed (e.g. no API key for primary provider). Clear state to prevent
-			// infinite retry loops on subsequent turns; session remains on the fallback model.
+			// Restore failed (e.g. no API key for primary provider). Clear the retry-sequence state
+			// to avoid looping, but surface that the session still remains on the fallback model.
 			this.#fallbackActive = false;
 			this.#primaryModel = null;
 			logger.warn("Primary model restore failed after fallback; remaining on fallback model", {
 				error: String(err),
 			});
+			return fallbackModel ? { fallbackModel, primaryModel, role: this.#sessionRole } : undefined;
 		}
 	}
 
@@ -1732,6 +1733,13 @@ export class AgentSession {
 				success: event.success,
 				attempt: event.attempt,
 				finalError: event.finalError,
+			});
+		} else if (event.type === "auto_retry_fallback") {
+			await this.#extensionRunner.emit({
+				type: "auto_retry_fallback",
+				fallbackModel: event.fallbackModel,
+				primaryModel: event.primaryModel,
+				role: event.role,
 			});
 		} else if (event.type === "ttsr_triggered") {
 			await this.#extensionRunner.emit({ type: "ttsr_triggered", rules: event.rules });
@@ -5017,14 +5025,14 @@ export class AgentSession {
 		}
 
 		if (this.#retryAttempt > retrySettings.maxRetries) {
-			// Max retries exceeded, emit final failure and reset
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
+			// Max retries exceeded, emit final failure and reset.
+			const attempt = this.#retryAttempt - 1;
+			this.#retryAttempt = 0;
+			await this.#emitAutoRetryEnd({
 				success: false,
-				attempt: this.#retryAttempt - 1,
+				attempt,
 				finalError: message.errorMessage,
 			});
-			this.#retryAttempt = 0;
 			this.#resolveRetry(); // Resolve so waitForRetry() completes
 			return false;
 		}
@@ -5107,12 +5115,11 @@ export class AgentSession {
 		try {
 			await abortableSleep(delayMs, this.#retryAbortController.signal);
 		} catch {
-			// Aborted during sleep - emit end event so UI can clean up
+			// Aborted during sleep - emit end event so UI can clean up.
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
 			this.#retryAbortController = undefined;
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
+			await this.#emitAutoRetryEnd({
 				success: false,
 				attempt,
 				finalError: "Retry cancelled",

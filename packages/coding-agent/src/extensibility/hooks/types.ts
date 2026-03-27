@@ -427,6 +427,14 @@ export interface AutoRetryEndEvent {
 	finalError?: string;
 }
 
+/** Event data for auto_retry_fallback event. */
+export interface AutoRetryFallbackEvent {
+	type: "auto_retry_fallback";
+	fallbackModel: string;
+	primaryModel: string;
+	role: string;
+}
+
 /** Event data for ttsr_triggered event. */
 export interface TtsrTriggeredEvent {
 	type: "ttsr_triggered";
@@ -541,6 +549,7 @@ export type HookEvent =
 	| AutoCompactionEndEvent
 	| AutoRetryStartEvent
 	| AutoRetryEndEvent
+	| AutoRetryFallbackEvent
 	| TtsrTriggeredEvent
 	| TodoReminderEvent
 	| ToolCallEvent
@@ -720,6 +729,7 @@ export interface HookAPI {
 	on(event: "auto_compaction_end", handler: HookHandler<AutoCompactionEndEvent>): void;
 	on(event: "auto_retry_start", handler: HookHandler<AutoRetryStartEvent>): void;
 	on(event: "auto_retry_end", handler: HookHandler<AutoRetryEndEvent>): void;
+	on(event: "auto_retry_fallback", handler: HookHandler<AutoRetryFallbackEvent>): void;
 	on(event: "ttsr_triggered", handler: HookHandler<TtsrTriggeredEvent>): void;
 	on(event: "todo_reminder", handler: HookHandler<TodoReminderEvent>): void;
 	on(event: "tool_call", handler: HookHandler<ToolCallEvent, ToolCallEventResult>): void;

@@ -388,11 +388,18 @@ export class EventController {
 					this.ctx.retryLoader = undefined;
 					this.ctx.statusContainer.clear();
 				}
+				this.ctx.statusLine.setFallbackIndicator(undefined);
 				if (!event.success) {
 					this.ctx.showError(
 						`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`,
 					);
 				}
+				this.ctx.ui.requestRender();
+				break;
+			}
+
+			case "auto_retry_fallback": {
+				this.ctx.statusLine.setFallbackIndicator(event.fallbackModel);
 				this.ctx.ui.requestRender();
 				break;
 			}

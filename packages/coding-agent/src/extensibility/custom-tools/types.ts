@@ -118,6 +118,12 @@ export type CustomToolSessionEvent =
 			finalError?: string;
 	  }
 	| {
+			reason: "auto_retry_fallback";
+			fallbackModel: string;
+			primaryModel: string;
+			role: string;
+	  }
+	| {
 			reason: "ttsr_triggered";
 			rules: Rule[];
 	  }

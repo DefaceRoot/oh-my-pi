@@ -591,6 +591,14 @@ export interface AutoRetryEndEvent {
 	finalError?: string;
 }
 
+/** Fired when auto-retry activates a fallback model */
+export interface AutoRetryFallbackEvent {
+	type: "auto_retry_fallback";
+	fallbackModel: string;
+	primaryModel: string;
+	role: string;
+}
+
 /** Fired when TTSR rule matching interrupts generation */
 export interface TtsrTriggeredEvent {
 	type: "ttsr_triggered";
@@ -809,6 +817,7 @@ export type ExtensionEvent =
 	| AutoCompactionEndEvent
 	| AutoRetryStartEvent
 	| AutoRetryEndEvent
+	| AutoRetryFallbackEvent
 	| TtsrTriggeredEvent
 	| TodoReminderEvent
 	| UserBashEvent
@@ -989,6 +998,7 @@ export interface ExtensionAPI {
 	on(event: "auto_compaction_end", handler: ExtensionHandler<AutoCompactionEndEvent>): void;
 	on(event: "auto_retry_start", handler: ExtensionHandler<AutoRetryStartEvent>): void;
 	on(event: "auto_retry_end", handler: ExtensionHandler<AutoRetryEndEvent>): void;
+	on(event: "auto_retry_fallback", handler: ExtensionHandler<AutoRetryFallbackEvent>): void;
 	on(event: "ttsr_triggered", handler: ExtensionHandler<TtsrTriggeredEvent>): void;
 	on(event: "todo_reminder", handler: ExtensionHandler<TodoReminderEvent>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;

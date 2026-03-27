@@ -37,6 +37,7 @@ export interface StatusLineSettings {
 }
 
 const SUBAGENT_VIEWER_STATUS_KEY = "subagent-viewer";
+const RETRY_FALLBACK_STATUS_KEY = "aaa-retry-fallback";
 const LEGACY_WORKTREE_HOOK_STATUS_KEYS = new Set(["bbb-wt-sync", "zzzz-0-spacer", "zzzz-wt-delete"]);
 type WorkflowActionState = "hidden" | "disabled" | "enabled";
 const MENU_SELECTED_TAG_ANSI = "\x1b[1m\x1b[30;106m";
@@ -153,6 +154,15 @@ export class StatusLineComponent implements Component {
 
 	setSubagentCount(count: number): void {
 		this.subagentCount = count;
+	}
+
+	setFallbackIndicator(model: string | undefined): void {
+		if (model) {
+			const label = theme.fg("warning", `⚠ Fallback: ${model}`);
+			this.setHookStatus(RETRY_FALLBACK_STATUS_KEY, label);
+		} else {
+			this.setHookStatus(RETRY_FALLBACK_STATUS_KEY, undefined);
+		}
 	}
 
 	setSessionStartTime(time: number): void {
