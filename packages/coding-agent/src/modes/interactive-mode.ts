@@ -650,6 +650,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Initial top border update
 		this.updateEditorTopBorder();
+		
+		// Apply default preset if configured and no preset is currently active.
+		// Only applies to new sessions (existing activePreset prevents override).
+		await this.applyDefaultPresetIfConfigured();
 	}
 
 	/** Reload slash commands and autocomplete for the provided working directory. */
@@ -1743,6 +1747,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showDebugSelector(): void {
 		this.selectorController.showDebugSelector();
+	}
+
+	applyDefaultPresetIfConfigured(): Promise<void> {
+		return this.selectorController.applyDefaultPresetIfConfigured();
 	}
 
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void> {
