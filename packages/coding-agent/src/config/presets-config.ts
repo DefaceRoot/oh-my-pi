@@ -1,0 +1,247 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
+import { type Static, Type } from "@sinclair/typebox";
+import { YAML } from "bun";
+import { ConfigFile } from "../config";
+import { EventBus } from "../utils/event-bus";
+import { MODEL_ROLE_IDS, type ModelRegistry } from "./model-registry";
+import { RoleConfigSchemaV2, type RolesConfig, SubagentConfigSchemaV2 } from "./roles-config";
+import type { Settings } from "./settings";
+
+const PresetMetadataSchema = Type.Object({
+	description: Type.Optional(Type.String()),
+	createdAt: Type.String({ minLength: 1 }),
+	updatedAt: Type.String({ minLength: 1 }),
+});
+
+export type PresetMetadata = Static<typeof PresetMetadataSchema>;
+
+const PresetModelRolesSchema = Type.Object(
+	Object.fromEntries(MODEL_ROLE_IDS.map(role => [role, Type.String({ minLength: 1 })])) as Record<
+		string,
+		ReturnType<typeof Type.String>
+	>,
+	{ additionalProperties: false },
+);
+
+export const PresetSnapshotSchema = Type.Object({
+	description: Type.Optional(Type.String()),
+	createdAt: Type.String({ minLength: 1 }),
+	updatedAt: Type.String({ minLength: 1 }),
+	modelRoles: PresetModelRolesSchema,
+	roles: Type.Record(Type.String({ minLength: 1 }), RoleConfigSchemaV2),
+	subagents: Type.Record(Type.String({ minLength: 1 }), SubagentConfigSchemaV2),
+});
+
+export type PresetSnapshot = Static<typeof PresetSnapshotSchema>;
+
+type CapturedPresetSnapshot = Omit<PresetSnapshot, keyof PresetMetadata>;
+
+export const PresetsConfigSchema = Type.Object({
+	activePreset: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+	presets: Type.Record(Type.String({ minLength: 1 }), PresetSnapshotSchema),
+});
+
+export type PresetsConfigData = Static<typeof PresetsConfigSchema>;
+
+export interface PresetAppliedEvent {
+	name: string;
+	snapshot: PresetSnapshot;
+}
+
+export const DEFAULT_PRESETS_CONFIG: PresetsConfigData = {
+	activePreset: null,
+	presets: {},
+};
+
+export const PresetsConfigFile = new ConfigFile<PresetsConfigData>("presets", PresetsConfigSchema);
+
+function clonePresetSnapshot(snapshot: PresetSnapshot): PresetSnapshot {
+	return structuredClone(snapshot);
+}
+
+function clonePresetsConfig(config: PresetsConfigData): PresetsConfigData {
+	return structuredClone(config);
+}
+
+function stableValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(entry => stableValue(entry));
+	}
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([key, entry]) => [key, stableValue(entry)]),
+		);
+	}
+	return value;
+}
+
+function stableSerialize(value: unknown): string {
+	return JSON.stringify(stableValue(value));
+}
+
+export class PresetsConfig {
+	#configFile: ConfigFile<PresetsConfigData>;
+	#resolved?: PresetsConfigData;
+	#events = new EventBus();
+	#settings: Settings;
+	#rolesConfig: RolesConfig;
+	#modelRegistry: ModelRegistry;
+
+	constructor(
+		configPath: string | undefined,
+		settings: Settings,
+		rolesConfig: RolesConfig,
+		modelRegistry: ModelRegistry,
+	) {
+		this.#configFile = PresetsConfigFile.relocate(configPath);
+		this.#settings = settings;
+		this.#rolesConfig = rolesConfig;
+		this.#modelRegistry = modelRegistry;
+	}
+
+	#getConfig(): PresetsConfigData {
+		if (this.#resolved) {
+			return this.#resolved;
+		}
+		const loaded = this.#configFile.load();
+		this.#resolved = clonePresetsConfig(loaded ?? DEFAULT_PRESETS_CONFIG);
+		return this.#resolved;
+	}
+
+	#persistConfig(config: PresetsConfigData): void {
+		const configPath = this.#configFile.path();
+		const serialized =
+			configPath.endsWith(".json") || configPath.endsWith(".jsonc")
+				? JSON.stringify(config, null, 2)
+				: YAML.stringify(config, null, 2);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, serialized, "utf-8");
+		this.#configFile.invalidate?.();
+		this.#resolved = clonePresetsConfig(config);
+	}
+
+	on(event: "preset_applied", handler: (event: PresetAppliedEvent) => void): () => void {
+		return this.#events.on(event, data => handler(data as PresetAppliedEvent));
+	}
+
+	listPresets(): Array<{ name: string } & PresetMetadata> {
+		return Object.entries(this.#getConfig().presets)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([name, snapshot]) => ({
+				name,
+				description: snapshot.description,
+				createdAt: snapshot.createdAt,
+				updatedAt: snapshot.updatedAt,
+			}));
+	}
+
+	getPreset(name: string): PresetSnapshot | undefined {
+		const snapshot = this.#getConfig().presets[name];
+		return snapshot ? clonePresetSnapshot(snapshot) : undefined;
+	}
+
+	savePreset(name: string, snapshot: PresetSnapshot): void {
+		const config = clonePresetsConfig(this.#getConfig());
+		config.presets[name] = clonePresetSnapshot(snapshot);
+		this.#persistConfig(config);
+	}
+
+	deletePreset(name: string): void {
+		const config = clonePresetsConfig(this.#getConfig());
+		delete config.presets[name];
+		if (config.activePreset === name) {
+			config.activePreset = null;
+		}
+		this.#persistConfig(config);
+	}
+
+	renamePreset(oldName: string, newName: string): void {
+		if (oldName === newName) {
+			return;
+		}
+		const config = clonePresetsConfig(this.#getConfig());
+		const snapshot = config.presets[oldName];
+		if (!snapshot) {
+			return;
+		}
+		config.presets[newName] = clonePresetSnapshot(snapshot);
+		delete config.presets[oldName];
+		if (config.activePreset === oldName) {
+			config.activePreset = newName;
+		}
+		this.#persistConfig(config);
+	}
+
+	getActivePreset(): string | null {
+		const activePreset = this.#getConfig().activePreset;
+		if (!activePreset) {
+			return null;
+		}
+		if (this.#getConfig().presets[activePreset] === undefined) {
+			logger.warn("Active preset missing from presets config", { name: activePreset });
+			return null;
+		}
+		return activePreset;
+	}
+
+	setActivePreset(name: string | null): void {
+		const config = clonePresetsConfig(this.#getConfig());
+		if (name !== null && config.presets[name] === undefined) {
+			throw new Error(`Unknown preset: ${name}`);
+		}
+		config.activePreset = name;
+		this.#persistConfig(config);
+	}
+
+	captureCurrentConfig(): CapturedPresetSnapshot {
+		const fullConfig = this.#rolesConfig.getFullConfig();
+		return {
+			modelRoles: this.#settings.getResolvedModelRoles(this.#modelRegistry),
+			roles: fullConfig.roles,
+			subagents: fullConfig.subagents,
+		};
+	}
+
+	isModified(): boolean {
+		const activePresetName = this.getActivePreset();
+		if (!activePresetName) {
+			return false;
+		}
+		const activePreset = this.getPreset(activePresetName);
+		if (!activePreset) {
+			return false;
+		}
+		const fullConfig = this.#rolesConfig.getFullConfig();
+		const currentSnapshot = {
+			modelRoles: this.#settings.getSessionResolvedModelRoles(this.#modelRegistry),
+			roles: fullConfig.roles,
+			subagents: fullConfig.subagents,
+		};
+		const activeSnapshot = {
+			modelRoles: activePreset.modelRoles,
+			roles: activePreset.roles,
+			subagents: activePreset.subagents,
+		};
+		return stableSerialize(currentSnapshot) !== stableSerialize(activeSnapshot);
+	}
+
+	async applyPreset(name: string): Promise<void> {
+		const snapshot = this.getPreset(name);
+		if (!snapshot) {
+			throw new Error(`Unknown preset: ${name}`);
+		}
+
+		await this.#settings.persistModelRolesAtomically(snapshot.modelRoles);
+		this.#rolesConfig.mergeConfig({ roles: snapshot.roles, subagents: snapshot.subagents });
+		this.setActivePreset(name);
+		this.#settings.clearOverride("modelRoles");
+		this.#events.emit("preset_applied", {
+			name,
+			snapshot: clonePresetSnapshot(snapshot),
+		} satisfies PresetAppliedEvent);
+	}
+}
