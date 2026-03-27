@@ -296,18 +296,20 @@ export class ToolsConfigPanel implements Component {
 	#cycleToolState(): void {
 		const tool = this.#allTools[this.#selectedIndex];
 		if (!tool) return;
+
+		if (this.#isSubagent) {
+			// Subagents use the inheritance cycle for ALL tools including MCP.
+			this.#cycleSubagentToolState(tool);
+			return;
+		}
+
 		if (this.#mcpTools.has(tool)) {
 			if (this.#mcpEnabledTools.has(tool) || this.#disabledTools.has(tool)) {
 				this.#toggleMcpToolState(tool);
 			}
 			return;
 		}
-
-		if (this.#isSubagent) {
-			this.#cycleSubagentToolState(tool);
-		} else {
-			this.#toggleRoleToolState(tool);
-		}
+		this.#toggleRoleToolState(tool);
 	}
 
 	#toggleRoleToolState(tool: string): void {
@@ -346,7 +348,15 @@ export class ToolsConfigPanel implements Component {
 				if (newConfig.add.length === 0) delete newConfig.add;
 				break;
 			case "removed":
-				// removed → inherited: drop the explicit removal.
+				// removed → inherited/disabled: drop explicit removal from all sources.
+				// "removed" state may come from disabledTools (per-tool opt-out) or
+				// inheritConfig.remove; clear both so the tool is no longer suppressed.
+				if (this.#disabledTools.has(tool)) {
+					const nextDisabled = new Set(this.#disabledTools);
+					nextDisabled.delete(tool);
+					this.#disabledTools = nextDisabled;
+					this.#callbacks.onConfigChange({ disabledTools: Array.from(nextDisabled) });
+				}
 				newConfig.remove = (newConfig.remove ?? []).filter(t => t !== tool);
 				if (newConfig.remove.length === 0) delete newConfig.remove;
 				break;
