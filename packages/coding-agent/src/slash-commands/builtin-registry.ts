@@ -118,6 +118,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "config",
+		description: "Open agent configuration (models, skills, MCP)",
+		handle: (_command, runtime) => {
+			runtime.ctx.showAgentConfig();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "fast",
 		description: "Toggle fast mode (OpenAI service tier priority; unavailable for OpenAI Codex)",
 		subcommands: [

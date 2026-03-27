@@ -539,6 +539,11 @@ export class InputController {
 				this.ctx.editor.setText("");
 				return;
 			}
+			if (text === "/config") {
+				this.ctx.showAgentConfig();
+				this.ctx.editor.setText("");
+				return;
+			}
 			if (text === "/agent" || text.startsWith("/agent ")) {
 				const arg = text.slice(6).trim().toLowerCase();
 				this.ctx.editor.setText("");

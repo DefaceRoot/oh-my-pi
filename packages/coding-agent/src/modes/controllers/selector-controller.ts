@@ -2,8 +2,10 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import * as path from "node:path";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
-import { MODEL_ROLES } from "../../config/model-registry";
+import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES } from "../../config/model-registry";
+import { RolesConfig } from "../../config/roles-config";
 import { settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
@@ -26,11 +28,13 @@ import {
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 } from "../../tools";
+import { discoverMCPServerNames } from "../../mcp/config";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
+import { AgentConfigModal } from "../components/agent-config";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { SessionSelectorComponent } from "../components/session-selector";
@@ -422,6 +426,50 @@ export class SelectorController {
 				options,
 			);
 			return { component: selector, focus: selector };
+		});
+	}
+
+	async showAgentConfig(): Promise<void> {
+		const rolesConfig = new RolesConfig(path.join(this.ctx.settings.getAgentDir(), "roles.yml"));
+		// Build the canonical known-server list as the union of sources that cover
+		// all four namespaces where server names can be persisted:
+		//  1. project-config discovery (servers in .mcp.json / mcp.json files)
+		//  2. runtime-known servers from mcpManager (connected/connecting/pending)
+		//  3. persisted servers for core roles (reads roles[role] in roles.yml)
+		//  4. persisted servers for captain/crew roles (reads subagents[role] in roles.yml)
+		//  5. the default subagent template (subagents._default, fallback for unnamed agents)
+		// This prevents the modal from hiding MCP assignments that exist only in roles.yml
+		// and are no longer present in project config or the current runtime session.
+		const discovered = await discoverMCPServerNames(
+			this.ctx.settings.getCwd(),
+			this.ctx.settings.get("mcp.enableProjectConfig") ?? true,
+		).catch(() => []);
+		const runtimeServers = this.ctx.mcpManager?.getAllServerNames() ?? [];
+		const coreRoleServers = MODEL_ROLE_IDS_BY_CATEGORY.core.flatMap(role => rolesConfig.getMcpForRole(role));
+		const subagentRoleServers = [
+			...MODEL_ROLE_IDS_BY_CATEGORY.captain,
+			...MODEL_ROLE_IDS_BY_CATEGORY.crew,
+		].flatMap(role => rolesConfig.getMcpForSubagent(role));
+		const defaultSubagentServers = rolesConfig.getMcpForSubagent("_default");
+		const knownMcpServers = [
+			...new Set([...discovered, ...runtimeServers, ...coreRoleServers, ...subagentRoleServers, ...defaultSubagentServers]),
+		];
+		const discoveredSkills = [...this.ctx.session.skills];
+		this.showSelector(done => {
+			const modal = new AgentConfigModal({
+				settings: this.ctx.settings,
+				rolesConfig,
+				knownMcpServers,
+				discoveredSkills,
+				onDismiss: () => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+				onRequestRender: () => {
+					this.ctx.ui.requestRender();
+				},
+			});
+			return { component: modal, focus: modal };
 		});
 	}
 

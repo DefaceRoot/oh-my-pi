@@ -1801,6 +1801,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.selectorController.showModelSelector(options);
 	}
 
+	showAgentConfig(): void {
+		void this.selectorController.showAgentConfig();
+	}
+
 	showUserMessageSelector(): void {
 		this.selectorController.showUserMessageSelector();
 	}
