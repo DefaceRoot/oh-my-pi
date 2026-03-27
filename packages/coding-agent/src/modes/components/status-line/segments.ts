@@ -441,6 +441,27 @@ const tokenRateSegment: StatusLineSegment = {
 	},
 };
 
+const presetSegment: StatusLineSegment = {
+	id: "preset",
+	render(ctx) {
+		const presets = ctx.presets;
+		if (!presets?.activePreset) {
+			return { content: "", visible: false };
+		}
+
+		const MAX_NAME_LEN = 18;
+		let name = presets.activePreset;
+		if (name.length > MAX_NAME_LEN) {
+			name = `${name.slice(0, MAX_NAME_LEN - 1)}\u2026`;
+		}
+		if (presets.isModified) {
+			name += "*";
+		}
+
+		return { content: theme.fg("accent", name), visible: true };
+	},
+};
+
 export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	model: modelSegment,
@@ -462,6 +483,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
+	preset: presetSegment,
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {
