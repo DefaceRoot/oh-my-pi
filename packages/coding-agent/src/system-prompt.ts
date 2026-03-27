@@ -595,8 +595,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		environment,
 		contextFiles,
 		agentsMdSearch,
-		skills: autoSkills,
-		availableSkills: frontmatterSkills,
+		// Frontmatter skills get their description shown in # Skills (short metadata, low token cost).
+		// Auto skills surface as must-read skill:// instructions — agent loads full content at conversation start.
+		skills: frontmatterSkills,
+		availableSkills: autoSkills,
 		rules: rules ?? [],
 		date,
 		dateTime,

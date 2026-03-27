@@ -128,11 +128,10 @@ You **MUST** use the following skills, to save you time, when working in their d
 {{/each}}
 {{/if}}
 {{#if availableSkills.length}}
-# Available Skills
-These skills are available on demand. Read the full skill with `read skill://<name>` when working in its domain.
+# Must-Read Skills
+You **MUST** read the following skills at the start of this conversation before doing anything else:
 {{#each availableSkills}}
-## {{name}}
-{{description}}
+- `skill://{{name}}` — {{description}}
 {{/each}}
 {{/if}}
 

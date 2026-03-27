@@ -8,12 +8,6 @@ Use `mcp_better_context_*` tools for semantic codebase search before manual grep
 Available resources: `oh-my-pi`, `dragonglass`. Pattern: `listresources` -> `ask` -> fallback to grep.
 Read `rule://btca-usage` for detailed patterns.
 
-## Context Loading Discipline
-
-- Planning-only catalogs (`superpowers:brainstorming`, repo-local `writing-plans` supplement, and plan-verifier workflow guidance) are for plan authoring/verification only.
-- Implementation, review, and other lightweight agents must consume existing finished plans directly and MUST NOT preload planning catalogs by default.
-- Load additional skills on demand per task; keep baseline context lean.
-
 ## Persistent Artifact Writing Policy
 
 When creating or editing persistent repository artifacts (source, tests, configs, prompts, rules, durable docs, filenames, headings, comments, inline notes), apply `rule://persistent-artifact-language`.

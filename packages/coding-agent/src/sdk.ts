@@ -1444,37 +1444,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const currentRole = sessionManager.getLastModelChangeRole();
 		const currentMode = normalizePromptRole(currentRole);
 		const personality = settings.get("personality");
+		// Subagents return results to a parent agent, not a user — skip communication formatting.
+		const effectivePersonality = taskDepth > 0 ? undefined : personality;
 
-		const activePromptMcpServers = [
-			...new Set(
-				toolNames.flatMap(name => {
-					const tool = tools.get(name);
-					if (!tool) return [];
-					const serverName = mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
-					return serverName ? [serverName] : [];
-				}),
-			),
-		];
-
-		// Build combined append prompt: memory instructions + MCP server instructions
-		const serverInstructions = mcpManager?.getServerInstructions(activePromptMcpServers);
+		// MCP server instructions removed — tool descriptions in available tools are sufficient
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
-		if (serverInstructions && serverInstructions.size > 0) {
-			const MAX_INSTRUCTIONS_LENGTH = 4000;
-			const parts: string[] = [];
-			if (appendPrompt) parts.push(appendPrompt);
-			parts.push(
-				"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
-			);
-			for (const [srvName, srvInstructions] of serverInstructions) {
-				const truncated =
-					srvInstructions.length > MAX_INSTRUCTIONS_LENGTH
-						? `${srvInstructions.slice(0, MAX_INSTRUCTIONS_LENGTH)}\n[truncated]`
-						: srvInstructions;
-				parts.push(`### ${srvName}\n${truncated}`);
-			}
-			appendPrompt = parts.join("\n\n");
-		}
 		// Compute effective skills for this mode: use role's V2 skill config when no explicit config was given
 		const effectiveSkills = await (async () => {
 			if (options.skillConfig) return skills; // explicit config already applied at session creation
@@ -1491,7 +1465,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			rules: rulebookRules,
 			skillsSettings: settings.getGroup("skills"),
 			appendSystemPrompt: appendPrompt,
-			personality,
+			personality: effectivePersonality,
 			repeatToolDescriptions,
 			intentField,
 			mode: currentMode,
@@ -1514,7 +1488,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				skillsSettings: settings.getGroup("skills"),
 				customPrompt: options.systemPrompt,
 				appendSystemPrompt: appendPrompt,
-				personality,
+				personality: effectivePersonality,
 				repeatToolDescriptions,
 				intentField,
 				mode: currentMode,

@@ -41,14 +41,12 @@ If a skill covers your output, you **MUST** read `skill://<name>` before proceed
 </skills>
 {{/if}}
 {{#if availableSkills.length}}
-Skills available on demand (read full skill with `read skill://<name>` when working in its domain):
-<available_skills>
+You **MUST** read the following skills at the start of this conversation before doing anything else:
+<must_read_skills>
 {{#list availableSkills join="\n"}}
-<skill name="{{name}}">
-{{description}}
-</skill>
+- `skill://{{name}}` — {{description}}
 {{/list}}
-</available_skills>
+</must_read_skills>
 {{/if}}
 {{#if rules.length}}
 Rules are local constraints.

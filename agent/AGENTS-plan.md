@@ -1,3 +1,9 @@
+## Context Loading Discipline
+
+- Planning-only catalogs (`superpowers:brainstorming`, repo-local `writing-plans` supplement, and plan-verifier workflow guidance) are for plan authoring/verification only.
+- Implementation, review, and other lightweight agents must consume existing finished plans directly and MUST NOT preload planning catalogs by default.
+- Load additional skills on demand per task; keep baseline context lean.
+
 # Plan Mode Guidance
 
 ## Planning Scope

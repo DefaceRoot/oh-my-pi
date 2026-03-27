@@ -88,6 +88,28 @@ describe("openai-codex reasoning effort validation", () => {
 	});
 });
 
+describe("openai-codex sampling param stripping", () => {
+	it("strips temperature, top_p, top_k, min_p, presence_penalty, repetition_penalty", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [],
+			temperature: 0.7,
+			top_p: 0.9,
+			top_k: 40,
+			min_p: 0.05,
+			presence_penalty: 0.1,
+			repetition_penalty: 1.1,
+		};
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		expect(transformed.temperature).toBeUndefined();
+		expect(transformed.top_p).toBeUndefined();
+		expect(transformed.top_k).toBeUndefined();
+		expect(transformed.min_p).toBeUndefined();
+		expect(transformed.presence_penalty).toBeUndefined();
+		expect(transformed.repetition_penalty).toBeUndefined();
+	});
+});
+
 describe("openai-codex error parsing", () => {
 	it("produces friendly usage-limit messages and rate limits", async () => {
 		const resetAt = Math.floor(Date.now() / 1000) + 600;

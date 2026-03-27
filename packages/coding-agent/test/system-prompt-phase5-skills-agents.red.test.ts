@@ -64,9 +64,10 @@ describe("Phase 5 RED: per-mode skill filtering", () => {
 			skills: TEST_SKILLS,
 		});
 
-		expect(prompt.includes("## brainstorming")).toBe(true);
-		expect(prompt.includes("## commit-hygiene")).toBe(true);
-		expect(prompt.includes("## simplify")).toBe(true);
+		// All TEST_SKILLS are auto mode — they render as skill:// must-read references
+		expect(prompt.includes("skill://brainstorming")).toBe(true);
+		expect(prompt.includes("skill://commit-hygiene")).toBe(true);
+		expect(prompt.includes("skill://simplify")).toBe(true);
 	});
 
 	it("ask mode with no pre-filtered skills shows no skills", async () => {
@@ -88,8 +89,8 @@ describe("Phase 5 RED: per-mode skill filtering", () => {
 			skills: planSkills,
 		});
 
-		expect(prompt.includes("## brainstorming")).toBe(true);
-		expect(prompt.includes("## commit-hygiene")).toBe(true);
+		expect(prompt.includes("skill://brainstorming")).toBe(true);
+		expect(prompt.includes("skill://commit-hygiene")).toBe(true);
 		expect(prompt.includes("## simplify")).toBe(false);
 	});
 });
@@ -165,49 +166,50 @@ describe("Phase 5 RED: dual skill sections (auto vs frontmatter mode)", () => {
 		},
 	];
 
-	it("auto skills appear in '# Skills' section (before Available Skills)", async () => {
+	it("auto skills appear in '# Must-Read Skills' section", async () => {
 		const prompt = await renderPromptForRole("default", {
 			cwd: os.tmpdir(),
 			skills: MIXED_SKILLS,
 		});
 
-		// auto skill must appear in the Skills section, before any Available Skills header
+		// auto skill must appear as a skill:// reference in the Must-Read Skills section
+		const mustReadIdx = prompt.indexOf("# Must-Read Skills");
+		expect(mustReadIdx).toBeGreaterThan(0);
+		const mustReadSection = prompt.slice(mustReadIdx);
+		expect(mustReadSection.includes("skill://brainstorming")).toBe(true);
+	});
+
+	it("frontmatter skills appear in '# Skills' section", async () => {
+		const prompt = await renderPromptForRole("default", {
+			cwd: os.tmpdir(),
+			skills: MIXED_SKILLS,
+		});
+
+		// frontmatter skill must appear with ## heading in the Skills section, before Must-Read Skills
 		const skillsIdx = prompt.indexOf("# Skills");
-		const availableIdx = prompt.indexOf("# Available Skills");
-		const skillsSection = availableIdx > 0 ? prompt.slice(skillsIdx, availableIdx) : prompt.slice(skillsIdx);
-		expect(skillsSection.includes("## brainstorming")).toBe(true);
+		const mustReadIdx = prompt.indexOf("# Must-Read Skills");
+		expect(mustReadIdx).toBeGreaterThan(skillsIdx);
+		const skillsSection = prompt.slice(skillsIdx, mustReadIdx);
+		expect(skillsSection.includes("## commit-hygiene")).toBe(true);
+		// and NOT as a skill:// reference in Must-Read Skills
+		const mustReadSection = prompt.slice(mustReadIdx);
+		expect(mustReadSection.includes("## commit-hygiene")).toBe(false);
 	});
 
-	it("frontmatter skills appear in '# Available Skills' section", async () => {
+	it("auto skill does not appear in '# Skills' section", async () => {
 		const prompt = await renderPromptForRole("default", {
 			cwd: os.tmpdir(),
 			skills: MIXED_SKILLS,
 		});
 
-		// frontmatter skill must appear after the Available Skills header
-		const availableIdx = prompt.indexOf("# Available Skills");
-		expect(availableIdx).toBeGreaterThan(0);
-		const afterAvailable = prompt.slice(availableIdx);
-		expect(afterAvailable.includes("## commit-hygiene")).toBe(true);
-		// and NOT in the primary Skills section before it
-		const beforeAvailable = prompt.slice(0, availableIdx);
-		expect(beforeAvailable.includes("## commit-hygiene")).toBe(false);
+		// brainstorming is auto — only as skill:// reference, not as ## heading in # Skills
+		const skillsIdx = prompt.indexOf("# Skills");
+		const mustReadIdx = prompt.indexOf("# Must-Read Skills");
+		const skillsSection = mustReadIdx > skillsIdx ? prompt.slice(skillsIdx, mustReadIdx) : prompt.slice(skillsIdx);
+		expect(skillsSection.includes("## brainstorming")).toBe(false);
 	});
 
-	it("auto skill does not appear in '# Available Skills' section", async () => {
-		const prompt = await renderPromptForRole("default", {
-			cwd: os.tmpdir(),
-			skills: MIXED_SKILLS,
-		});
-
-		// brainstorming is auto — only in Skills, not Available Skills
-		// Verify Available Skills section exists but doesn't contain brainstorming
-		const availableIdx = prompt.indexOf("# Available Skills");
-		const afterAvailable = availableIdx >= 0 ? prompt.slice(availableIdx) : "";
-		expect(afterAvailable.includes("## brainstorming")).toBe(false);
-	});
-
-	it("no frontmatter skills means no Available Skills section", async () => {
+	it("no frontmatter skills means no ## entries in # Skills section", async () => {
 		const allAutoSkills: Skill[] = [
 			{
 				name: "brainstorming",
@@ -224,10 +226,16 @@ describe("Phase 5 RED: dual skill sections (auto vs frontmatter mode)", () => {
 			skills: allAutoSkills,
 		});
 
+		// Auto skill renders as must-read reference, not as a ## section heading
+		expect(prompt.includes("skill://brainstorming")).toBe(true);
 		expect(prompt.includes("# Available Skills")).toBe(false);
+		const skillsIdx = prompt.indexOf("# Skills");
+		const mustReadIdx = prompt.indexOf("# Must-Read Skills");
+		const skillsSection = mustReadIdx > skillsIdx ? prompt.slice(skillsIdx, mustReadIdx) : prompt.slice(skillsIdx);
+		expect(skillsSection.includes("## brainstorming")).toBe(false);
 	});
 
-	it("frontmatter skills render in custom-prompt path", async () => {
+	it("frontmatter skills render in custom-prompt path with correct section placement", async () => {
 		const tools = createRoleTools("default");
 		const prompt = await buildSystemPrompt({
 			mode: "default",
@@ -238,9 +246,22 @@ describe("Phase 5 RED: dual skill sections (auto vs frontmatter mode)", () => {
 			rules: [],
 		});
 
-		// Both auto and frontmatter skills must appear in custom prompt output
-		expect(prompt.includes("brainstorming")).toBe(true);
-		expect(prompt.includes("commit-hygiene")).toBe(true);
+		// frontmatter skill (commit-hygiene) must appear inside <skills> block, not as a must-read
+		const skillsStart = prompt.indexOf("<skills>");
+		const skillsEnd = prompt.indexOf("</skills>");
+		expect(skillsStart).toBeGreaterThan(0);
+		const skillsBlock = prompt.slice(skillsStart, skillsEnd);
+		expect(skillsBlock.includes("commit-hygiene")).toBe(true);
+
+		// auto skill (brainstorming) must appear as skill:// reference in <must_read_skills>
+		const mustReadStart = prompt.indexOf("<must_read_skills>");
+		expect(mustReadStart).toBeGreaterThan(0);
+		const mustReadBlock = prompt.slice(mustReadStart, prompt.indexOf("</must_read_skills>") + "</must_read_skills>".length);
+		expect(mustReadBlock.includes("skill://brainstorming")).toBe(true);
+
+		// negative: auto skill NOT inside <skills>, frontmatter NOT inside must_read_skills
+		expect(skillsBlock.includes("brainstorming")).toBe(false);
+		expect(mustReadBlock.includes("commit-hygiene")).toBe(false);
 	});
 });
 

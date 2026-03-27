@@ -166,5 +166,13 @@ export async function transformRequestBody(
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;
 
+	// Codex does not support sampling parameters; strip them unconditionally
+	delete body.temperature;
+	delete body.top_p;
+	delete body.top_k;
+	delete body.min_p;
+	delete body.presence_penalty;
+	delete body.repetition_penalty;
+
 	return body;
 }
