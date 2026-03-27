@@ -624,4 +624,36 @@ subagents:
 		expect(rolesConfig.getFallbackForRole("default")).toBe("anthropic/claude-haiku");
 		expect(rolesConfig.getFallbackForSubagent("research")).toBe("openai/gpt-4o");
 	});
+
+	it("getFallbackForRole does not inherit fallback from the default role", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+    fallback: openai/gpt-4o
+  orchestrator:
+    tools:
+      - read
+      - task
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		// default role has fallback configured
+		expect(rolesConfig.getFallbackForRole("default")).toBe("openai/gpt-4o");
+		// orchestrator role has no fallback — must NOT inherit from default
+		expect(rolesConfig.getFallbackForRole("orchestrator")).toBeNull();
+		// unknown role — must NOT inherit from default
+		expect(rolesConfig.getFallbackForRole("nonexistent")).toBeNull();
+	});
 });

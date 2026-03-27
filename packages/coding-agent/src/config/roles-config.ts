@@ -528,7 +528,9 @@ export class RolesConfig {
 
 	/** Returns the stored fallback model key for a role, or null if not configured. */
 	getFallbackForRole(role: string): string | null {
-		const fallback = this.#getRole(role).fallback;
+		// Read directly from the role entry — do not inherit from default.
+		// Callers (e.g. resolveFallbackModel) handle the global-default fallthrough.
+		const fallback = this.#getConfig().roles[role]?.fallback;
 		return typeof fallback === "string" ? fallback : null;
 	}
 

@@ -782,4 +782,17 @@ describe("resolveFallbackModel", () => {
 
 	// Silence lint about unused variable captured only for type narrowing
 	void sonnet;
+
+	test("returns null when fallback bare id resolves to same model as primary canonical key", () => {
+		// Primary is "anthropic/claude-sonnet-4-5"; fallback is bare id "claude-sonnet-4-5"
+		// Both resolve to the same model — the guard must catch this alternate-reference case
+		const result = resolveFallbackModel(
+			"implement", "implement", false,
+			makeRoles("claude-sonnet-4-5", null),
+			Settings.isolated(),
+			makeRegistry(mockModels),
+			"anthropic/claude-sonnet-4-5",
+		);
+		expect(result).toBeNull();
+	});
 });

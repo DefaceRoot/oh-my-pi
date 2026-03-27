@@ -1066,9 +1066,16 @@ export function resolveFallbackModel(
 	const fallbackKey = perAgent ?? globalDefault;
 	if (!fallbackKey) return null;
 
-	// Guard: fallback is the same model as primary — no benefit
-	if (fallbackKey === primaryModelKey) return null;
+	// Resolve fallback model from registry via exact reference (provider/modelId or bare id)
+	const resolvedFallback = findExactModelReferenceMatch(fallbackKey, modelRegistry.getAll()) ?? null;
+	if (!resolvedFallback) return null;
 
-	// Resolve model from registry via exact reference match (provider/modelId or bare id)
-	return findExactModelReferenceMatch(fallbackKey, modelRegistry.getAll()) ?? null;
+	// Guard: same model as primary — compare resolved objects to catch alternate references
+	// (e.g. primary key "anthropic/claude-sonnet" and fallback key "claude-sonnet" resolve to the same model).
+	const resolvedPrimary = findExactModelReferenceMatch(primaryModelKey, modelRegistry.getAll());
+	if (resolvedPrimary && modelsAreEqual(resolvedPrimary, resolvedFallback)) return null;
+	// Belt-and-suspenders: primary not in registry, compare raw keys
+	if (!resolvedPrimary && fallbackKey === primaryModelKey) return null;
+
+	return resolvedFallback;
 }
