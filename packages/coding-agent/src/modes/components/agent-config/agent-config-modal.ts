@@ -1,13 +1,21 @@
 import { type Component, matchesKey, padding, TabBar, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { MODEL_ROLE_IDS_BY_CATEGORY, type ModelRole } from "../../../config/model-registry";
+import { MODEL_ROLE_IDS_BY_CATEGORY, type ModelRegistry, type ModelRole } from "../../../config/model-registry";
+import {
+	findExactModelReferenceMatch,
+	formatModelString,
+	resolveFallbackModel,
+	resolveModelRoleValue,
+} from "../../../config/model-resolver";
 import type { RolesConfig, ToolsInheritConfig } from "../../../config/roles-config";
 import type { Settings } from "../../../config/settings";
 import type { Skill } from "../../../extensibility/skills";
+import { resolveSubagentRole } from "../../../task/model-role";
 import { getTabBarTheme } from "../../shared";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { DynamicBorder } from "../dynamic-border";
 import { AgentListPanel } from "./agent-list-panel";
+import { FallbackModelPanel } from "./fallback-model-panel";
 import { McpPanel } from "./mcp-panel";
 import { SkillConfigPanel } from "./skill-config-panel";
 import { type ToolsConfigChange, ToolsConfigPanel } from "./tools-config-panel";
@@ -38,6 +46,7 @@ type ToolsPanelState = {
 export interface AgentConfigModalOptions {
 	settings: Settings;
 	rolesConfig: RolesConfig;
+	modelRegistry: ModelRegistry;
 	/** All configurable tool names known to the session. */
 	knownTools: string[];
 	/** Built-in default tool lists for subagents from discovered agent definitions. */
@@ -71,6 +80,7 @@ export interface AgentConfigModalOptions {
 export class AgentConfigModal implements Component {
 	readonly #settings: Settings;
 	readonly #rolesConfig: RolesConfig;
+	readonly #modelRegistry: ModelRegistry;
 	readonly #knownTools: string[];
 	readonly #knownMcpServers: string[];
 	readonly #subagentDefaultTools: Partial<Record<ModelRole, string[]>>;
@@ -88,7 +98,7 @@ export class AgentConfigModal implements Component {
 	readonly #skillPanel: SkillConfigPanel;
 	readonly #toolsPanel: ToolsConfigPanel;
 	#mcpPanel: McpPanel; // rebuilt on each role switch to keep role/isSubagent in sync
-	readonly #modelTabPanel: Component;
+	readonly #modelTabPanel: FallbackModelPanel;
 
 	/**
 	 * Composite right-side component: TabBar rows, a separator line, then the
@@ -101,6 +111,7 @@ export class AgentConfigModal implements Component {
 	constructor(options: AgentConfigModalOptions) {
 		this.#settings = options.settings;
 		this.#rolesConfig = options.rolesConfig;
+		this.#modelRegistry = options.modelRegistry;
 		this.#knownTools = options.knownTools;
 		this.#knownMcpServers = options.knownMcpServers;
 		this.#subagentDefaultTools = options.subagentDefaultTools;
@@ -191,20 +202,16 @@ export class AgentConfigModal implements Component {
 			onClose: () => this.#onDismiss(),
 		});
 
-		// Model tab — inline read-only display; no persistent state.
+		// Model tab — shows the effective primary and fallback model state, and allows
+		// selecting a per-agent fallback override inline.
 
-		this.#modelTabPanel = {
-			render: (width: number): string[] => {
-				const model = this.#settings.getModelRole(this.#activeRole) ?? "(inherited from default)";
-				return [
-					truncateToWidth(theme.fg("dim", "  Current model:"), width),
-					truncateToWidth(`  ${theme.bold(model)}`, width),
-					"",
-					truncateToWidth(theme.fg("dim", "  Use /model to change model assignments"), width),
-				];
+		this.#modelTabPanel = new FallbackModelPanel({
+			...this.#getModelPanelState("default"),
+			callbacks: {
+				onSelectFallback: fallback => this.#persistFallbackModel(this.#activeRole, fallback),
+				onClose: () => this.#onDismiss(),
 			},
-			invalidate: () => {},
-		};
+		});
 
 		// Composite right-side panel: tabs + separator + active content.
 
@@ -218,6 +225,7 @@ export class AgentConfigModal implements Component {
 			handleInput: () => {},
 			invalidate: () => {
 				this.#tabBar.invalidate();
+				this.#modelTabPanel.invalidate();
 				this.#skillPanel.invalidate();
 				this.#toolsPanel.invalidate();
 				this.#mcpPanel.invalidate();
@@ -252,6 +260,110 @@ export class AgentConfigModal implements Component {
 			? this.#rolesConfig.getSkillConfigForSubagent(role)
 			: this.#rolesConfig.getSkillConfigForRole(role);
 		return skillConfig !== undefined && (skillConfig.auto.length > 0 || skillConfig.frontmatter.length > 0);
+	}
+
+	#persistFallbackModel(role: ModelRole, fallback: string | null): void {
+		const { primaryModelKey } = this.#resolveCurrentModelDisplay(role);
+		const normalizedFallback = fallback !== null && fallback === primaryModelKey ? null : fallback;
+		const existingFallback = this.#normalizeModelKey(
+			this.#isSubagentRole(role)
+				? this.#rolesConfig.getFallbackForSubagent(role)
+				: this.#rolesConfig.getFallbackForRole(role),
+		);
+		if (existingFallback === normalizedFallback) {
+			this.#modelTabPanel.update(this.#getModelPanelState(role));
+			this.#onRequestRender();
+			return;
+		}
+		if (this.#isSubagentRole(role)) {
+			this.#rolesConfig.setFallbackForSubagent(role, normalizedFallback);
+		} else {
+			this.#rolesConfig.setFallbackForRole(role, normalizedFallback);
+		}
+		this.#modelTabPanel.update(this.#getModelPanelState(role));
+		this.#onRequestRender();
+	}
+
+	#normalizeModelKey(modelKey: string | null | undefined): string | null {
+		const trimmed = modelKey?.trim();
+		if (!trimmed) return null;
+		const resolved = findExactModelReferenceMatch(trimmed, this.#modelRegistry.getAll());
+		return resolved ? formatModelString(resolved) : trimmed;
+	}
+
+	#getPrimaryModelLookupOrder(role: ModelRole): readonly ModelRole[] {
+		if (!this.#isSubagentRole(role)) {
+			if (role === "default") return ["default"];
+			if (role === "ask") return ["ask", "default"];
+			return [role];
+		}
+		const subagentRole = resolveSubagentRole(role);
+		return subagentRole === "implement" ? ["implement", "default"] : [subagentRole, "implement", "default"];
+	}
+
+	#resolveCurrentModelDisplay(role: ModelRole): { label: string; sourceLabel: string; primaryModelKey: string } {
+		for (const lookupRole of this.#getPrimaryModelLookupOrder(role)) {
+			const configured = this.#settings.getModelRole(lookupRole);
+			if (!configured) continue;
+			const resolved = resolveModelRoleValue(configured, this.#modelRegistry.getAll(), {
+				settings: this.#settings,
+			}).model;
+			const primaryModelKey = resolved ? formatModelString(resolved) : configured;
+			const sourceLabel =
+				lookupRole === role
+					? "explicit assignment"
+					: lookupRole === "implement"
+						? "inherited from implement"
+						: "inherited from default";
+			return { label: primaryModelKey, sourceLabel, primaryModelKey };
+		}
+		return { label: "(not configured)", sourceLabel: "not configured", primaryModelKey: "" };
+	}
+
+	#getModelPanelState(role: ModelRole) {
+		const isSubagent = this.#isSubagentRole(role);
+		const explicitFallback = this.#normalizeModelKey(
+			isSubagent ? this.#rolesConfig.getFallbackForSubagent(role) : this.#rolesConfig.getFallbackForRole(role),
+		);
+		const globalDefault = this.#normalizeModelKey(this.#settings.get("model.defaultFallback") || null);
+		const {
+			label: currentModelLabel,
+			sourceLabel: currentModelSourceLabel,
+			primaryModelKey,
+		} = this.#resolveCurrentModelDisplay(role);
+		const effectiveFallback = resolveFallbackModel(
+			role,
+			role,
+			isSubagent,
+			this.#rolesConfig,
+			this.#settings,
+			this.#modelRegistry,
+			primaryModelKey,
+		);
+		const fallbackSource =
+			explicitFallback !== null ? "agent override" : globalDefault !== null ? "global default" : "none";
+		const availableModelKeys = [
+			...new Set(
+				[
+					explicitFallback,
+					globalDefault,
+					...this.#modelRegistry.getAvailable().map(model => formatModelString(model)),
+				].filter((modelKey): modelKey is string => Boolean(modelKey)),
+			),
+		].sort((left, right) => left.localeCompare(right));
+
+		return {
+			currentModelLabel,
+			currentModelSourceLabel,
+			currentFallbackLabel: effectiveFallback
+				? `${formatModelString(effectiveFallback)} (${fallbackSource})`
+				: "none",
+			overrideLabel: explicitFallback ?? (globalDefault ? "using global default" : "no override"),
+			globalDefaultLabel: globalDefault ?? "none",
+			clearOptionLabel: globalDefault ? `Use global default (${globalDefault})` : "No fallback",
+			availableModelKeys,
+			selectedFallbackKey: explicitFallback,
+		};
 	}
 
 	#handleToolsConfigChange(change: ToolsConfigChange): void {
@@ -432,7 +544,8 @@ export class AgentConfigModal implements Component {
 		this.#activeRole = role;
 		const isSubagent = this.#isSubagentRole(role);
 
-		// Refresh skills and tools panels in-place (preserves scroll position).
+		// Refresh model, skills, and tools panels in-place (preserves cursor position where possible).
+		this.#modelTabPanel.update(this.#getModelPanelState(role));
 		const skillConfig = (isSubagent
 			? this.#rolesConfig.getSkillConfigForSubagent(role)
 			: this.#rolesConfig.getSkillConfigForRole(role)) ?? { auto: [], frontmatter: [] };
@@ -505,7 +618,9 @@ export class AgentConfigModal implements Component {
 		if (this.#activePanel === "right") {
 			parts.push(" ←/→:switch-tab");
 			const activeTabIdx = this.#tabBar.getActiveIndex();
-			if (activeTabIdx === 1) {
+			if (activeTabIdx === 0) {
+				parts.push(" ↑/↓:navigate  space:select");
+			} else if (activeTabIdx === 1) {
 				parts.push(" ↑/↓:navigate  space:cycle");
 			} else if (activeTabIdx === 2) {
 				parts.push(

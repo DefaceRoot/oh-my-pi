@@ -490,6 +490,7 @@ export class SelectorController {
 			const modal = new AgentConfigModal({
 				settings: this.ctx.settings,
 				rolesConfig,
+				modelRegistry: this.ctx.session.modelRegistry,
 				knownTools,
 				subagentDefaultTools,
 				knownMcpServers,

@@ -88,6 +88,11 @@ function normalizeMcpServers(servers: readonly string[]): string[] {
 	return [ALWAYS_ON_MCP_SERVER, ...withoutAugment];
 }
 
+function mcpServerListsMatch(left: readonly string[], right: readonly string[]): boolean {
+	if (left.length !== right.length) return false;
+	return left.every((server, index) => server === right[index]);
+}
+
 export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 	roles: {
 		default: {
@@ -584,11 +589,21 @@ export class RolesConfig {
 	/** Sets the fallback model key for a subagent and persists. Pass null to clear. */
 	setFallbackForSubagent(agent: string, fallback: string | null): void {
 		const config = this.#getConfig();
-		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
-		config.subagents[agent] = {
+		const inheritedMcp = normalizeMcpServers(
+			(config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default).mcp,
+		);
+		const subagentConfig = config.subagents[agent] ?? { mcp: inheritedMcp };
+		const nextConfig = {
 			...cloneSubagentConfig(subagentConfig),
 			fallback: fallback ?? undefined,
 		};
+		const hasOtherOverrides =
+			nextConfig.skills !== undefined || nextConfig.tools !== undefined || nextConfig.advanced !== undefined;
+		if (fallback === null && !hasOtherOverrides && mcpServerListsMatch(nextConfig.mcp, inheritedMcp)) {
+			delete config.subagents[agent];
+		} else {
+			config.subagents[agent] = nextConfig;
+		}
 		this.#persistConfig(config);
 	}
 
@@ -638,10 +653,16 @@ export class RolesConfig {
 		if (configPatch.roles !== undefined && configPatch.subagents !== undefined) {
 			this.#persistConfig({
 				roles: Object.fromEntries(
-					Object.entries(configPatch.roles).map(([roleName, roleConfig]) => [roleName, cloneRoleConfig(roleConfig)]),
+					Object.entries(configPatch.roles).map(([roleName, roleConfig]) => [
+						roleName,
+						cloneRoleConfig(roleConfig),
+					]),
 				),
 				subagents: Object.fromEntries(
-					Object.entries(configPatch.subagents).map(([agentName, subagentConfig]) => [agentName, cloneSubagentConfig(subagentConfig)]),
+					Object.entries(configPatch.subagents).map(([agentName, subagentConfig]) => [
+						agentName,
+						cloneSubagentConfig(subagentConfig),
+					]),
 				),
 			});
 			return;

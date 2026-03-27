@@ -578,6 +578,59 @@ subagents:
 		expect(fresh.getFallbackForSubagent("research")).toBeNull();
 	});
 
+	it("setFallbackForSubagent preserves inherited MCP defaults when cleared", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setFallbackForSubagent("explore", "anthropic/claude-haiku");
+		expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+		rolesConfig.setFallbackForSubagent("explore", null);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForSubagent("explore")).toBeNull();
+		expect(fresh.getFullConfig().subagents.explore).toBeUndefined();
+		expect(fresh.getMcpForSubagent("explore")).toEqual(["augment"]);
+	});
+
+	it("setFallbackForSubagent keeps explicit empty MCP lists when fallback is cleared", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  explore:
+    mcp: []
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setFallbackForSubagent("explore", "anthropic/claude-haiku");
+		expect(rolesConfig.getMcpForSubagent("explore")).toEqual([]);
+		rolesConfig.setFallbackForSubagent("explore", null);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getFallbackForSubagent("explore")).toBeNull();
+		expect(fresh.getFullConfig().subagents.explore?.mcp).toEqual([]);
+		expect(fresh.getMcpForSubagent("explore")).toEqual([]);
+	});
 	it("schema accepts fallback field in roles and subagents", async () => {
 		await writeRoles(`roles:
   default:
