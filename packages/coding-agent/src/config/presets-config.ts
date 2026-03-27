@@ -135,6 +135,11 @@ export class PresetsConfig {
 		this.#modelRegistry = modelRegistry;
 	}
 
+	invalidateCache(): void {
+		this.#configFile.invalidate?.();
+		this.#resolved = undefined;
+	}
+
 	#getConfig(): PresetsConfigData {
 		const latestVersion = presetConfigVersions.get(this.#configPathKey) ?? 0;
 		if (this.#resolved && this.#configVersion === latestVersion) {

@@ -1,5 +1,27 @@
-import { describe, expect, it, mock, vi } from "bun:test";
+import { beforeEach, describe, expect, it, mock, vi } from "bun:test";
 import type { InteractiveModeContext } from "../../modes/types";
+
+const agentConfigModalOptions: Array<Record<string, unknown>> = [];
+interface PresetSelectorOptions {
+	onApply?: (preset: string) => void | Promise<void>;
+	onClose?: () => void;
+	presetsConfig?: unknown;
+}
+const presetSelectorOptions: PresetSelectorOptions[] = [];
+const presetsConfigInstances: unknown[] = [];
+const rolesConfigPaths: string[] = [];
+const rolesConfigInvalidations: unknown[] = [];
+const presetsConfigInvalidations: unknown[] = [];
+const discoverAgentsMock = vi.fn(async () => ({ agents: [] }));
+const discoverMcpServerNamesMock = vi.fn(async () => []);
+
+mock.module("../../mcp/config", () => ({
+	discoverMCPServerNames: discoverMcpServerNamesMock,
+}));
+
+mock.module("../../task/discovery", () => ({
+	discoverAgents: discoverAgentsMock,
+}));
 
 mock.module("../../modes/theme/theme", () => ({
 	getAvailableThemes: () => [],
@@ -17,7 +39,83 @@ mock.module("../../modes/theme/theme", () => ({
 }));
 
 mock.module("../../config/model-registry", () => ({
+	MODEL_ROLE_IDS_BY_CATEGORY: { core: ["default"], captain: [], crew: [] },
 	MODEL_ROLES: {},
+}));
+
+mock.module("../../config/roles-config", () => ({
+	RolesConfig: class {
+		constructor(configPath: string) {
+			rolesConfigPaths.push(configPath);
+		}
+
+		invalidateCache(): void {
+			rolesConfigInvalidations.push(this);
+		}
+
+		getMcpForRole(): string[] {
+			return [];
+		}
+
+		getMcpForSubagent(): string[] {
+			return [];
+		}
+
+		getFullConfig() {
+			return {
+				roles: { default: { tools: [], mcp: ["augment"], skills: "all" } },
+				subagents: {},
+			};
+		}
+
+		mergeConfig(): void {}
+	},
+}));
+
+mock.module("../../config/presets-config", () => ({
+	PresetsConfig: class {
+		activePreset: string | null = null;
+
+		constructor() {
+			presetsConfigInstances.push(this);
+		}
+
+		invalidateCache(): void {
+			presetsConfigInvalidations.push(this);
+		}
+
+		on(): () => void {
+			return () => {};
+		}
+
+		async applyPreset(name: string): Promise<void> {
+			this.activePreset = name;
+		}
+
+		getActivePreset(): string | null {
+			return this.activePreset;
+		}
+
+		isModified(): boolean {
+			return false;
+		}
+
+		getPreset(): undefined {
+			return undefined;
+		}
+
+		listPresets(): [] {
+			return [];
+		}
+
+		renamePreset(): void {}
+		deletePreset(): void {}
+		savePreset(): void {}
+
+		captureCurrentConfig() {
+			return { modelRoles: {}, roles: {}, subagents: {} };
+		}
+	},
 }));
 
 mock.module("../../config/settings", () => ({
@@ -34,8 +132,31 @@ mock.module("../../debug", () => ({
 }));
 
 mock.module("../../tools", () => ({
+	getManagedToolNames: () => [],
+	isCodeSearchProviderId: () => false,
+	isHiddenToolName: () => false,
+	isSearchProviderPreference: () => false,
+	setPreferredCodeSearchProvider: vi.fn(),
 	setPreferredImageProvider: vi.fn(),
 	setPreferredSearchProvider: vi.fn(),
+}));
+
+mock.module("../components/agent-config", () => ({
+	AgentConfigModal: class {
+		constructor(options: Record<string, unknown>) {
+			agentConfigModalOptions.push(options);
+		}
+	},
+}));
+
+mock.module("../components/agent-config/preset-selector", () => ({
+	PresetSelector: class {
+		handleInput = vi.fn();
+
+		constructor(options: Record<string, unknown>) {
+			presetSelectorOptions.push(options);
+		}
+	},
 }));
 
 mock.module("../components/agent-dashboard", () => ({
@@ -84,6 +205,46 @@ mock.module("../components/user-message-selector", () => ({
 
 import { SelectorController } from "./selector-controller";
 
+function createSelectorContext() {
+	const editorContainer = {
+		addChild: vi.fn(),
+		clear: vi.fn(),
+	} as unknown as InteractiveModeContext["editorContainer"];
+	const editor = { setText: vi.fn() } as unknown as InteractiveModeContext["editor"];
+	const ui = {
+		requestRender: vi.fn(),
+		setFocus: vi.fn(),
+	} as unknown as InteractiveModeContext["ui"];
+	const showStatus = vi.fn();
+	const showError = vi.fn();
+	const ctx = {
+		editorContainer,
+		editor,
+		ui,
+		showStatus,
+		showError,
+		settings: {
+			getAgentDir: () => "/tmp/agent",
+			getCwd: () => "/tmp/project",
+			get: vi.fn(() => true),
+		} as unknown as InteractiveModeContext["settings"],
+		session: {
+			modelRegistry: {},
+			skills: [],
+		} as unknown as InteractiveModeContext["session"],
+		mcpManager: { getAllServerNames: () => [] } as unknown as InteractiveModeContext["mcpManager"],
+	} as unknown as InteractiveModeContext;
+
+	return {
+		controller: new SelectorController(ctx),
+		editor,
+		editorContainer,
+		showError,
+		showStatus,
+		ui,
+	};
+}
+
 function createResumeContext() {
 	const handleSessionRootChange = vi.fn();
 	const switchSession = vi.fn(async () => true);
@@ -93,7 +254,7 @@ function createResumeContext() {
 			isStreaming: false,
 			switchSession,
 		} as unknown as InteractiveModeContext["session"],
-		sessionManager: {} as unknown as InteractiveModeContext["sessionManager"],
+		sessionManager: { getCwd: () => "/tmp/project" } as unknown as InteractiveModeContext["sessionManager"],
 		chatContainer: {
 			addChild: vi.fn(),
 			clear: vi.fn(),
@@ -124,6 +285,77 @@ function createResumeContext() {
 
 	return { controller: new SelectorController(ctx), handleSessionRootChange, switchSession };
 }
+
+beforeEach(() => {
+	agentConfigModalOptions.length = 0;
+	presetSelectorOptions.length = 0;
+	presetsConfigInstances.length = 0;
+	rolesConfigPaths.length = 0;
+	rolesConfigInvalidations.length = 0;
+	presetsConfigInvalidations.length = 0;
+	discoverAgentsMock.mockClear();
+	discoverMcpServerNamesMock.mockClear();
+});
+
+describe("SelectorController preset selector", () => {
+	it("reuses the same presets config for standalone and modal flows", async () => {
+		const { controller } = createSelectorContext();
+
+		controller.showPresetSelector();
+		const standaloneOptions = presetSelectorOptions.at(-1);
+		expect(standaloneOptions).toBeDefined();
+
+		await controller.showAgentConfig();
+		const modalOptions = agentConfigModalOptions.at(-1);
+		expect(modalOptions).toBeDefined();
+		expect(modalOptions?.presetsConfig).toBe(standaloneOptions?.presetsConfig);
+		expect(presetsConfigInstances).toHaveLength(1);
+		expect(rolesConfigPaths).toEqual(["/tmp/agent/roles.yml"]);
+		expect(rolesConfigInvalidations).toHaveLength(2);
+		expect(presetsConfigInvalidations).toHaveLength(2);
+	});
+
+	it("refreshes cached config before reopening the standalone selector", () => {
+		const { controller } = createSelectorContext();
+
+		controller.showPresetSelector();
+		controller.showPresetSelector();
+
+		expect(presetsConfigInstances).toHaveLength(1);
+		expect(rolesConfigInvalidations).toHaveLength(2);
+		expect(presetsConfigInvalidations).toHaveLength(2);
+	});
+
+	it("shows status and restores the editor after applying a preset", async () => {
+		const { controller, editor, editorContainer, showStatus, ui } = createSelectorContext();
+
+		controller.showPresetSelector();
+		const standaloneOptions = presetSelectorOptions.at(-1);
+		expect(standaloneOptions).toBeDefined();
+
+		await standaloneOptions?.onApply?.("Focus");
+
+		expect(showStatus).toHaveBeenCalledWith("Applied Focus.");
+		expect(editorContainer.addChild).toHaveBeenLastCalledWith(editor);
+		expect(ui.setFocus).toHaveBeenLastCalledWith(editor);
+		expect(ui.requestRender).toHaveBeenCalled();
+	});
+
+	it("restores the editor without applying when the selector closes", () => {
+		const { controller, editor, editorContainer, showStatus, ui } = createSelectorContext();
+
+		controller.showPresetSelector();
+		const standaloneOptions = presetSelectorOptions.at(-1);
+		expect(standaloneOptions).toBeDefined();
+
+		standaloneOptions?.onClose?.();
+
+		expect(showStatus).not.toHaveBeenCalled();
+		expect(editorContainer.addChild).toHaveBeenLastCalledWith(editor);
+		expect(ui.setFocus).toHaveBeenLastCalledWith(editor);
+		expect(ui.requestRender).toHaveBeenCalled();
+	});
+});
 
 describe("SelectorController session-root-change reset", () => {
 	it("calls handleSessionRootChange after successful switchSession in handleResumeSession", async () => {

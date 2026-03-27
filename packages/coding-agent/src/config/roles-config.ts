@@ -340,6 +340,11 @@ export class RolesConfig {
 		this.#configFile = RolesConfigFile.relocate(configPath);
 	}
 
+	invalidateCache(): void {
+		this.#configFile.invalidate?.();
+		this.#resolved = undefined;
+	}
+
 	#getConfig(): RolesConfigData {
 		if (this.#resolved) {
 			return this.#resolved;

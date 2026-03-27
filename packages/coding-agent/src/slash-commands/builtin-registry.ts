@@ -126,6 +126,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "preset",
+		aliases: ["presets"],
+		description: "Open preset selector",
+		handle: (_command, runtime) => {
+			runtime.ctx.showPresetSelector();
+			runtime.ctx.editor.setText("");
+		},
+	},
+
+	{
 		name: "fast",
 		description: "Toggle fast mode (OpenAI service tier priority; unavailable for OpenAI Codex)",
 		subcommands: [

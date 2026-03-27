@@ -197,6 +197,7 @@ function createSubmitInterceptFixture() {
 	const sessionPromptSpy = vi.fn(async () => undefined);
 	const showStatusSpy = vi.fn();
 	const openResumeModalSpy = vi.fn(async () => undefined);
+	const showPresetSelectorSpy = vi.fn();
 	const editor = {
 		setText: editorSetTextSpy,
 		addToHistory: editorAddToHistorySpy,
@@ -218,6 +219,7 @@ function createSubmitInterceptFixture() {
 		showStatus: showStatusSpy,
 		showWarning: vi.fn(),
 		openResumeModal: openResumeModalSpy,
+		showPresetSelector: showPresetSelectorSpy,
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
 	const openLazygitSpy = vi.spyOn(controller, "openLazygit").mockResolvedValue();
@@ -227,6 +229,7 @@ function createSubmitInterceptFixture() {
 		openLazygitSpy,
 		toggleSTTSpy,
 		openResumeModalSpy,
+		showPresetSelectorSpy,
 		showStatusSpy,
 		editorSetTextSpy,
 		editorAddToHistorySpy,
@@ -514,6 +517,16 @@ describe("InputController shortcut and submit wiring", () => {
 			streamingBehavior: "steer",
 			images: undefined,
 		});
+	});
+
+	it.each(["/preset", "/presets"])("intercepts typed %s before streaming prompt dispatch", async command => {
+		const fixture = createSubmitInterceptFixture();
+		await fixture.submit(command);
+
+		expect(fixture.editorSetTextSpy).toHaveBeenCalledWith("");
+		expect(fixture.showPresetSelectorSpy).toHaveBeenCalledTimes(1);
+		expect(fixture.sessionPromptSpy).not.toHaveBeenCalled();
+		expect(fixture.editorAddToHistorySpy).not.toHaveBeenCalled();
 	});
 
 	it("intercepts typed /stt before streaming prompt dispatch", async () => {

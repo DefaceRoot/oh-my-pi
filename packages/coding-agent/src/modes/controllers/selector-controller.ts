@@ -35,6 +35,7 @@ import {
 } from "../../tools";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentConfigModal } from "../components/agent-config";
+import { PresetSelector } from "../components/agent-config/preset-selector";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { ExtensionDashboard } from "../components/extensions";
@@ -58,8 +59,32 @@ const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
 export class SelectorController {
+	#sharedAgentConfigDir?: string;
+	#sharedRolesConfig?: RolesConfig;
+	#sharedPresetsConfig?: PresetsConfig;
+
 	constructor(private ctx: InteractiveModeContext) {}
 
+	#getAgentConfigStores(): { rolesConfig: RolesConfig; presetsConfig: PresetsConfig } {
+		const agentDir = this.ctx.settings.getAgentDir();
+		if (this.#sharedAgentConfigDir !== agentDir || !this.#sharedRolesConfig || !this.#sharedPresetsConfig) {
+			const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
+			this.#sharedAgentConfigDir = agentDir;
+			this.#sharedRolesConfig = rolesConfig;
+			this.#sharedPresetsConfig = new PresetsConfig(
+				path.join(agentDir, "presets.yml"),
+				this.ctx.settings,
+				rolesConfig,
+				this.ctx.session.modelRegistry,
+			);
+		}
+		// Reuse one shared store instance so modal and standalone selectors stay in sync,
+		// but drop cached file contents each time either surface reopens.
+		this.#sharedRolesConfig.invalidateCache();
+		this.#sharedPresetsConfig.invalidateCache();
+
+		return { rolesConfig: this.#sharedRolesConfig, presetsConfig: this.#sharedPresetsConfig };
+	}
 	async #refreshOAuthProviderAuthState(): Promise<void> {
 		const oauthProviders = getOAuthProviders();
 		await Promise.all(
@@ -432,16 +457,27 @@ export class SelectorController {
 			return { component: selector, focus: selector };
 		});
 	}
+	showPresetSelector(): void {
+		const { presetsConfig } = this.#getAgentConfigStores();
+		this.showSelector(done => {
+			const selector = new PresetSelector({
+				presetsConfig,
+				onApply: async name => {
+					done();
+					this.ctx.showStatus(`Applied ${name}.`);
+					this.ctx.ui.requestRender();
+				},
+				onClose: () => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			});
+			return { component: selector, focus: selector };
+		});
+	}
 
 	async showAgentConfig(): Promise<void> {
-		const agentDir = this.ctx.settings.getAgentDir();
-		const rolesConfig = new RolesConfig(path.join(agentDir, "roles.yml"));
-		const presetsConfig = new PresetsConfig(
-			path.join(agentDir, "presets.yml"),
-			this.ctx.settings,
-			rolesConfig,
-			this.ctx.session.modelRegistry,
-		);
+		const { rolesConfig, presetsConfig } = this.#getAgentConfigStores();
 		// Build the canonical known-server list as the union of sources that cover
 		// all four namespaces where server names can be persisted:
 		//  1. project-config discovery (servers in .mcp.json / mcp.json files)

@@ -196,6 +196,7 @@ export interface InteractiveModeContext {
 	showExtensionsDashboard(): void;
 	showAgentsDashboard(): void;
 	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	showPresetSelector(): void;
 	showAgentConfig(): void;
 	showUserMessageSelector(): void;
 	showTreeSelector(): void;

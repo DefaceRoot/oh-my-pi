@@ -544,6 +544,11 @@ export class InputController {
 				this.ctx.editor.setText("");
 				return;
 			}
+			if (text === "/preset" || text === "/presets") {
+				this.ctx.showPresetSelector();
+				this.ctx.editor.setText("");
+				return;
+			}
 			if (text === "/agent" || text.startsWith("/agent ")) {
 				const arg = text.slice(6).trim().toLowerCase();
 				this.ctx.editor.setText("");
