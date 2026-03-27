@@ -29,6 +29,75 @@ export function applyAdvancedConfigToSettings(settings: Settings, config?: Advan
 	if (typeof config.temperature === "number" && Number.isFinite(config.temperature)) {
 		settings.override("temperature", config.temperature);
 	}
+
+	if (typeof config.memoriesEnabled === "boolean") {
+		settings.override("memories.enabled", config.memoriesEnabled);
+	}
+
+	if (
+		typeof config.grepContextBefore === "number" &&
+		Number.isFinite(config.grepContextBefore) &&
+		config.grepContextBefore >= 0
+	) {
+		settings.override("grep.contextBefore", config.grepContextBefore);
+	}
+
+	if (
+		typeof config.grepContextAfter === "number" &&
+		Number.isFinite(config.grepContextAfter) &&
+		config.grepContextAfter >= 0
+	) {
+		settings.override("grep.contextAfter", config.grepContextAfter);
+	}
+}
+
+export function syncAdvancedConfigToSettings(settings: Settings, config?: AdvancedConfig | null): void {
+	if (typeof config?.maxRecursionDepth === "number" && Number.isFinite(config.maxRecursionDepth)) {
+		settings.override("task.maxRecursionDepth", config.maxRecursionDepth);
+	} else {
+		settings.clearOverride("task.maxRecursionDepth");
+	}
+
+	if (
+		typeof config?.compactionStrategy === "string" &&
+		VALID_COMPACTION_STRATEGIES.has(config.compactionStrategy as CompactionStrategy)
+	) {
+		settings.override("compaction.strategy", config.compactionStrategy as CompactionStrategy);
+	} else {
+		settings.clearOverride("compaction.strategy");
+	}
+
+	if (typeof config?.temperature === "number" && Number.isFinite(config.temperature)) {
+		settings.override("temperature", config.temperature);
+	} else {
+		settings.clearOverride("temperature");
+	}
+
+	if (typeof config?.memoriesEnabled === "boolean") {
+		settings.override("memories.enabled", config.memoriesEnabled);
+	} else {
+		settings.clearOverride("memories.enabled");
+	}
+
+	if (
+		typeof config?.grepContextBefore === "number" &&
+		Number.isFinite(config.grepContextBefore) &&
+		config.grepContextBefore >= 0
+	) {
+		settings.override("grep.contextBefore", config.grepContextBefore);
+	} else {
+		settings.clearOverride("grep.contextBefore");
+	}
+
+	if (
+		typeof config?.grepContextAfter === "number" &&
+		Number.isFinite(config.grepContextAfter) &&
+		config.grepContextAfter >= 0
+	) {
+		settings.override("grep.contextAfter", config.grepContextAfter);
+	} else {
+		settings.clearOverride("grep.contextAfter");
+	}
 }
 
 export function cloneSettingsSnapshot(baseSettings: Settings): Settings {

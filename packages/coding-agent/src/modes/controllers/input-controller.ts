@@ -30,6 +30,7 @@ import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
+import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { type FlattenedWorkflowMenuAction, WORKFLOW_MENUS } from "../action-buttons";
 
 interface Expandable {
@@ -839,6 +840,18 @@ export class InputController {
 					}
 					return;
 				}
+			}
+
+			// Builtin registry commands not covered by the hardcoded block above (/mcp, /jobs,
+			// /move, /agents, /ssh, /fast, /memory, /btw, /merge-omp, etc.).
+			// This must run after extension commands (which take priority) but before the
+			// message is submitted to the session so it never echoes as chat input.
+			if (text.startsWith("/")) {
+				const handled = await executeBuiltinSlashCommand(text, {
+					ctx: this.ctx,
+					handleBackgroundCommand: () => this.handleBackgroundCommand(),
+				});
+				if (handled) return;
 			}
 
 			// Queue input during compaction

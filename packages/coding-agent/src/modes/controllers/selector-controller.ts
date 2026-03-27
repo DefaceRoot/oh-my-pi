@@ -4,10 +4,12 @@ import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
-import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES } from "../../config/model-registry";
+import { resolveAdvancedThinkingLevel, syncAdvancedConfigToSettings } from "../../config/advanced-config";
+import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES, type ModelRole } from "../../config/model-registry";
 import { PresetsConfig } from "../../config/presets-config";
 import { RolesConfig } from "../../config/roles-config";
-import { settings } from "../../config/settings";
+
+import { type Settings, settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
 import { discoverMCPServerNames } from "../../mcp/config";
@@ -24,8 +26,10 @@ import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
 import { discoverAgents } from "../../task/discovery";
+import { parseThinkingLevel } from "../../thinking";
 import {
 	getManagedToolNames,
+	inferMcpServerNameFromToolName,
 	isCodeSearchProviderId,
 	isHiddenToolName,
 	isSearchProviderPreference,
@@ -476,6 +480,37 @@ export class SelectorController {
 		});
 	}
 
+	async #applyLiveAgentConfigChange(
+		role: ModelRole,
+		section: "tools" | "advanced",
+		rolesConfig: RolesConfig,
+	): Promise<void> {
+		if (role !== "default" && role !== "orchestrator" && role !== "plan" && role !== "ask") return;
+		if (this.ctx.sessionManager.getLastModelChangeRole() !== role) return;
+		const session = this.ctx.session as InteractiveModeContext["session"] & {
+			settings: Settings;
+			applyRoleToolAllowlist?: (role: string) => Promise<void>;
+			refreshBaseSystemPrompt?: () => Promise<void>;
+			setThinkingLevel?: (level: ThinkingLevel, persist?: boolean) => void;
+			agent?: { temperature?: number };
+		};
+		if (section === "tools") {
+			await session.applyRoleToolAllowlist?.(role);
+			return;
+		}
+		const advancedConfig = rolesConfig.getAdvancedForRole(role);
+		syncAdvancedConfigToSettings(session.settings, advancedConfig);
+		const nextThinkingLevel =
+			resolveAdvancedThinkingLevel(advancedConfig) ??
+			parseThinkingLevel(this.ctx.settings.get("defaultThinkingLevel")) ??
+			ThinkingLevel.Off;
+		session.setThinkingLevel?.(nextThinkingLevel);
+		if (session.agent) {
+			session.agent.temperature = session.settings.get("temperature") ?? undefined;
+		}
+		await session.refreshBaseSystemPrompt?.();
+	}
+
 	async showAgentConfig(): Promise<void> {
 		const { rolesConfig, presetsConfig } = this.#getAgentConfigStores();
 		// Build the canonical known-server list as the union of sources that cover
@@ -511,6 +546,19 @@ export class SelectorController {
 			agents.filter(agent => agent.tools !== undefined).map(agent => [agent.name, [...(agent.tools ?? [])]]),
 		) as Partial<Record<string, string[]>>;
 		const rolesSnapshot = rolesConfig.getFullConfig();
+		const runtimeMcpTools = this.ctx.mcpManager?.getTools?.() ?? [];
+		const mcpToolServerNames = Object.fromEntries(
+			runtimeMcpTools.flatMap(tool => {
+				const name =
+					typeof (tool as { name?: unknown }).name === "string" ? (tool as { name: string }).name : undefined;
+				if (!name) return [];
+				const serverName =
+					typeof (tool as { mcpServerName?: unknown }).mcpServerName === "string"
+						? ((tool as { mcpServerName: string }).mcpServerName ?? undefined)
+						: inferMcpServerNameFromToolName(name, knownMcpServers);
+				return serverName ? [[name, serverName] as const] : [];
+			}),
+		) as Record<string, string>;
 		const configuredSubagentTools = Object.values(rolesSnapshot.subagents).flatMap(subagentConfig => {
 			if (subagentConfig.tools === undefined) return [];
 			if (Array.isArray(subagentConfig.tools)) return subagentConfig.tools.filter(tool => !isHiddenToolName(tool));
@@ -518,6 +566,10 @@ export class SelectorController {
 				tool => !isHiddenToolName(tool),
 			);
 		});
+		const configuredDisabledTools = [
+			...Object.values(rolesSnapshot.roles).flatMap(roleConfig => roleConfig.disabledTools ?? []),
+			...Object.values(rolesSnapshot.subagents).flatMap(subagentConfig => subagentConfig.disabledTools ?? []),
+		];
 		const knownTools = [
 			...new Set([
 				...getManagedToolNames(),
@@ -526,6 +578,12 @@ export class SelectorController {
 					roleConfig.tools.filter(tool => !isHiddenToolName(tool)),
 				),
 				...configuredSubagentTools,
+				...runtimeMcpTools.flatMap(tool => {
+					const name =
+						typeof (tool as { name?: unknown }).name === "string" ? (tool as { name: string }).name : undefined;
+					return name ? [name] : [];
+				}),
+				...configuredDisabledTools,
 			]),
 		];
 
@@ -539,6 +597,11 @@ export class SelectorController {
 				knownTools,
 				subagentDefaultTools,
 				knownMcpServers,
+				mcpToolServerNames,
+				onRoleConfigChanged: (role, section) => {
+					void this.#applyLiveAgentConfigChange(role, section, rolesConfig);
+				},
+
 				discoveredSkills,
 				onDismiss: () => {
 					done();

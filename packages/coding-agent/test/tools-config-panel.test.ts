@@ -27,6 +27,9 @@ function createPanel(
 		directTools: ["read"],
 		resolvedTools: ["read"],
 		inheritedTools: [],
+		mcpEnabledTools: [],
+		mcpTools: [],
+		disabledTools: [],
 		callbacks: {
 			onConfigChange: callbacks.onConfigChange ?? onConfigChange,
 			onClose: callbacks.onClose ?? onClose,
@@ -67,6 +70,9 @@ describe("ToolsConfigPanel", () => {
 			directTools: ["fetch"],
 			resolvedTools: ["fetch"],
 			inheritedTools: [],
+			mcpEnabledTools: [],
+			mcpTools: [],
+			disabledTools: [],
 		});
 
 		panel.handleInput(" ");
@@ -100,6 +106,9 @@ describe("ToolsConfigPanel", () => {
 			inheritConfig: { inherit: "worker", remove: ["read"] },
 			inheritedTools: ["read"],
 			resolvedTools: [],
+			mcpEnabledTools: [],
+			mcpTools: [],
+			disabledTools: [],
 			inheritBase: "worker",
 		});
 		panel.handleInput(" ");
@@ -124,6 +133,9 @@ describe("ToolsConfigPanel", () => {
 			inheritConfig: { inherit: "worker", add: ["fetch"] },
 			inheritedTools: [],
 			resolvedTools: ["fetch"],
+			mcpEnabledTools: [],
+			mcpTools: [],
+			disabledTools: [],
 			inheritBase: "worker",
 		});
 		missingConfig.panel.handleInput(" ");
@@ -147,6 +159,9 @@ describe("ToolsConfigPanel", () => {
 			inheritConfig: { add: ["fetch"] },
 			inheritedTools: [],
 			resolvedTools: ["fetch"],
+			mcpEnabledTools: [],
+			mcpTools: [],
+			disabledTools: [],
 		});
 		explicitEmpty.panel.handleInput(" ");
 		expect(explicitEmpty.onConfigChange).toHaveBeenNthCalledWith(1, {

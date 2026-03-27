@@ -17,7 +17,7 @@ import type { Settings } from "../../../config/settings";
 import type { Skill } from "../../../extensibility/skills";
 import { resolveSubagentRole } from "../../../task/model-role";
 import { parseThinkingLevel } from "../../../thinking";
-import { isHiddenToolName } from "../../../tools";
+import { inferMcpServerNameFromToolName, isHiddenToolName, resolveEffectiveToolNames } from "../../../tools";
 import { getTabBarTheme } from "../../shared";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
@@ -52,6 +52,9 @@ type ToolsPanelState = {
 	directTools?: string[];
 	resolvedTools: string[];
 	inheritedTools: string[];
+	disabledTools: string[];
+	mcpEnabledTools: string[];
+	mcpTools: string[];
 	inheritBase?: string;
 	hasPersistedInheritConfig?: boolean;
 };
@@ -67,6 +70,8 @@ export interface AgentConfigModalOptions {
 	subagentDefaultTools: Partial<Record<ModelRole, string[]>>;
 	/** All MCP server names known to the session. */
 	knownMcpServers: string[];
+	/** Exact MCP tool -> server mapping from the current runtime inventory. */
+	mcpToolServerNames?: Record<string, string>;
 	discoveredSkills: Skill[];
 	/** Called when the modal should close. */
 	onDismiss: () => void;
@@ -76,6 +81,8 @@ export interface AgentConfigModalOptions {
 	onShowStatus?: (message: string) => void;
 	/** Optional error surface owned by the caller (status line, toast, etc.). */
 	onShowError?: (message: string) => void;
+	/** Optional callback to apply persisted config to the live session when appropriate. */
+	onRoleConfigChanged?: (role: ModelRole, section: "tools" | "advanced") => void;
 }
 
 /**
@@ -104,12 +111,14 @@ export class AgentConfigModal implements Component {
 	readonly #presetsConfig: PresetsConfig;
 	#knownTools: string[];
 	readonly #knownMcpServers: string[];
+	readonly #mcpToolServerNames: Record<string, string>;
 	readonly #subagentDefaultTools: Partial<Record<ModelRole, string[]>>;
 	readonly #discoveredSkills: Skill[];
 	readonly #onDismiss: () => void;
 	readonly #onRequestRender: () => void;
 	readonly #onShowStatus: ((message: string) => void) | undefined;
 	readonly #onShowError: ((message: string) => void) | undefined;
+	readonly #onRoleConfigChanged: ((role: ModelRole, section: "tools" | "advanced") => void) | undefined;
 	readonly #unsubscribePresetApplied: () => void;
 
 	#activeRole: ModelRole = "default";
@@ -143,12 +152,14 @@ export class AgentConfigModal implements Component {
 		this.#presetsConfig = options.presetsConfig;
 		this.#knownTools = [...options.knownTools];
 		this.#knownMcpServers = options.knownMcpServers;
+		this.#mcpToolServerNames = { ...(options.mcpToolServerNames ?? {}) };
 		this.#subagentDefaultTools = options.subagentDefaultTools;
 		this.#discoveredSkills = options.discoveredSkills;
 		this.#onDismiss = options.onDismiss;
 		this.#onRequestRender = options.onRequestRender;
 		this.#onShowStatus = options.onShowStatus;
 		this.#onShowError = options.onShowError;
+		this.#onRoleConfigChanged = options.onRoleConfigChanged;
 		this.#mergeKnownToolsFromSnapshot(
 			this.#presetsConfig.getPreset(this.#presetsConfig.getActivePreset() ?? "") ?? null,
 		);
@@ -248,6 +259,7 @@ export class AgentConfigModal implements Component {
 			rolesConfig: options.rolesConfig,
 			role: "default",
 			isSubagent: false,
+			onServersChange: () => this.#handleMcpConfigChange(),
 			onClose: () => this.#dismiss(),
 		});
 
@@ -615,6 +627,9 @@ export class AgentConfigModal implements Component {
 				maxRecursionDepth: this.#settings.get("task.maxRecursionDepth") ?? 2,
 				compactionStrategy: this.#settings.get("compaction.strategy"),
 				temperature: this.#settings.get("temperature") ?? -1,
+				memoriesEnabled: this.#settings.get("memories.enabled") ?? false,
+				grepContextBefore: this.#settings.get("grep.contextBefore") ?? 0,
+				grepContextAfter: this.#settings.get("grep.contextAfter") ?? 0,
 			},
 		};
 	}
@@ -624,15 +639,29 @@ export class AgentConfigModal implements Component {
 			this.#rolesConfig.setAdvancedForSubagent(this.#activeRole, config);
 		} else {
 			this.#rolesConfig.setAdvancedForRole(this.#activeRole, config);
+			this.#onRoleConfigChanged?.(this.#activeRole, "advanced");
 		}
 		this.#syncPresetState();
 		this.#onRequestRender();
 	}
 
 	#handleToolsConfigChange(change: ToolsConfigChange): void {
+		if ("disabledTools" in change) {
+			if (this.#isSubagentRole(this.#activeRole)) {
+				this.#rolesConfig.setDisabledToolsForSubagent(this.#activeRole, change.disabledTools);
+			} else {
+				this.#rolesConfig.setDisabledToolsForRole(this.#activeRole, change.disabledTools);
+				this.#onRoleConfigChanged?.(this.#activeRole, "tools");
+			}
+			this.#syncPresetState();
+			this.#onRequestRender();
+			return;
+		}
+
 		if (!this.#isSubagentRole(this.#activeRole)) {
 			if ("tools" in change) {
 				this.#rolesConfig.setToolsForRole(this.#activeRole, change.tools);
+				this.#onRoleConfigChanged?.(this.#activeRole, "tools");
 				this.#syncPresetState();
 				this.#onRequestRender();
 			}
@@ -663,6 +692,12 @@ export class AgentConfigModal implements Component {
 			this.#syncPresetState();
 			this.#onRequestRender();
 		}
+	}
+
+	#handleMcpConfigChange(): void {
+		this.#toolsPanel.update(this.#getToolsPanelState(this.#activeRole));
+		this.#syncPresetState();
+		this.#onRequestRender();
 	}
 
 	#sameToolSet(left: readonly string[], right: readonly string[]): boolean {
@@ -739,27 +774,63 @@ export class AgentConfigModal implements Component {
 		return this.#rolesConfig.getToolsForRole("default");
 	}
 
+	#getMcpServerNameForToolName(toolName: string): string | undefined {
+		return this.#mcpToolServerNames[toolName] ?? inferMcpServerNameFromToolName(toolName, this.#knownMcpServers);
+	}
+
+	#getAllMcpToolNames(): string[] {
+		return this.#knownTools.filter(toolName => this.#getMcpServerNameForToolName(toolName) !== undefined);
+	}
+
+	#resolveEnabledMcpToolNames(enabledServers: string[], disabledTools: string[]): string[] {
+		return resolveEffectiveToolNames({
+			toolNames: this.#knownTools,
+			settings: this.#settings,
+			roleToolAllowlist: [],
+			enabledMcpServers: enabledServers,
+			disabledToolNames: disabledTools,
+			getMcpServerName: toolName => this.#getMcpServerNameForToolName(toolName),
+		}).filter(toolName => this.#getMcpServerNameForToolName(toolName) !== undefined);
+	}
+
+	#resolveEffectiveTools(directTools: string[], enabledServers: string[], disabledTools: string[]): string[] {
+		const enabledMcpTools = this.#resolveEnabledMcpToolNames(enabledServers, disabledTools);
+		const disabledToolSet = new Set(disabledTools);
+		return [...new Set([...directTools, ...enabledMcpTools])].filter(toolName => !disabledToolSet.has(toolName));
+	}
+
 	#getToolsPanelState(role: ModelRole): ToolsPanelState {
+		const mcpTools = this.#getAllMcpToolNames();
 		if (!this.#isSubagentRole(role)) {
 			const directTools = this.#rolesConfig.getToolsForRole(role);
+			const disabledTools = this.#rolesConfig.getDisabledToolsForRole(role);
+			const enabledServers = this.#rolesConfig.getMcpForRole(role);
 			return {
 				allTools: this.#knownTools,
 				isSubagent: false,
 				directTools,
-				resolvedTools: directTools,
+				resolvedTools: this.#resolveEffectiveTools(directTools, enabledServers, disabledTools),
 				inheritedTools: [],
+				disabledTools,
+				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
+				mcpTools,
 			};
 		}
 
 		const fullConfig = this.#rolesConfig.getFullConfig();
 		const persistedTools = fullConfig.subagents[role]?.tools;
+		const enabledServers = this.#rolesConfig.getMcpForSubagent(role);
+		const disabledTools = this.#rolesConfig.getDisabledToolsForSubagent(role);
 		if (Array.isArray(persistedTools)) {
 			return {
 				allTools: this.#knownTools,
 				isSubagent: false,
 				directTools: persistedTools,
-				resolvedTools: persistedTools,
+				resolvedTools: this.#resolveEffectiveTools(persistedTools, enabledServers, disabledTools),
 				inheritedTools: [],
+				disabledTools,
+				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
+				mcpTools,
 			};
 		}
 
@@ -769,8 +840,11 @@ export class AgentConfigModal implements Component {
 				allTools: this.#knownTools,
 				isSubagent: false,
 				directTools: configlessDirectBaseline,
-				resolvedTools: configlessDirectBaseline,
+				resolvedTools: this.#resolveEffectiveTools(configlessDirectBaseline, enabledServers, disabledTools),
 				inheritedTools: [],
+				disabledTools,
+				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
+				mcpTools,
 			};
 		}
 
@@ -780,8 +854,11 @@ export class AgentConfigModal implements Component {
 			return {
 				allTools: this.#knownTools,
 				isSubagent: true,
-				resolvedTools: inheritedTools,
+				resolvedTools: this.#resolveEffectiveTools(inheritedTools, enabledServers, disabledTools),
 				inheritedTools,
+				disabledTools,
+				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
+				mcpTools,
 				inheritBase: defaultInheritBase,
 			};
 		}
@@ -793,8 +870,11 @@ export class AgentConfigModal implements Component {
 			allTools: this.#knownTools,
 			isSubagent: true,
 			inheritConfig: persistedTools,
-			resolvedTools,
+			resolvedTools: this.#resolveEffectiveTools(resolvedTools, enabledServers, disabledTools),
 			inheritedTools,
+			disabledTools,
+			mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
+			mcpTools,
 			inheritBase,
 			hasPersistedInheritConfig: true,
 		};
@@ -830,6 +910,7 @@ export class AgentConfigModal implements Component {
 			rolesConfig: this.#rolesConfig,
 			role,
 			isSubagent,
+			onServersChange: () => this.#handleMcpConfigChange(),
 			onClose: () => this.#dismiss(),
 		});
 

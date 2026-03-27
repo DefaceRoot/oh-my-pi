@@ -105,9 +105,11 @@ function getMcpServerName(tool: unknown): string | undefined {
 function createScopedMcpManager(
 	mcpManager: ToolSession["mcpManager"],
 	allowedServers: readonly string[],
+	disabledToolNames: readonly string[] = [],
 ): ToolSession["mcpManager"] {
 	if (!mcpManager) return undefined;
 	const allowed = new Set(allowedServers);
+	const disabled = new Set(disabledToolNames);
 	const managerLike = mcpManager as ToolSession["mcpManager"] & {
 		getToolsForServers?: (serverNames: readonly string[]) => unknown[];
 		getTools: () => unknown[];
@@ -119,44 +121,57 @@ function createScopedMcpManager(
 		setOnPromptsChanged?: (handler: (serverName: string) => void) => void;
 		setOnResourcesChanged?: (handler: (serverName: string, uri: string) => void) => void;
 	};
+	const isAllowedTool = (tool: unknown): boolean => {
+		const serverName = getMcpServerName(tool);
+		const toolName =
+			typeof (tool as { name?: unknown }).name === "string" ? (tool as { name: string }).name : undefined;
+		if (!serverName || !allowed.has(serverName)) return false;
+		if (!toolName) return false;
+		return !disabled.has(toolName);
+	};
 	const getScopedTools = (): unknown[] => {
 		if (typeof managerLike.getToolsForServers === "function") {
-			return managerLike.getToolsForServers(allowedServers);
+			return managerLike.getToolsForServers(allowedServers).filter(isAllowedTool);
 		}
-		return managerLike.getTools().filter(tool => {
-			const serverName = getMcpServerName(tool);
-			return serverName ? allowed.has(serverName) : false;
-		});
+		return managerLike.getTools().filter(isAllowedTool);
 	};
 	const getScopedServerNames = (requestedServerNames?: readonly string[]): string[] => {
-		if (!requestedServerNames) return [...allowedServers];
-		return requestedServerNames.filter(name => allowed.has(name));
+		const requested = requestedServerNames ? new Set(requestedServerNames) : undefined;
+		return [
+			...new Set(
+				getScopedTools().flatMap(tool => {
+					const serverName = getMcpServerName(tool);
+					if (!serverName || !allowed.has(serverName)) return [];
+					if (requested && !requested.has(serverName)) return [];
+					return [serverName];
+				}),
+			),
+		];
 	};
 	return {
 		getTools: () => getScopedTools() as any,
-		getConnectedServers: () =>
-			(managerLike.getConnectedServers?.() ?? [...allowedServers]).filter(name => allowed.has(name)),
-		getServerPrompts: name => (allowed.has(name) ? managerLike.getServerPrompts?.(name) : undefined),
+		getConnectedServers: () => {
+			const connected = managerLike.getConnectedServers?.() ?? [...allowedServers];
+			const enabledServers = new Set(getScopedServerNames());
+			return connected.filter(name => allowed.has(name) && enabledServers.has(name));
+		},
+		getServerPrompts: name =>
+			getScopedServerNames([name]).includes(name) ? managerLike.getServerPrompts?.(name) : undefined,
 		getServerInstructions: requestedServerNames =>
 			managerLike.getServerInstructions?.(getScopedServerNames(requestedServerNames)) ?? new Map<string, string>(),
 		setOnToolsChanged: handler => {
 			managerLike.setOnToolsChanged?.(tools => {
-				handler(
-					tools.filter(tool => {
-						const serverName = getMcpServerName(tool);
-						return serverName ? allowed.has(serverName) : false;
-					}),
-				);
+				handler(tools.filter(isAllowedTool));
 			});
 		},
 		setOnPromptsChanged: handler => {
 			managerLike.setOnPromptsChanged?.(serverName => {
-				if (allowed.has(serverName)) handler(serverName);
+				if (getScopedServerNames([serverName]).includes(serverName)) handler(serverName);
 			});
 		},
 		setOnResourcesChanged: handler => {
 			managerLike.setOnResourcesChanged?.((serverName, uri) => {
-				if (allowed.has(serverName)) handler(serverName, uri);
+				if (getScopedServerNames([serverName]).includes(serverName)) handler(serverName, uri);
 			});
 		},
 		waitForConnection: async (name: string) => {
@@ -1113,9 +1128,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						}
 				: { ...agent, tools: toolBase };
 			const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
+			const subagentDisabledTools = rolesConfig.getDisabledToolsForSubagent(effectiveAgent.name);
 			const subagentSkillConfig = rolesConfig.getSkillConfigForSubagent(effectiveAgent.name);
 			const subagentAdvancedConfig = rolesConfig.getAdvancedForSubagent(effectiveAgent.name);
-			const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
+			const subagentMcpManager = createScopedMcpManager(
+				this.session.mcpManager,
+				subagentMcpAllowlist,
+				subagentDisabledTools,
+			);
 			const settingsModelOverride = agentModelOverrides[agent.name]?.trim() || undefined;
 			const { modelOverride, thinkingLevelOverride } = resolveSubagentLaunchOverrides({
 				session: this.session,

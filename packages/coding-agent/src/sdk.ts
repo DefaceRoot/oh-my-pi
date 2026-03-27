@@ -124,6 +124,7 @@ import {
 	ResolveTool,
 	renderSearchToolBm25Description,
 	researcherTools,
+	resolveEffectiveToolNames,
 	searchTools,
 	setPreferredCodeSearchProvider,
 	setPreferredImageProvider,
@@ -770,13 +771,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? mcpTool.mcpServerName
 			: undefined;
 	};
-	const managedRuntimeAliases = new Map<string, string>([["puppeteer", "browser"]]);
-	const toManagedRoleToolName = (toolName: string): string | undefined => {
-		if (toolName in BUILTIN_TOOLS || toolName in HIDDEN_TOOLS) {
-			return toolName;
-		}
-		return managedRuntimeAliases.get(toolName);
-	};
+
+	const hasExplicitRole = options.role !== undefined;
 
 	const startupRole = resolveRoleName(sessionManager.getLastModelChangeRole());
 	const configuredRole = resolveRoleName(options.role ?? startupRole);
@@ -788,6 +784,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
 	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
+	const configuredRoleMcpServers = new Set(getRoleMcpAllowlist(configuredRole));
+
+	const configuredRoleDisabledToolNames = new Set(rolesConfig.getDisabledToolsForRole(configuredRole));
+
 	// Use explicit mcpAllowlist from options if provided, otherwise fall back to role-based defaults
 	const sessionMcpDiscoveryAllowlist =
 		options.mcpAllowlist ??
@@ -1376,30 +1376,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const resolveToolNamesForRole = (role: string, availableToolNames: string[]): string[] => {
 		const allowlistRole = resolveRoleName(role);
-		const managedRoleFiltered = filterToolNamesByRoleAllowlist(
-			availableToolNames,
+		const filtered = resolveEffectiveToolNames({
+			toolNames: availableToolNames,
 			settings,
-			getRoleToolAllowlist(allowlistRole),
-		);
-		const managedRoleSet = new Set(managedRoleFiltered);
-		const allowedMcpServers = new Set(getRoleMcpAllowlist(allowlistRole));
-		const filtered = availableToolNames.filter(name => {
-			const tool = toolRegistry.get(name);
-			if (!tool) return false;
-
-			const managedName = toManagedRoleToolName(name);
-			if (managedName) {
-				if (managedName === "exit_plan_mode") return false;
-				return managedRoleSet.has(name);
-			}
-
-			const mcpServerName = mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
-			if (mcpServerName) {
-				return allowedMcpServers.has(mcpServerName);
-			}
-
-			return false;
-		});
+			roleToolAllowlist: getRoleToolAllowlist(allowlistRole),
+			enabledMcpServers: getRoleMcpAllowlist(allowlistRole),
+			disabledToolNames: rolesConfig.getDisabledToolsForRole(allowlistRole),
+			getMcpServerName: name => {
+				const tool = toolRegistry.get(name);
+				if (!tool) return undefined;
+				return mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
+			},
+		}).filter(name => name !== "exit_plan_mode");
 		const selectedTools = filtered
 			.map(name => toolRegistry.get(name))
 			.filter((tool): tool is AgentTool => tool !== undefined);
@@ -1407,6 +1395,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return filtered;
 		}
 		return filtered.filter(name => name !== "resolve");
+	};
+
+	const resolveDiscoverableMCPToolNamesForRole = (role: string, availableToolNames: string[]): string[] => {
+		const allowlistRole = resolveRoleName(role);
+		return resolveEffectiveToolNames({
+			toolNames: availableToolNames,
+			settings,
+			roleToolAllowlist: [],
+			enabledMcpServers: getRoleMcpAllowlist(allowlistRole),
+			disabledToolNames: rolesConfig.getDisabledToolsForRole(allowlistRole),
+			getMcpServerName: name => {
+				const tool = toolRegistry.get(name);
+				if (!tool) return undefined;
+				return mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
+			},
+		}).filter(name => {
+			const tool = toolRegistry.get(name);
+			if (!tool) return false;
+			return (mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool)) !== undefined;
+		});
 	};
 
 	let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
@@ -1422,7 +1430,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const intentField = settings.get("tools.intentTracing") || $env.PI_INTENT_TRACING === "1" ? INTENT_FIELD : undefined;
 	const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
 		toolContextStore.setToolNames(toolNames);
-		const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
+		const promptDiscoverableTools = toolNames
+			.map(name => tools.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined);
+		const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(promptDiscoverableTools) : [];
 		const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
 		const hasDiscoverableMCPTools =
 			mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableMCPTools.length > 0;
@@ -1432,12 +1443,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 		const currentRole = sessionManager.getLastModelChangeRole();
 		const currentMode = normalizePromptRole(currentRole);
-		const promptMcpAllowlist = options.mcpAllowlist ?? getRoleMcpAllowlist(currentRole);
-
 		const personality = settings.get("personality");
 
+		const activePromptMcpServers = [
+			...new Set(
+				toolNames.flatMap(name => {
+					const tool = tools.get(name);
+					if (!tool) return [];
+					const serverName = mcpServerNameByToolName.get(name) ?? getMcpServerNameForTool(tool);
+					return serverName ? [serverName] : [];
+				}),
+			),
+		];
+
 		// Build combined append prompt: memory instructions + MCP server instructions
-		const serverInstructions = mcpManager?.getServerInstructions(promptMcpAllowlist);
+		const serverInstructions = mcpManager?.getServerInstructions(activePromptMcpServers);
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		if (serverInstructions && serverInstructions.size > 0) {
 			const MAX_INSTRUCTIONS_LENGTH = 4000;
@@ -1510,7 +1530,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const requestedToolNames = options.toolNames?.map(name => name.toLowerCase()) ?? toolNamesFromRegistry;
 	const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 	const roleAwareRequested =
-		options.toolNames !== undefined ? normalizedRequested : resolveToolNamesForRole(startupRole, normalizedRequested);
+		options.toolNames !== undefined
+			? normalizedRequested.filter(name => !configuredRoleDisabledToolNames.has(name))
+			: resolveToolNamesForRole(startupRole, normalizedRequested);
 	const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
 	const mcpDiscoveryEnabled = settings.get("mcp.discoveryMode") ?? false;
 	const defaultInactiveToolNames = new Set(
@@ -1528,11 +1550,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const discoveryDefaultServers = new Set(
 		(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
 	);
+	const discoverableToolNamesForConfiguredRole = resolveDiscoverableMCPToolNamesForRole(
+		configuredRole,
+		Array.from(toolRegistry.keys()),
+	);
+	const configuredDiscoverableMCPTools = collectDiscoverableMCPTools(
+		discoverableToolNamesForConfiguredRole
+			.map(name => toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined),
+	);
 	const discoveryDefaultServerToolNames = mcpDiscoveryEnabled
-		? selectDiscoverableMCPToolNamesByServer(
-				collectDiscoverableMCPTools(toolRegistry.values()),
-				discoveryDefaultServers,
-			)
+		? selectDiscoverableMCPToolNamesByServer(configuredDiscoverableMCPTools, discoveryDefaultServers)
 		: [];
 	let initialSelectedMCPToolNames: string[] = [];
 	let defaultSelectedMCPToolNames: string[] = [];
@@ -1564,12 +1592,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	].filter(name => {
 		if (!toolRegistry.has(name)) return false;
 		if (!name.startsWith("mcp_")) return true;
+		if (configuredRoleDisabledToolNames.has(name)) return false;
+		const tool = toolRegistry.get(name);
+		const mcpServerName = mcpServerNameByToolName.get(name) ?? (tool ? getMcpServerNameForTool(tool) : undefined);
 		if (allowlistedMcpServers) {
-			const tool = toolRegistry.get(name);
-			const mcpServerName = mcpServerNameByToolName.get(name) ?? (tool ? getMcpServerNameForTool(tool) : undefined);
 			return mcpServerName !== undefined && allowlistedMcpServers.has(mcpServerName);
 		}
-		return includeInheritedMcpTools;
+		return (
+			includeInheritedMcpTools &&
+			mcpServerName !== undefined &&
+			(!hasExplicitRole || configuredRoleMcpServers.has(mcpServerName))
+		);
 	});
 	for (const name of alwaysInclude) {
 		if (mcpDiscoveryEnabled && name.startsWith("mcp_")) {
@@ -1757,6 +1790,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmFinal,
 		rebuildSystemPrompt,
 		resolveToolNamesForRole,
+		resolveDiscoverableMCPToolNamesForRole,
+
 		mcpDiscoveryEnabled,
 		initialSelectedMCPToolNames,
 		defaultSelectedMCPToolNames,

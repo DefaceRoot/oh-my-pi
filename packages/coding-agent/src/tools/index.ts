@@ -264,6 +264,66 @@ function getExplicitToolSettingOverride(settings: Settings, name: ManagedToolNam
 	return Boolean(currentValue);
 }
 
+export function normalizeMcpServerName(serverName: string): string {
+	return serverName
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "");
+}
+
+export function getMcpToolPrefix(serverName: string): string | undefined {
+	const normalized = normalizeMcpServerName(serverName);
+	return normalized.length > 0 ? `mcp_${normalized}_` : undefined;
+}
+
+export function inferMcpServerNameFromToolName(
+	toolName: string,
+	knownServerNames: readonly string[] = [],
+): string | undefined {
+	if (!toolName.startsWith("mcp_")) return undefined;
+	let bestMatch: { serverName: string; prefix: string } | undefined;
+	for (const serverName of knownServerNames) {
+		const prefix = getMcpToolPrefix(serverName);
+		if (!prefix || !toolName.startsWith(prefix)) continue;
+		if (!bestMatch || prefix.length > bestMatch.prefix.length) {
+			bestMatch = { serverName, prefix };
+		}
+	}
+	return bestMatch?.serverName;
+}
+
+export interface EffectiveToolResolutionOptions {
+	toolNames: readonly string[];
+	settings: Settings;
+	roleToolAllowlist?: readonly string[];
+	enabledMcpServers?: readonly string[];
+	disabledToolNames?: readonly string[];
+	getMcpServerName?: (toolName: string) => string | undefined;
+}
+
+export function resolveEffectiveToolNames({
+	toolNames,
+	settings,
+	roleToolAllowlist,
+	enabledMcpServers = [],
+	disabledToolNames = [],
+	getMcpServerName,
+}: EffectiveToolResolutionOptions): string[] {
+	const managedRoleFiltered = filterToolNamesByRoleAllowlist(toolNames, settings, roleToolAllowlist);
+	const managedRoleSet = new Set(managedRoleFiltered);
+	const allowedMcpServers = new Set(enabledMcpServers);
+	const disabledToolSet = new Set(disabledToolNames);
+	return [...new Set(toolNames)].filter(name => {
+		if (disabledToolSet.has(name)) return false;
+		const managedName = toManagedToolName(name);
+		if (managedName) return managedRoleSet.has(name);
+		const mcpServerName = getMcpServerName?.(name);
+		if (mcpServerName) return allowedMcpServers.has(mcpServerName);
+		return false;
+	});
+}
+
 export function filterToolNamesByRoleAllowlist(
 	toolNames: readonly string[],
 	settings: Settings,

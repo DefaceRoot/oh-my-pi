@@ -131,6 +131,7 @@ const MAIN_ROLE_NAMES = new Set(["default", "orchestrator", "plan", "ask"]);
 
 type RolesConfigEntry = {
 	mcp?: unknown;
+	disabledTools?: unknown;
 	skills?: unknown;
 };
 
@@ -144,6 +145,14 @@ function readMcpServers(entry: RolesConfigEntry | undefined): string[] | undefin
 	if (!Array.isArray(entry.mcp)) return undefined;
 	if (!entry.mcp.every(server => typeof server === "string")) return undefined;
 	return [...entry.mcp];
+}
+
+
+function readDisabledTools(entry: RolesConfigEntry | undefined): string[] | undefined {
+	if (!entry) return undefined;
+	if (!Array.isArray(entry.disabledTools)) return undefined;
+	if (!entry.disabledTools.every(toolName => typeof toolName === "string")) return undefined;
+	return [...entry.disabledTools];
 }
 
 function toMcpToolPrefix(server: string): string | undefined {
@@ -207,6 +216,25 @@ function resolveMcpAllowlist(agent: string): string[] | null {
 	return FALLBACK_AGENT_MCP_ALLOW[agent] ?? FALLBACK_AGENT_MCP_ALLOW.default;
 }
 
+function resolveDisabledMcpTools(agent: string): string[] {
+	const rolesPath = path.join(resolveAgentDir(), "roles.yml");
+	const loaded = RolesConfigFile.relocate(rolesPath).load();
+	if (!loaded || typeof loaded !== "object") return [];
+	const config = loaded as RolesConfigShape;
+	if (MAIN_ROLE_NAMES.has(agent)) {
+		return readDisabledTools(config.roles?.[agent] ?? config.roles?.default) ?? [];
+	}
+	const subagentDisabledTools = readDisabledTools(config.subagents?.[agent]);
+	if (subagentDisabledTools !== undefined) return subagentDisabledTools;
+	const roleDisabledTools = readDisabledTools(config.roles?.[agent]);
+	if (roleDisabledTools !== undefined) return roleDisabledTools;
+	if (agent in FALLBACK_AGENT_MCP_ALLOW) {
+		return [];
+	}
+	return readDisabledTools(config.subagents?._default) ?? readDisabledTools(config.roles?.default) ?? [];
+}
+
+
 /**
  * Remove `<function>` blocks from the system prompt for MCP tools that
  * the current agent is not allowed to use.
@@ -217,25 +245,19 @@ function resolveMcpAllowlist(agent: string): string[] | null {
  * We match each block, extract the tool name, and keep only those whose
  * prefix appears in the agent's allowlist.
  */
-function stripMcpTools(systemPrompt: string, allowed: string[] | null): string {
-	// null = keep everything
-	if (allowed === null) return systemPrompt;
-
-	// Match each <function>...</function> block and check if it's an MCP tool
+function stripMcpTools(systemPrompt: string, allowed: string[] | null, disabled: readonly string[] = []): string {
+	if (allowed === null && disabled.length === 0) return systemPrompt;
+	const disabledSet = new Set(disabled);
 	return systemPrompt.replace(
 		/<function>[\s\S]*?<\/function>\n?/g,
 		match => {
 			const nameMatch = match.match(/"name"\s*:\s*"([^"]+)"/);
-			if (!nameMatch) return match; // keep non-parseable blocks
+			if (!nameMatch) return match;
 			const toolName = nameMatch[1];
-
-			// Only filter MCP tools (name starts with mcp_)
 			if (!toolName.startsWith("mcp_")) return match;
-
-			// Empty allowlist = remove all MCP tools
+			if (disabledSet.has(toolName)) return "";
+			if (allowed === null) return match;
 			if (allowed.length === 0) return "";
-
-			// Keep tool if its name starts with any allowed prefix
 			const keep = allowed.some(prefix => toolName.startsWith(prefix));
 			return keep ? match : "";
 		},
@@ -427,13 +449,13 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, ctx) => {
 		const agent = await resolveAgent(event.systemPrompt, ctx);
 		const mcpAllow = resolveMcpAllowlist(agent);
+		const disabledMcpTools = resolveDisabledMcpTools(agent);
 		sessionMcpAllowByKey.set(getSessionKey(ctx), mcpAllow);
 
-		// Skip filtering for agents with full access (no changes needed)
 		const skillConfig = resolveSkillConfig(agent);
 		const hasV2Skills = skillConfig !== null;
 		const v1SkillAllow = LEGACY_SKILL_ALLOW[agent] ?? LEGACY_SKILL_ALLOW.default;
-		if (mcpAllow === null && !hasV2Skills && v1SkillAllow === null) {
+		if (mcpAllow === null && disabledMcpTools.length === 0 && !hasV2Skills && v1SkillAllow === null) {
 			pi.logger.debug(`mcp-filter: agent=${agent} — full access, skipping`);
 			return;
 		}
@@ -441,25 +463,26 @@ export default function mcpFilterExtension(pi: ExtensionAPI) {
 		pi.logger.debug(`mcp-filter: agent=${agent} — applying filters`);
 
 		let prompt = event.systemPrompt;
-		prompt = stripMcpTools(prompt, mcpAllow);
+		prompt = stripMcpTools(prompt, mcpAllow, disabledMcpTools);
 		prompt = stripSkills(prompt, agent);
-
 		return { systemPrompt: prompt };
 	});
 
 	// Safety net: block execution of any MCP tool that was filtered out
 	pi.on("tool_call", async (event, ctx) => {
 		if (!event.toolName.startsWith("mcp_")) return;
-		const mcpAllow = sessionMcpAllowByKey.get(getSessionKey(ctx)) ?? resolveMcpAllowlist("default");
-
-		if (mcpAllow === null) return; // full access
-
-		// No MCP tools allowed
+		const canResolveAgent =
+			!!ctx && typeof ctx === "object" && !!(ctx as { sessionManager?: unknown }).sessionManager;
+		const agent = canResolveAgent ? await resolveAgent("", ctx) : "default";
+		const mcpAllow = sessionMcpAllowByKey.get(getSessionKey(ctx)) ?? resolveMcpAllowlist(agent);
+		const disabledMcpTools = resolveDisabledMcpTools(agent);
+		if (disabledMcpTools.includes(event.toolName)) {
+			return { block: true, reason: "This MCP tool is not available for this agent role." };
+		}
+		if (mcpAllow === null) return;
 		if (mcpAllow.length === 0) {
 			return { block: true, reason: "MCP tools are not available for this agent role." };
 		}
-
-		// Check if tool prefix is in the allowlist
 		const keep = mcpAllow.some(prefix => event.toolName.startsWith(prefix));
 		if (!keep) {
 			return { block: true, reason: "This MCP tool is not available for this agent role." };

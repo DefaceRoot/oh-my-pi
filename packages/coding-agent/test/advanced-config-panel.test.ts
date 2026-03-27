@@ -29,6 +29,9 @@ function createPanel(
 			maxRecursionDepth: 2,
 			compactionStrategy: "context-full",
 			temperature: -1,
+			memoriesEnabled: false,
+			grepContextBefore: 0,
+			grepContextAfter: 0,
 		},
 		callbacks: {
 			onConfigChange: callbacks.onConfigChange ?? onConfigChange,

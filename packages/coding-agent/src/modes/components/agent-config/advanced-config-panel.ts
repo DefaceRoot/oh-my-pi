@@ -8,13 +8,17 @@ import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 export type AdvancedCompactionStrategy = "context-full" | "handoff" | "off";
 
 type AdvancedFieldId = keyof AdvancedConfigPanelState;
-type NumericFieldId = "maxRecursionDepth" | "temperature";
+type ToggleFieldId = "thinkingLevel" | "compactionStrategy" | "memoriesEnabled";
+type NumericFieldId = "maxRecursionDepth" | "temperature" | "grepContextBefore" | "grepContextAfter";
 
 type AdvancedConfigPanelState = {
 	thinkingLevel?: ThinkingLevel;
 	maxRecursionDepth?: number;
 	compactionStrategy?: AdvancedCompactionStrategy;
 	temperature?: number;
+	memoriesEnabled?: boolean;
+	grepContextBefore?: number;
+	grepContextAfter?: number;
 };
 
 export interface AdvancedConfigPanelGlobalValues {
@@ -22,6 +26,9 @@ export interface AdvancedConfigPanelGlobalValues {
 	maxRecursionDepth: number;
 	compactionStrategy: AdvancedCompactionStrategy;
 	temperature: number;
+	memoriesEnabled: boolean;
+	grepContextBefore: number;
+	grepContextAfter: number;
 }
 
 export interface AdvancedConfigPanelCallbacks {
@@ -41,9 +48,20 @@ const FIELD_LABELS: Record<AdvancedFieldId, string> = {
 	maxRecursionDepth: "Max Task Recursion",
 	compactionStrategy: "Compaction Strategy",
 	temperature: "Temperature",
+	memoriesEnabled: "Memories",
+	grepContextBefore: "Grep Context Before",
+	grepContextAfter: "Grep Context After",
 };
 
-const FIELD_ORDER: AdvancedFieldId[] = ["thinkingLevel", "maxRecursionDepth", "compactionStrategy", "temperature"];
+const FIELD_ORDER: AdvancedFieldId[] = [
+	"thinkingLevel",
+	"maxRecursionDepth",
+	"compactionStrategy",
+	"temperature",
+	"memoriesEnabled",
+	"grepContextBefore",
+	"grepContextAfter",
+];
 const VALID_COMPACTION_STRATEGIES = new Set<AdvancedCompactionStrategy>(["context-full", "handoff", "off"]);
 const DEFAULT_THINKING_LEVELS = [
 	ThinkingLevel.Minimal,
@@ -153,7 +171,11 @@ export class AdvancedConfigPanel implements Component {
 			return;
 		}
 
-		if (selectedField === "thinkingLevel" || selectedField === "compactionStrategy") {
+		if (
+			selectedField === "thinkingLevel" ||
+			selectedField === "compactionStrategy" ||
+			selectedField === "memoriesEnabled"
+		) {
 			if (
 				data === " " ||
 				matchesKey(data, "space") ||
@@ -217,22 +239,40 @@ export class AdvancedConfigPanel implements Component {
 				}
 				return formatGlobalValue(formatTemperature(this.#globalValues.temperature));
 			}
+			case "memoriesEnabled": {
+				const explicit = this.#config.memoriesEnabled;
+				if (explicit !== undefined) {
+					return formatBooleanState(explicit, "enabled", "disabled");
+				}
+				return formatGlobalValue(formatBooleanState(this.#globalValues.memoriesEnabled, "enabled", "disabled"));
+			}
+			case "grepContextBefore": {
+				const explicit = this.#config.grepContextBefore;
+				if (explicit !== undefined) {
+					return formatContextLines(explicit);
+				}
+				return formatGlobalValue(formatContextLines(this.#globalValues.grepContextBefore));
+			}
+			case "grepContextAfter": {
+				const explicit = this.#config.grepContextAfter;
+				if (explicit !== undefined) {
+					return formatContextLines(explicit);
+				}
+				return formatGlobalValue(formatContextLines(this.#globalValues.grepContextAfter));
+			}
 		}
 	}
 
 	#renderDraftValue(fieldId: AdvancedFieldId): string {
-		if (fieldId === "thinkingLevel" || fieldId === "compactionStrategy") {
+		if (fieldId === "thinkingLevel" || fieldId === "compactionStrategy" || fieldId === "memoriesEnabled") {
 			return this.#renderFieldValue(fieldId);
 		}
-		const placeholder =
-			fieldId === "maxRecursionDepth"
-				? formatRecursionDepth(this.#globalValues.maxRecursionDepth)
-				: formatTemperature(this.#globalValues.temperature);
+		const placeholder = this.#getNumericFieldPlaceholder(fieldId);
 		const draft = this.#draftValue.length > 0 ? this.#draftValue : theme.fg("dim", placeholder);
 		return `${draft}${theme.fg("accent", " ← editing")}`;
 	}
 
-	#cycleField(fieldId: "thinkingLevel" | "compactionStrategy"): void {
+	#cycleField(fieldId: ToggleFieldId): void {
 		this.#errorMessage = null;
 		if (fieldId === "thinkingLevel") {
 			const values: Array<ThinkingLevel | undefined> = [undefined, ThinkingLevel.Off, ...this.#thinkingOptions];
@@ -242,18 +282,22 @@ export class AdvancedConfigPanel implements Component {
 			return;
 		}
 
-		const values: Array<AdvancedCompactionStrategy | undefined> = [undefined, "context-full", "handoff", "off"];
-		this.#config.compactionStrategy = cycleValue(values, this.#config.compactionStrategy);
+		if (fieldId === "compactionStrategy") {
+			const values: Array<AdvancedCompactionStrategy | undefined> = [undefined, "context-full", "handoff", "off"];
+			this.#config.compactionStrategy = cycleValue(values, this.#config.compactionStrategy);
+			this.#emitChange();
+			return;
+		}
+
+		const values: Array<boolean | undefined> = [undefined, true, false];
+		this.#config.memoriesEnabled = cycleValue(values, this.#config.memoriesEnabled);
 		this.#emitChange();
 	}
 
 	#beginEdit(fieldId: AdvancedFieldId): void {
-		if (fieldId !== "maxRecursionDepth" && fieldId !== "temperature") return;
+		if (!this.#isNumericField(fieldId)) return;
 		this.#editingField = fieldId;
-		this.#draftValue =
-			fieldId === "maxRecursionDepth"
-				? (this.#config.maxRecursionDepth?.toString() ?? "")
-				: (this.#config.temperature?.toString() ?? "");
+		this.#draftValue = this.#getNumericFieldValue(fieldId);
 		this.#errorMessage = null;
 	}
 
@@ -307,7 +351,7 @@ export class AdvancedConfigPanel implements Component {
 				return;
 			}
 			this.#config.maxRecursionDepth = value;
-		} else {
+		} else if (fieldId === "temperature") {
 			if (!isCompleteNumericDraft(fieldId, raw)) {
 				this.#errorMessage = "Temperature must be a number greater than or equal to -1.";
 				return;
@@ -318,6 +362,18 @@ export class AdvancedConfigPanel implements Component {
 				return;
 			}
 			this.#config.temperature = value;
+		} else {
+			if (!isCompleteNumericDraft(fieldId, raw)) {
+				this.#errorMessage = "Grep context must be a non-negative integer.";
+				return;
+			}
+			const value = Number(raw);
+			if (!Number.isInteger(value) || value < 0) {
+				this.#errorMessage = "Grep context must be a non-negative integer.";
+				return;
+			}
+			if (fieldId === "grepContextBefore") this.#config.grepContextBefore = value;
+			if (fieldId === "grepContextAfter") this.#config.grepContextAfter = value;
 		}
 
 		this.#editingField = null;
@@ -345,8 +401,52 @@ export class AdvancedConfigPanel implements Component {
 			case "temperature":
 				delete this.#config.temperature;
 				break;
+			case "memoriesEnabled":
+				delete this.#config.memoriesEnabled;
+				break;
+			case "grepContextBefore":
+				delete this.#config.grepContextBefore;
+				break;
+			case "grepContextAfter":
+				delete this.#config.grepContextAfter;
+				break;
 		}
 		this.#emitChange();
+	}
+
+	#isNumericField(fieldId: AdvancedFieldId): fieldId is NumericFieldId {
+		return (
+			fieldId === "maxRecursionDepth" ||
+			fieldId === "temperature" ||
+			fieldId === "grepContextBefore" ||
+			fieldId === "grepContextAfter"
+		);
+	}
+
+	#getNumericFieldValue(fieldId: NumericFieldId): string {
+		switch (fieldId) {
+			case "maxRecursionDepth":
+				return this.#config.maxRecursionDepth?.toString() ?? "";
+			case "temperature":
+				return this.#config.temperature?.toString() ?? "";
+			case "grepContextBefore":
+				return this.#config.grepContextBefore?.toString() ?? "";
+			case "grepContextAfter":
+				return this.#config.grepContextAfter?.toString() ?? "";
+		}
+	}
+
+	#getNumericFieldPlaceholder(fieldId: NumericFieldId): string {
+		switch (fieldId) {
+			case "maxRecursionDepth":
+				return formatRecursionDepth(this.#globalValues.maxRecursionDepth);
+			case "temperature":
+				return formatTemperature(this.#globalValues.temperature);
+			case "grepContextBefore":
+				return formatContextLines(this.#globalValues.grepContextBefore);
+			case "grepContextAfter":
+				return formatContextLines(this.#globalValues.grepContextAfter);
+		}
 	}
 
 	#emitChange(): void {
@@ -385,6 +485,23 @@ function normalizeConfig(config: AdvancedConfig | null | undefined): AdvancedCon
 	if (typeof config?.temperature === "number" && Number.isFinite(config.temperature) && config.temperature >= -1) {
 		normalized.temperature = config.temperature;
 	}
+	if (typeof config?.memoriesEnabled === "boolean") {
+		normalized.memoriesEnabled = config.memoriesEnabled;
+	}
+	if (
+		typeof config?.grepContextBefore === "number" &&
+		Number.isInteger(config.grepContextBefore) &&
+		config.grepContextBefore >= 0
+	) {
+		normalized.grepContextBefore = config.grepContextBefore;
+	}
+	if (
+		typeof config?.grepContextAfter === "number" &&
+		Number.isInteger(config.grepContextAfter) &&
+		config.grepContextAfter >= 0
+	) {
+		normalized.grepContextAfter = config.grepContextAfter;
+	}
 	return normalized;
 }
 
@@ -394,6 +511,9 @@ function toAdvancedConfig(config: AdvancedConfigPanelState): AdvancedConfig | nu
 	if (config.maxRecursionDepth !== undefined) next.maxRecursionDepth = config.maxRecursionDepth;
 	if (config.compactionStrategy !== undefined) next.compactionStrategy = config.compactionStrategy;
 	if (config.temperature !== undefined) next.temperature = config.temperature;
+	if (config.memoriesEnabled !== undefined) next.memoriesEnabled = config.memoriesEnabled;
+	if (config.grepContextBefore !== undefined) next.grepContextBefore = config.grepContextBefore;
+	if (config.grepContextAfter !== undefined) next.grepContextAfter = config.grepContextAfter;
 	return Object.keys(next).length > 0 ? next : null;
 }
 
@@ -404,7 +524,7 @@ function cycleValue<T>(values: Array<T | undefined>, current: T | undefined): T 
 }
 
 function isCompleteNumericDraft(fieldId: NumericFieldId, draft: string): boolean {
-	if (fieldId === "maxRecursionDepth") {
+	if (fieldId === "maxRecursionDepth" || fieldId === "grepContextBefore" || fieldId === "grepContextAfter") {
 		return /^-?\d+$/.test(draft);
 	}
 	return /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(draft);
@@ -421,6 +541,14 @@ function formatRecursionDepth(value: number): string {
 
 function formatTemperature(value: number): string {
 	return value === -1 ? "provider default (-1)" : value.toString();
+}
+
+function formatContextLines(value: number): string {
+	return value === 1 ? "1 line" : `${value} lines`;
+}
+
+function formatBooleanState(value: boolean, trueLabel: string, falseLabel: string): string {
+	return value ? trueLabel : falseLabel;
 }
 
 function formatGlobalValue(value: string): string {

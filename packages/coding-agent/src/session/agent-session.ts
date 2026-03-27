@@ -235,9 +235,12 @@ export interface AgentSessionConfig {
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability */
+	/** System prompt builder that can consider tool availability */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>;
 	/** Resolve active tool names for a target role using current registry contents */
 	resolveToolNamesForRole?: (role: string, availableToolNames: string[]) => string[];
+	/** Resolve discoverable MCP tool names for a target role using current registry contents. */
+	resolveDiscoverableMCPToolNamesForRole?: (role: string, availableToolNames: string[]) => string[];
 	/** Enable hidden-by-default MCP tool discovery for this session. */
 	mcpDiscoveryEnabled?: boolean;
 	/** MCP tool names to activate for the current session when discovery mode is enabled. */
@@ -499,6 +502,8 @@ export class AgentSession {
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
 	#resolveToolNamesForRole: ((role: string, availableToolNames: string[]) => string[]) | undefined;
+	#resolveDiscoverableMCPToolNamesForRole: ((role: string, availableToolNames: string[]) => string[]) | undefined;
+
 	#baseSystemPrompt: string;
 	#mcpDiscoveryEnabled = false;
 	#discoverableMCPTools = new Map<string, DiscoverableMCPTool>();
@@ -602,9 +607,12 @@ export class AgentSession {
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#resolveToolNamesForRole = config.resolveToolNamesForRole;
+		this.#resolveDiscoverableMCPToolNamesForRole = config.resolveDiscoverableMCPToolNamesForRole;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
+		this.#setDiscoverableMCPTools(
+			this.#collectDiscoverableMCPToolsFromRegistry(this.sessionManager.getLastModelChangeRole()),
+		);
 		this.#selectedMCPToolNames = new Set(config.initialSelectedMCPToolNames ?? []);
 		this.#defaultSelectedMCPServerNames = new Set(config.defaultSelectedMCPServerNames ?? []);
 		this.#defaultSelectedMCPToolNames = new Set(config.defaultSelectedMCPToolNames ?? []);
@@ -1903,8 +1911,20 @@ export class AgentSession {
 		return this.#retryAttempt;
 	}
 
-	#collectDiscoverableMCPToolsFromRegistry(): Map<string, DiscoverableMCPTool> {
-		return new Map(collectDiscoverableMCPTools(this.#toolRegistry.values()).map(tool => [tool.name, tool] as const));
+	#collectDiscoverableMCPToolsFromRegistry(role?: string): Map<string, DiscoverableMCPTool> {
+		const discoverableTools = collectDiscoverableMCPTools(this.#toolRegistry.values());
+		if (!this.#resolveDiscoverableMCPToolNamesForRole) {
+			return new Map(discoverableTools.map(tool => [tool.name, tool] as const));
+		}
+		const allowedNames = new Set(
+			this.#resolveDiscoverableMCPToolNamesForRole(
+				role ?? this.sessionManager.getLastModelChangeRole() ?? "default",
+				discoverableTools.map(tool => tool.name),
+			),
+		);
+		return new Map(
+			discoverableTools.filter(tool => allowedNames.has(tool.name)).map(tool => [tool.name, tool] as const),
+		);
 	}
 
 	#setDiscoverableMCPTools(discoverableMCPTools: Map<string, DiscoverableMCPTool>): void {
@@ -2088,6 +2108,7 @@ export class AgentSession {
 
 	async #applyRoleToolAllowlist(role: MainRole): Promise<void> {
 		if (!this.#resolveToolNamesForRole) return;
+		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry(role));
 		const resolvedToolNames = this.#resolveToolNamesForRole(role, Array.from(this.#toolRegistry.keys()));
 		await this.setActiveToolsByName(resolvedToolNames);
 	}
@@ -2161,7 +2182,9 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
+		this.#setDiscoverableMCPTools(
+			this.#collectDiscoverableMCPToolsFromRegistry(this.sessionManager.getLastModelChangeRole()),
+		);
 		this.#pruneSelectedMCPToolNames();
 		if (!this.sessionManager.buildSessionContext().hasPersistedMCPToolSelection) {
 			this.#selectedMCPToolNames = new Set([

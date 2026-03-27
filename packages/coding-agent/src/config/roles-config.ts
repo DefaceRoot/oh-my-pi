@@ -31,6 +31,9 @@ const AdvancedConfigSchema = Type.Optional(
 		maxRecursionDepth: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
 		compactionStrategy: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 		temperature: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		memoriesEnabled: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+		grepContextBefore: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+		grepContextAfter: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
 	}),
 );
 
@@ -39,6 +42,9 @@ export type AdvancedConfig = {
 	maxRecursionDepth?: number | null;
 	compactionStrategy?: string | null;
 	temperature?: number | null;
+	memoriesEnabled?: boolean | null;
+	grepContextBefore?: number | null;
+	grepContextAfter?: number | null;
 };
 
 // Accepts V1 format ("all", "none", { categories }) AND V2 format ({ auto, frontmatter })
@@ -54,6 +60,7 @@ const RoleSkillsSchema = Type.Union([
 export const RoleConfigSchemaV2 = Type.Object({
 	tools: Type.Array(Type.String({ minLength: 1 })),
 	mcp: Type.Array(Type.String({ minLength: 1 })),
+	disabledTools: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
 	skills: RoleSkillsSchema,
 	fallback: FallbackSchema,
 	advanced: AdvancedConfigSchema,
@@ -61,6 +68,7 @@ export const RoleConfigSchemaV2 = Type.Object({
 
 export const SubagentConfigSchemaV2 = Type.Object({
 	mcp: Type.Array(Type.String({ minLength: 1 })),
+	disabledTools: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
 	skills: Type.Optional(SkillConfigSchema),
 	tools: Type.Optional(Type.Union([ToolsInheritSchema, Type.Array(Type.String({ minLength: 1 }))])),
 	fallback: FallbackSchema,
@@ -91,6 +99,9 @@ function normalizeMcpServers(servers: readonly string[]): string[] {
 function mcpServerListsMatch(left: readonly string[], right: readonly string[]): boolean {
 	if (left.length !== right.length) return false;
 	return left.every((server, index) => server === right[index]);
+}
+function normalizeToolNames(toolNames: readonly string[]): string[] {
+	return Array.from(new Set(toolNames.map(toolName => toolName.trim()).filter(toolName => toolName.length > 0)));
 }
 
 export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
@@ -289,6 +300,9 @@ function cloneRoleConfig(config: RoleConfig): RoleConfig {
 							categories: [...(config.skills as { categories: string[] }).categories],
 						},
 	};
+	if (config.disabledTools !== undefined) {
+		base.disabledTools = normalizeToolNames(config.disabledTools);
+	}
 	if (config.fallback !== undefined) {
 		base.fallback = config.fallback;
 	}
@@ -302,6 +316,9 @@ function cloneSubagentConfig(config: SubagentConfig): SubagentConfig {
 	const base: SubagentConfig = {
 		mcp: [...config.mcp],
 	};
+	if (config.disabledTools !== undefined) {
+		base.disabledTools = normalizeToolNames(config.disabledTools);
+	}
 	if (config.skills !== undefined) {
 		base.skills = cloneSkillConfig(config.skills);
 	}
@@ -426,6 +443,80 @@ export class RolesConfig {
 		}
 		const fallbackSubagent = config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default;
 		return normalizeMcpServers(fallbackSubagent.mcp);
+	}
+
+	getDisabledToolsForRole(role: string): string[] {
+		const config = this.#getConfig();
+		const namedRole = config.roles[role];
+		if (namedRole?.disabledTools) {
+			return normalizeToolNames(namedRole.disabledTools);
+		}
+		const namedSubagent = config.subagents[role];
+		if (namedSubagent?.disabledTools) {
+			return normalizeToolNames(namedSubagent.disabledTools);
+		}
+		const defaultRole = config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		return normalizeToolNames(defaultRole.disabledTools ?? []);
+	}
+
+	setDisabledToolsForRole(role: string, toolNames: string[]): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		const normalized = normalizeToolNames(toolNames);
+		const nextConfig = {
+			...cloneRoleConfig(roleConfig),
+			disabledTools: normalized.length > 0 ? normalized : undefined,
+		};
+		if (normalized.length === 0) {
+			delete nextConfig.disabledTools;
+			if (role !== "default") {
+				const baseRoleConfig = cloneRoleConfig(
+					DEFAULT_ROLES_CONFIG.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default,
+				);
+				if (JSON.stringify(cloneRoleConfig(nextConfig)) === JSON.stringify(baseRoleConfig)) {
+					delete config.roles[role];
+					this.#persistConfig(config);
+					return;
+				}
+			}
+		}
+		config.roles[role] = nextConfig;
+		this.#persistConfig(config);
+	}
+
+	getDisabledToolsForSubagent(agent: string): string[] {
+		const disabledTools = this.#getConfig().subagents[agent]?.disabledTools;
+		return normalizeToolNames(disabledTools ?? []);
+	}
+
+	setDisabledToolsForSubagent(agent: string, toolNames: string[]): void {
+		const config = this.#getConfig();
+		const inheritedMcp = normalizeMcpServers(
+			(config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default).mcp,
+		);
+		const subagentConfig = config.subagents[agent] ?? { mcp: inheritedMcp };
+		const normalized = normalizeToolNames(toolNames);
+		const nextConfig = {
+			...cloneSubagentConfig(subagentConfig),
+			disabledTools: normalized.length > 0 ? normalized : undefined,
+		};
+		if (normalized.length === 0) {
+			delete nextConfig.disabledTools;
+			const hasOtherOverrides =
+				nextConfig.skills !== undefined ||
+				nextConfig.tools !== undefined ||
+				nextConfig.fallback !== undefined ||
+				nextConfig.advanced !== undefined;
+			if (!hasOtherOverrides && mcpServerListsMatch(nextConfig.mcp, inheritedMcp)) {
+				delete config.subagents[agent];
+			} else {
+				config.subagents[agent] = nextConfig;
+			}
+			this.#persistConfig(config);
+			return;
+		}
+		config.subagents[agent] = nextConfig;
+		this.#persistConfig(config);
 	}
 
 	// --- V2 accessors ---
@@ -603,7 +694,10 @@ export class RolesConfig {
 			fallback: fallback ?? undefined,
 		};
 		const hasOtherOverrides =
-			nextConfig.skills !== undefined || nextConfig.tools !== undefined || nextConfig.advanced !== undefined;
+			nextConfig.skills !== undefined ||
+			nextConfig.tools !== undefined ||
+			nextConfig.disabledTools !== undefined ||
+			nextConfig.advanced !== undefined;
 		if (fallback === null && !hasOtherOverrides && mcpServerListsMatch(nextConfig.mcp, inheritedMcp)) {
 			delete config.subagents[agent];
 		} else {
@@ -672,7 +766,10 @@ export class RolesConfig {
 		if (advanced === null) {
 			delete nextConfig.advanced;
 			const hasOtherOverrides =
-				nextConfig.skills !== undefined || nextConfig.tools !== undefined || nextConfig.fallback !== undefined;
+				nextConfig.skills !== undefined ||
+				nextConfig.tools !== undefined ||
+				nextConfig.fallback !== undefined ||
+				nextConfig.disabledTools !== undefined;
 			if (!hasOtherOverrides && mcpServerListsMatch(nextConfig.mcp, inheritedMcp)) {
 				delete config.subagents[agent];
 			} else {

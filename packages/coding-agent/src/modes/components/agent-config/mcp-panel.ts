@@ -17,6 +17,7 @@ export interface McpPanelOptions {
 	 * When false, writes go to role config via setMcpForRole.
 	 */
 	isSubagent: boolean;
+	onServersChange?: (enabledServers: string[]) => void;
 	onClose?: () => void;
 }
 
@@ -39,6 +40,7 @@ export class McpPanel implements Component {
 	readonly #rolesConfig: RolesConfig;
 	readonly #role: string;
 	readonly #isSubagent: boolean;
+	readonly #onServersChange: ((enabledServers: string[]) => void) | undefined;
 	readonly #onClose: (() => void) | undefined;
 	#selectedIndex = 0;
 	#scrollOffset = 0;
@@ -49,6 +51,7 @@ export class McpPanel implements Component {
 		this.#rolesConfig = options.rolesConfig;
 		this.#role = options.role;
 		this.#isSubagent = options.isSubagent;
+		this.#onServersChange = options.onServersChange;
 		this.#onClose = options.onClose;
 	}
 
@@ -159,6 +162,7 @@ export class McpPanel implements Component {
 		} else {
 			this.#rolesConfig.setMcpForRole(this.#role, serverList);
 		}
+		this.#onServersChange?.(serverList);
 	}
 
 	/** Adjust #scrollOffset so that idx falls within the visible window. */

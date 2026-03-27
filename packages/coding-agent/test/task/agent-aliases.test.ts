@@ -65,9 +65,9 @@ function createSession(disabledAgents: string[] = []) {
 	} as Parameters<typeof TaskTool.create>[0];
 }
 
-function collectText(result: Awaited<ReturnType<InstanceType<typeof TaskTool>["execute"]>>): string {
+function collectText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
-		.map(part => (part.type === "text" ? part.text : ""))
+		.map((part: { type: string; text?: string }) => (part.type === "text" ? (part.text ?? "") : ""))
 		.filter(Boolean)
 		.join("\n");
 }

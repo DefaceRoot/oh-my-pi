@@ -4,10 +4,11 @@ import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 
 /** Effective state of a single tool from the perspective of the panel. */
-export type ToolState = "enabled" | "disabled" | "inherited" | "added" | "removed";
+export type ToolState = "enabled" | "disabled" | "inherited" | "added" | "removed" | "blocked";
 
 export type ToolsConfigChange =
 	| { tools: string[] }
+	| { disabledTools: string[] }
 	| { inheritConfig: ToolsInheritConfig }
 	| { clearInheritConfig: true };
 
@@ -29,11 +30,14 @@ export interface ToolsConfigPanelOptions {
 	directTools?: string[];
 	/** Resolved effective tool list for the current config. */
 	resolvedTools: string[];
-	/**
-	 * Tools inherited from the subagent's base before local add/remove overrides.
-	 * Pass [] in role mode.
-	 */
+	/** Tools inherited from the subagent's base before local add/remove overrides. */
 	inheritedTools: string[];
+	/** MCP-derived tools enabled by the current server selection before per-tool disables. */
+	mcpEnabledTools: string[];
+	/** MCP tool names known for this role. */
+	mcpTools: string[];
+	/** Explicit per-tool opt-outs persisted separately from tool allowlists. */
+	disabledTools: string[];
 	/**
 	 * For config-less subagents: the role to use as the inherit source when bootstrapping
 	 * a new ToolsInheritConfig. Without this the emitted config falls back to "default",
@@ -72,6 +76,9 @@ export class ToolsConfigPanel implements Component {
 	#inheritConfig: ToolsInheritConfig;
 	#inheritedTools: Set<string>;
 	#directTools: Set<string>;
+	#mcpEnabledTools: Set<string>;
+	#mcpTools: Set<string>;
+	#disabledTools: Set<string>;
 	#resolvedTools: Set<string>;
 	readonly #callbacks: ToolsConfigPanelCallbacks;
 	#selectedIndex = 0;
@@ -89,9 +96,10 @@ export class ToolsConfigPanel implements Component {
 		this.#inheritConfig = cloneInheritConfig(options.inheritConfig ?? {});
 		this.#inheritedTools = new Set(options.inheritedTools);
 		this.#directTools = new Set(options.directTools ?? []);
-		this.#resolvedTools = this.#isSubagent
-			? this.#computeResolvedSubagentTools(this.#inheritConfig)
-			: new Set(options.directTools ?? options.resolvedTools);
+		this.#mcpEnabledTools = new Set(options.mcpEnabledTools);
+		this.#mcpTools = new Set(options.mcpTools);
+		this.#disabledTools = new Set(options.disabledTools);
+		this.#resolvedTools = new Set(options.resolvedTools);
 		this.#callbacks = options.callbacks;
 	}
 
@@ -103,6 +111,9 @@ export class ToolsConfigPanel implements Component {
 		directTools?: string[];
 		resolvedTools: string[];
 		inheritedTools: string[];
+		mcpEnabledTools: string[];
+		mcpTools: string[];
+		disabledTools: string[];
 		inheritBase?: string;
 		hasPersistedInheritConfig?: boolean;
 	}): void {
@@ -114,9 +125,10 @@ export class ToolsConfigPanel implements Component {
 		this.#inheritConfig = cloneInheritConfig(options.inheritConfig ?? {});
 		this.#inheritedTools = new Set(options.inheritedTools);
 		this.#directTools = new Set(options.directTools ?? []);
-		this.#resolvedTools = this.#isSubagent
-			? this.#computeResolvedSubagentTools(this.#inheritConfig)
-			: new Set(options.directTools ?? options.resolvedTools);
+		this.#mcpEnabledTools = new Set(options.mcpEnabledTools);
+		this.#mcpTools = new Set(options.mcpTools);
+		this.#disabledTools = new Set(options.disabledTools);
+		this.#resolvedTools = new Set(options.resolvedTools);
 		this.#selectedIndex = Math.max(0, Math.min(this.#selectedIndex, this.#allTools.length - 1));
 	}
 
@@ -132,7 +144,7 @@ export class ToolsConfigPanel implements Component {
 		let header = `  Tools: ${effectiveCount} effective`;
 		if (this.#isSubagent) {
 			const addCount = this.#inheritConfig.add?.length ?? 0;
-			const removeCount = this.#inheritConfig.remove?.length ?? 0;
+			const removeCount = (this.#inheritConfig.remove?.length ?? 0) + this.#disabledTools.size;
 			const inheritFrom = this.#inheritConfig.inherit ?? this.#inheritBase ?? "default";
 			const parts: string[] = [`inherit: ${inheritFrom}`];
 			if (addCount > 0) parts.push(`+${addCount}`);
@@ -150,15 +162,19 @@ export class ToolsConfigPanel implements Component {
 			const off = theme.fg("dim", "[ ]");
 			lines.push(
 				truncateToWidth(
-					` ${inherited}=inherited  ${added}=added  ${removed}=removed  ${off}=off   space:cycle`,
+					` ${inherited}=inherited  ${added}=added  ${removed}=removed/blocked  ${off}=off   space:cycle`,
 					width,
 				),
 			);
 		} else {
 			const enabled = theme.fg("success", "[✓]");
+			const blocked = theme.fg("error", "[-]");
 			const disabled = theme.fg("dim", "[ ]");
-			lines.push(truncateToWidth(` ${enabled}=enabled  ${disabled}=disabled   space:toggle`, width));
+			lines.push(
+				truncateToWidth(` ${enabled}=enabled  ${blocked}=blocked  ${disabled}=disabled   space:toggle`, width),
+			);
 		}
+		lines.push("");
 		lines.push("");
 
 		if (this.#allTools.length === 0) {
@@ -188,7 +204,7 @@ export class ToolsConfigPanel implements Component {
 
 			if (isSelected) {
 				nameStr = theme.fg("accent", theme.bold(nameStr));
-			} else if (state === "disabled" || state === "removed") {
+			} else if (state === "disabled" || state === "removed" || state === "blocked") {
 				nameStr = theme.fg("dim", nameStr);
 			}
 
@@ -240,14 +256,14 @@ export class ToolsConfigPanel implements Component {
 	 *   otherwise  → disabled
 	 */
 	#getToolState(tool: string): ToolState {
+		if (this.#disabledTools.has(tool)) return this.#isSubagent ? "removed" : "blocked";
 		if (this.#isSubagent) {
-			// Match resolver precedence: remove[] applied after add[], so remove wins on overlap.
 			if (this.#inheritConfig.remove?.includes(tool)) return "removed";
 			if (this.#inheritConfig.add?.includes(tool)) return "added";
-			if (this.#inheritedTools.has(tool)) return "inherited";
+			if (this.#inheritedTools.has(tool) || this.#mcpEnabledTools.has(tool)) return "inherited";
 			return "disabled";
 		}
-		return this.#directTools.has(tool) ? "enabled" : "disabled";
+		return this.#directTools.has(tool) || this.#mcpEnabledTools.has(tool) ? "enabled" : "disabled";
 	}
 
 	#renderStateTag(state: ToolState): string {
@@ -261,6 +277,7 @@ export class ToolsConfigPanel implements Component {
 			case "added":
 				return theme.fg("success", "[+]");
 			case "removed":
+			case "blocked":
 				return theme.fg("error", "[-]");
 		}
 	}
@@ -279,6 +296,12 @@ export class ToolsConfigPanel implements Component {
 	#cycleToolState(): void {
 		const tool = this.#allTools[this.#selectedIndex];
 		if (!tool) return;
+		if (this.#mcpTools.has(tool)) {
+			if (this.#mcpEnabledTools.has(tool) || this.#disabledTools.has(tool)) {
+				this.#toggleMcpToolState(tool);
+			}
+			return;
+		}
 
 		if (this.#isSubagent) {
 			this.#cycleSubagentToolState(tool);
@@ -295,8 +318,20 @@ export class ToolsConfigPanel implements Component {
 			newTools.add(tool);
 		}
 		this.#directTools = newTools;
-		this.#resolvedTools = new Set(newTools);
+		this.#resolvedTools = this.#computeResolvedSubagentTools(this.#inheritConfig, newTools);
 		this.#callbacks.onConfigChange({ tools: Array.from(newTools) });
+	}
+
+	#toggleMcpToolState(tool: string): void {
+		const nextDisabled = new Set(this.#disabledTools);
+		if (nextDisabled.has(tool)) {
+			nextDisabled.delete(tool);
+		} else {
+			nextDisabled.add(tool);
+		}
+		this.#disabledTools = nextDisabled;
+		this.#resolvedTools = this.#computeResolvedSubagentTools(this.#inheritConfig, this.#directTools);
+		this.#callbacks.onConfigChange({ disabledTools: Array.from(nextDisabled) });
 	}
 
 	#cycleSubagentToolState(tool: string): void {
@@ -342,7 +377,7 @@ export class ToolsConfigPanel implements Component {
 			newConfig.inherit = this.#inheritBase;
 		}
 
-		this.#resolvedTools = this.#computeResolvedSubagentTools(newConfig);
+		this.#resolvedTools = this.#computeResolvedSubagentTools(newConfig, this.#directTools);
 		this.#inheritConfig = newConfig;
 
 		// If a config-less subagent cycled back to a no-op (no add/remove/inherit), emit
@@ -355,12 +390,18 @@ export class ToolsConfigPanel implements Component {
 		}
 	}
 
-	#computeResolvedSubagentTools(config: ToolsInheritConfig): Set<string> {
-		const resolved = new Set(this.#inheritedTools);
+	#computeResolvedSubagentTools(
+		config: ToolsInheritConfig,
+		directTools: Set<string> = this.#directTools,
+	): Set<string> {
+		const resolved = new Set(this.#isSubagent ? this.#inheritedTools : directTools);
+		for (const tool of this.#mcpEnabledTools) {
+			resolved.add(tool);
+		}
 		for (const tool of config.add ?? []) {
 			resolved.add(tool);
 		}
-		for (const tool of config.remove ?? []) {
+		for (const tool of [...(config.remove ?? []), ...this.#disabledTools]) {
 			resolved.delete(tool);
 		}
 		return resolved;
