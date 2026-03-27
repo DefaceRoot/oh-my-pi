@@ -6,6 +6,7 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
 
 type RolesConfigContract = {
 	getToolsForRole(role: string): string[] | Promise<string[]>;
+	setToolsForRole(role: string, tools: string[]): void;
 	getMcpForRole(role: string): string[] | Promise<string[]>;
 	getMcpForSubagent(agentName: string): string[] | Promise<string[]>;
 	// V2 accessors
@@ -198,7 +199,6 @@ subagents:
 		expect(await resolveArray(rolesConfig.getMcpForRole("ask-explore"))).toEqual([]);
 		expect(await resolveArray(rolesConfig.getMcpForRole("unknown-role"))).toEqual(["augment"]);
 	});
-
 });
 
 describe("RolesConfig V2 accessors", () => {
@@ -442,7 +442,6 @@ subagents:
 	});
 });
 
-
 describe("RolesConfig fallback accessors", () => {
 	let tempDir: string;
 	let rolesPath: string;
@@ -655,5 +654,285 @@ subagents:
 		expect(rolesConfig.getFallbackForRole("orchestrator")).toBeNull();
 		// unknown role — must NOT inherit from default
 		expect(rolesConfig.getFallbackForRole("nonexistent")).toBeNull();
+	});
+});
+
+describe("RolesConfig tools accessors", () => {
+	let tempDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-tools-${Snowflake.next()}`);
+		await fs.mkdir(tempDir, { recursive: true });
+		rolesPath = path.join(tempDir, "roles.yml");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	const writeRoles = async (content: string) => {
+		await fs.writeFile(rolesPath, content, "utf8");
+	};
+
+	it("getToolsForRole returns default tools when role does not exist", async () => {
+		const { RolesConfig } = await loadRolesConfigModule();
+		// No file — uses hardcoded defaults
+		const rolesConfig = new RolesConfig(rolesPath);
+		const tools = rolesConfig.getToolsForRole("totally-unknown-role");
+		expect(tools).toContain("read");
+		expect(tools).toContain("write");
+	});
+
+	it("setToolsForRole / getToolsForRole round-trip with persistence", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		rolesConfig.setToolsForRole("default", ["read", "grep", "bash"]);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getToolsForRole("default")).toEqual(["read", "grep", "bash"]);
+	});
+
+	it("setToolsForRole creates a new role entry when role does not exist", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		rolesConfig.setToolsForRole("custom-role", ["read", "write", "task"]);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getToolsForRole("custom-role")).toEqual(["read", "write", "task"]);
+	});
+
+	it("getToolsForSubagent returns null for subagent with no tools config", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  no-tools-agent:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		// Subagent exists but has no tools field — null signals "use agent defaults"
+		expect(rolesConfig.getToolsForSubagent("no-tools-agent")).toBeNull();
+		// Unknown subagent — also null
+		expect(rolesConfig.getToolsForSubagent("completely-unknown")).toBeNull();
+	});
+
+	it("getToolsForSubagent returns empty array for tools:[] (distinct from null)", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  empty-tools-agent:
+    mcp:
+      - augment
+    tools: []
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		const result = rolesConfig.getToolsForSubagent("empty-tools-agent");
+		// [] is not null — caller knows tools are explicitly restricted to nothing
+		expect(result).not.toBeNull();
+		expect(result).toEqual([]);
+	});
+
+	it("getToolsForSubagent subagent-to-subagent inheritance applies add/remove", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - write
+      - bash
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  base-agent:
+    mcp:
+      - augment
+    tools:
+      - read
+      - write
+  derived-agent:
+    mcp:
+      - augment
+    tools:
+      inherit: base-agent
+      add:
+        - task
+      remove:
+        - write
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		const result = rolesConfig.getToolsForSubagent("derived-agent");
+		expect(result).not.toBeNull();
+		expect(result).toContain("read");
+		expect(result).toContain("task");
+		expect(result).not.toContain("write");
+	});
+
+	it("circular reference detection: self-referencing inherit breaks cycle", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - write
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  cycle-agent:
+    mcp:
+      - augment
+    tools:
+      inherit: cycle-agent
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		// cycle-agent inherits from itself; cycle must break to default role tools
+		const result = rolesConfig.getToolsForSubagent("cycle-agent");
+		expect(result).not.toBeNull();
+		expect(result).toContain("read");
+		expect(result).toContain("write");
+	});
+
+	it("circular reference detection: mutual reference between two subagents", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  agent-a:
+    mcp:
+      - augment
+    tools:
+      inherit: agent-b
+      add:
+        - bash
+  agent-b:
+    mcp:
+      - augment
+    tools:
+      inherit: agent-a
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		// Mutual reference must not infinite-loop; bash added after cycle breaks
+		const result = rolesConfig.getToolsForSubagent("agent-a");
+		expect(result).not.toBeNull();
+		expect(result).toContain("bash");
+	});
+
+	it("unknown inherit name falls back to default role tools", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - grep
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  bad-inherit-agent:
+    mcp:
+      - augment
+    tools:
+      inherit: nonexistent-role-or-agent
+      add:
+        - bash
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		const result = rolesConfig.getToolsForSubagent("bad-inherit-agent");
+		expect(result).not.toBeNull();
+		// Falls back to default role, then applies add
+		expect(result).toContain("read");
+		expect(result).toContain("grep");
+		expect(result).toContain("bash");
+	});
+
+	it("setToolsForSubagent / getToolsForSubagent round-trip with ToolsInheritConfig", async () => {
+		await writeRoles(`roles:
+  default:
+    tools:
+      - read
+      - write
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+  my-agent:
+    mcp:
+      - augment
+`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+		rolesConfig.setToolsForSubagent("my-agent", { inherit: "default", add: ["task"], remove: ["write"] });
+
+		// Verify via fresh instance (proves persistence)
+		const fresh = new RolesConfig(rolesPath);
+		const result = fresh.getToolsForSubagent("my-agent");
+		expect(result).not.toBeNull();
+		expect(result).toContain("read");
+		expect(result).toContain("task");
+		expect(result).not.toContain("write");
 	});
 });

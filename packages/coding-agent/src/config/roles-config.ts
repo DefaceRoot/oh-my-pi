@@ -72,7 +72,6 @@ const RolesConfigSchema = Type.Object({
 	subagents: Type.Record(Type.String({ minLength: 1 }), SubagentConfigSchema),
 });
 
-type RoleSkillsConfig = Static<typeof RoleSkillsSchema>;
 type RoleConfig = Static<typeof RoleConfigSchema>;
 type SubagentConfig = Static<typeof SubagentConfigSchema>;
 export type RolesConfigData = Static<typeof RolesConfigSchema>;
@@ -375,6 +374,16 @@ export class RolesConfig {
 		return [...this.#getRole(role).tools];
 	}
 
+	setToolsForRole(role: string, tools: string[]): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		config.roles[role] = {
+			...cloneRoleConfig(roleConfig),
+			tools: [...tools],
+		};
+		this.#persistConfig(config);
+	}
+
 	getMcpForRole(role: string): string[] {
 		const config = this.#getConfig();
 		const namedRole = config.roles[role];
@@ -475,7 +484,14 @@ export class RolesConfig {
 	 * - If tools is a ToolsInheritConfig: resolves by inheriting from the named role
 	 *   (defaulting to "default"), then applying `add` and `remove` patches.
 	 */
-	getToolsForSubagent(agent: string): string[] | null {
+	getToolsForSubagent(agent: string, _visited?: Set<string>): string[] | null {
+		const visited = _visited ?? new Set<string>();
+		if (visited.has(agent)) {
+			// Cycle detected — break by returning a copy of the default role tools
+			return [...this.getToolsForRole("default")];
+		}
+		visited.add(agent);
+
 		const config = this.#getConfig();
 		const subagentConfig = config.subagents[agent];
 		if (!subagentConfig || subagentConfig.tools === undefined) {
@@ -489,9 +505,23 @@ export class RolesConfig {
 		}
 
 		// ToolsInheritConfig — resolve inheritance
+		// Role takes priority over subagent for the same name (backward compat).
+		// If inherit references neither a role nor a subagent, falls back to "default".
 		const toolsInherit = tools as ToolsInheritConfig;
 		const inheritFrom = toolsInherit.inherit ?? "default";
-		let result = [...this.getToolsForRole(inheritFrom)];
+
+		let result: string[];
+		if (config.roles[inheritFrom] !== undefined) {
+			result = [...this.getToolsForRole(inheritFrom)];
+		} else if (config.subagents[inheritFrom] !== undefined) {
+			// Recurse into subagent with cycle detection
+			const inherited = this.getToolsForSubagent(inheritFrom, visited);
+			// If the referenced subagent has no tools config, fall back to default role
+			result = inherited ?? [...this.getToolsForRole("default")];
+		} else {
+			// Unknown name — fall back to default role
+			result = [...this.getToolsForRole("default")];
+		}
 
 		if (toolsInherit.add) {
 			result = [...result, ...toolsInherit.add];
