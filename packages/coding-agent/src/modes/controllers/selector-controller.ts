@@ -1,14 +1,15 @@
+import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
-import * as path from "node:path";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { MODEL_ROLE_IDS_BY_CATEGORY, MODEL_ROLES } from "../../config/model-registry";
 import { RolesConfig } from "../../config/roles-config";
 import { settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
+import { discoverMCPServerNames } from "../../mcp/config";
 import {
 	getAvailableThemes,
 	getSymbolTheme,
@@ -21,20 +22,22 @@ import {
 import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { discoverAgents } from "../../task/discovery";
 import {
+	getManagedToolNames,
 	isCodeSearchProviderId,
+	isHiddenToolName,
 	isSearchProviderPreference,
 	setPreferredCodeSearchProvider,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 } from "../../tools";
-import { discoverMCPServerNames } from "../../mcp/config";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
+import { AgentConfigModal } from "../components/agent-config";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
-import { AgentConfigModal } from "../components/agent-config";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { SessionSelectorComponent } from "../components/session-selector";
@@ -446,19 +449,49 @@ export class SelectorController {
 		).catch(() => []);
 		const runtimeServers = this.ctx.mcpManager?.getAllServerNames() ?? [];
 		const coreRoleServers = MODEL_ROLE_IDS_BY_CATEGORY.core.flatMap(role => rolesConfig.getMcpForRole(role));
-		const subagentRoleServers = [
-			...MODEL_ROLE_IDS_BY_CATEGORY.captain,
-			...MODEL_ROLE_IDS_BY_CATEGORY.crew,
-		].flatMap(role => rolesConfig.getMcpForSubagent(role));
+		const subagentRoleServers = [...MODEL_ROLE_IDS_BY_CATEGORY.captain, ...MODEL_ROLE_IDS_BY_CATEGORY.crew].flatMap(
+			role => rolesConfig.getMcpForSubagent(role),
+		);
 		const defaultSubagentServers = rolesConfig.getMcpForSubagent("_default");
 		const knownMcpServers = [
-			...new Set([...discovered, ...runtimeServers, ...coreRoleServers, ...subagentRoleServers, ...defaultSubagentServers]),
+			...new Set([
+				...discovered,
+				...runtimeServers,
+				...coreRoleServers,
+				...subagentRoleServers,
+				...defaultSubagentServers,
+			]),
 		];
+		const { agents } = await discoverAgents(this.ctx.settings.getCwd());
+		const subagentDefaultTools = Object.fromEntries(
+			agents.filter(agent => agent.tools !== undefined).map(agent => [agent.name, [...(agent.tools ?? [])]]),
+		) as Partial<Record<string, string[]>>;
+		const rolesSnapshot = rolesConfig.getFullConfig();
+		const configuredSubagentTools = Object.values(rolesSnapshot.subagents).flatMap(subagentConfig => {
+			if (subagentConfig.tools === undefined) return [];
+			if (Array.isArray(subagentConfig.tools)) return subagentConfig.tools.filter(tool => !isHiddenToolName(tool));
+			return [...(subagentConfig.tools.add ?? []), ...(subagentConfig.tools.remove ?? [])].filter(
+				tool => !isHiddenToolName(tool),
+			);
+		});
+		const knownTools = [
+			...new Set([
+				...getManagedToolNames(),
+				...agents.flatMap(agent => (agent.tools ?? []).filter(tool => !isHiddenToolName(tool))),
+				...Object.values(rolesSnapshot.roles).flatMap(roleConfig =>
+					roleConfig.tools.filter(tool => !isHiddenToolName(tool)),
+				),
+				...configuredSubagentTools,
+			]),
+		];
+
 		const discoveredSkills = [...this.ctx.session.skills];
 		this.showSelector(done => {
 			const modal = new AgentConfigModal({
 				settings: this.ctx.settings,
 				rolesConfig,
+				knownTools,
+				subagentDefaultTools,
 				knownMcpServers,
 				discoveredSkills,
 				onDismiss: () => {
