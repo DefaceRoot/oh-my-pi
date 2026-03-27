@@ -1,4 +1,4 @@
-import { type Component, matchesKey, padding, TabBar, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, hasCursorMarker, matchesKey, padding, TabBar, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { MODEL_ROLE_IDS_BY_CATEGORY, type ModelRegistry, type ModelRole } from "../../../config/model-registry";
 import {
 	findExactModelReferenceMatch,
@@ -449,9 +449,11 @@ export class AgentConfigModal implements Component {
 			if (overlayIndex < 0 || overlayIndex >= overlayLines.length) {
 				return line;
 			}
-			const overlayLine = truncateToWidth(overlayLines[overlayIndex] ?? "", overlayWidth);
-			const leftPad = Math.max(0, Math.floor((width - visibleWidth(overlayLine)) / 2));
-			const rightPad = Math.max(0, width - leftPad - visibleWidth(overlayLine));
+			const rawOverlayLine = overlayLines[overlayIndex] ?? "";
+			const overlayLine = hasCursorMarker(rawOverlayLine) ? rawOverlayLine : truncateToWidth(rawOverlayLine, overlayWidth);
+			const overlayLineWidth = visibleWidth(overlayLine);
+			const leftPad = Math.max(0, Math.floor((width - overlayLineWidth) / 2));
+			const rightPad = Math.max(0, width - leftPad - overlayLineWidth);
 			return `${padding(leftPad)}${overlayLine}${padding(rightPad)}`;
 		});
 	}

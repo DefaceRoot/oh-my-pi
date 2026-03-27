@@ -475,6 +475,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.eventController = new EventController(this);
 		this.commandController = new CommandController(this);
 		this.selectorController = new SelectorController(this);
+		this.selectorController.initPresetsForStatusLine();
 		this.inputController = new InputController(this);
 	}
 

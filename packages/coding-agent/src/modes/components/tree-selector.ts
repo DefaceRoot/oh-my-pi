@@ -3,6 +3,7 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
+	hasCursorMarker,
 	Input,
 	matchesKey,
 	Spacer,
@@ -799,7 +800,7 @@ class LabelInput implements Component {
 		const indent = "  ";
 		const availableWidth = width - indent.length;
 		lines.push(truncateToWidth(`${indent}${theme.fg("muted", "Label (empty to remove):")}`, width));
-		lines.push(...this.#input.render(availableWidth).map(line => truncateToWidth(`${indent}${line}`, width)));
+		lines.push(...this.#input.render(availableWidth).map(line => (hasCursorMarker(line) ? `${indent}${line}` : truncateToWidth(`${indent}${line}`, width))));
 		lines.push(truncateToWidth(`${indent}${theme.fg("dim", "enter: save  esc: cancel")}`, width));
 		return lines;
 	}
