@@ -552,8 +552,8 @@ export class CommandController {
 		| \`${key("app.thinking.cycle", "Shift+Tab")}\` | Cycle thinking level |
 		| \`${key("app.model.cycleForward", "Ctrl+P")}\` | Cycle role models (slow/default/smol) |
 		| \`${key("app.model.cycleBackward", "Shift+Ctrl+P")}\` | Cycle role models temporarily |
-		| \`${key("app.model.select.temporary", "Alt+P")}\` | Select model (temporary) |
-		| \`${key("app.model.select", "Ctrl+L")}\` | Select model (set roles) |
+		| \`${key("app.presets", "Alt+P")}\` | Open preset selector |
+		${optionalRow(key("app.model.select.temporary", ""), "Select model (temporary)")}| \`${key("app.model.select", "Ctrl+L")}\` | Select model (set roles) |
 		| \`${key("app.agent.cycleMode", "Alt+A")}\` | Cycle agent mode (Default/Orchestrator/Plan/Ask) |
 		| \`${key("app.plan.toggle", "Alt+Shift+P")}\` | Toggle plan mode |
 		| \`${key("app.history.search", "Ctrl+R")}\` | Search prompt history |

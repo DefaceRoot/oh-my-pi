@@ -397,6 +397,12 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.agent.cycleMode")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.cycleAgentMode());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.presets")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showPresetSelector();
+				return undefined;
+			});
+		}
 		for (const menu of WORKFLOW_MENUS) {
 			for (const key of this.ctx.keybindings.getKeys(menu.hotkeyAction)) {
 				this.ctx.editor.setCustomKeyHandler(key, () => {

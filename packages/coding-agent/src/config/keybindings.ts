@@ -54,6 +54,7 @@ interface AppKeybindings {
 	"app.agent.cycleMode": true;
 	"app.lazygit": true;
 	"app.worktree.toggle": true;
+	"app.presets": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -204,8 +205,12 @@ export const KEYBINDINGS = {
 		description: "Cycle agent mode",
 	},
 	"app.model.select.temporary": {
-		defaultKeys: "alt+p",
+		defaultKeys: [],
 		description: "Select model (temporary)",
+	},
+	"app.presets": {
+		defaultKeys: "alt+p",
+		description: "Open preset selector",
 	},
 	"app.lazygit": {
 		defaultKeys: "ctrl+g",
