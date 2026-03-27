@@ -6,3 +6,11 @@ export {
 	type SkillConfigPanelCallbacks,
 	type SkillConfigPanelOptions,
 } from "./skill-config-panel";
+
+export {
+	type ToolState,
+	type ToolsConfigChange,
+	ToolsConfigPanel,
+	type ToolsConfigPanelCallbacks,
+	type ToolsConfigPanelOptions,
+} from "./tools-config-panel";
