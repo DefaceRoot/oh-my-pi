@@ -61,7 +61,7 @@ function createModal(
 	options: {
 		subagentDefaultTools?: Partial<Record<string, string[]>>;
 		modelRoles?: Partial<Record<string, string>>;
-		values?: Record<string, string | undefined>;
+		values?: Record<string, unknown>;
 	} = {},
 ): AgentConfigModal {
 	const subagentDefaultTools = options.subagentDefaultTools ?? {};
@@ -100,6 +100,17 @@ function openToolsTab(modal: AgentConfigModal): void {
 		modal.handleInput("\x1b[C");
 	}
 	throw new Error(`Tools tab not found in modal:\n${renderText(modal)}`);
+}
+
+function openAdvancedTab(modal: AgentConfigModal): void {
+	modal.handleInput("\t");
+	for (let i = 0; i < 7; i++) {
+		if (renderText(modal).includes("Max Task Recursion")) {
+			return;
+		}
+		modal.handleInput("\x1b[C");
+	}
+	throw new Error(`Advanced tab not found in modal:\n${renderText(modal)}`);
 }
 
 describe("AgentConfigModal tools integration", () => {
@@ -638,6 +649,187 @@ subagents:
 			focusModelTab(modal);
 			modal.handleInput(" ");
 
+			expect(rolesConfig.getFullConfig().subagents.explore).toBeUndefined();
+			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("AgentConfigModal advanced integration", () => {
+	test("shows global defaults and persists role advanced overrides", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-advanced-role-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		try {
+			await fs.writeFile(
+				rolesPath,
+				`roles:
+				  default:
+				    tools:
+				      - ast_grep
+				    mcp:
+				      - augment
+				    skills: all
+				subagents:
+				  _default:
+				    mcp:
+				      - augment
+				`,
+				"utf8",
+			);
+			const rolesConfig = new RolesConfig(rolesPath);
+			const modal = createModal(rolesConfig, {
+				values: {
+					defaultThinkingLevel: "high",
+					"task.maxRecursionDepth": 2,
+					"compaction.strategy": "context-full",
+					temperature: -1,
+				},
+			});
+
+			openAdvancedTab(modal);
+			const rendered = renderText(modal);
+			expect(rendered).toContain("Thinking Level");
+			expect(rendered).toContain("global");
+			expect(rendered).toContain("high");
+			expect(rendered).toContain("context-full");
+			expect(rendered).toContain("provider default (-1)");
+
+			modal.handleInput(" ");
+			expect(rolesConfig.getAdvancedForRole("default")).toEqual({ thinkingLevel: "off" });
+
+			modal.handleInput("j");
+			modal.handleInput("\n");
+			modal.handleInput("5");
+			modal.handleInput("\n");
+
+			expect(rolesConfig.getAdvancedForRole("default")).toEqual({
+				thinkingLevel: "off",
+				maxRecursionDepth: 5,
+			});
+			expect(renderText(modal)).toContain("5");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("persists subagent advanced changes through subagent accessors", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-advanced-subagent-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		try {
+			await fs.writeFile(
+				rolesPath,
+				[
+					"roles:",
+					"  default:",
+					"    tools:",
+					"      - read",
+					"    mcp:",
+					"      - augment",
+					"    skills: all",
+					"subagents:",
+					"  _default:",
+					"    mcp:",
+					"      - augment",
+					"  explore:",
+					"    mcp:",
+					"      - augment",
+					"    advanced:",
+					"      thinkingLevel: low",
+					"      temperature: 0.7",
+				].join("\n"),
+				"utf8",
+			);
+			const rolesConfig = new RolesConfig(rolesPath);
+			const modal = createModal(rolesConfig, {
+				values: {
+					defaultThinkingLevel: "high",
+					"task.maxRecursionDepth": 2,
+					"compaction.strategy": "context-full",
+					temperature: -1,
+				},
+			});
+
+			for (let i = 0; i < 8; i++) {
+				modal.handleInput("j");
+			}
+
+			openAdvancedTab(modal);
+			expect(renderText(modal)).toContain("0.7");
+			expect(renderText(modal)).toContain("low");
+
+			modal.handleInput(" ");
+			expect(rolesConfig.getAdvancedForSubagent("explore")).toEqual({
+				thinkingLevel: "medium",
+				temperature: 0.7,
+			});
+			expect(rolesConfig.getFullConfig().subagents.explore?.mcp).toEqual(["augment"]);
+			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+			expect(rolesConfig.getAdvancedForRole("explore")).toBeNull();
+
+			modal.handleInput("r");
+			expect(rolesConfig.getAdvancedForSubagent("explore")).toEqual({ temperature: 0.7 });
+			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+			expect(renderText(modal)).toContain("global");
+
+			modal.handleInput("j");
+			modal.handleInput("j");
+			modal.handleInput("j");
+			modal.handleInput("r");
+
+			expect(rolesConfig.getAdvancedForSubagent("explore")).toBeNull();
+			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+			expect(rolesConfig.getAdvancedForRole("explore")).toBeNull();
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("resetting inherited advanced state is a no-op for unconfigured roles and subagents", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-advanced-reset-noop-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		try {
+			await fs.writeFile(
+				rolesPath,
+				[
+					"roles:",
+					"  default:",
+					"    tools:",
+					"      - read",
+					"    mcp:",
+					"      - augment",
+					"    skills: all",
+					"subagents:",
+					"  _default:",
+					"    mcp:",
+					"      - augment",
+				].join("\n"),
+				"utf8",
+			);
+			const rolesConfig = new RolesConfig(rolesPath);
+			const values = {
+				defaultThinkingLevel: "high",
+				"task.maxRecursionDepth": 2,
+				"compaction.strategy": "context-full",
+				temperature: -1,
+			};
+
+			const askModal = createModal(rolesConfig, { values });
+			askModal.handleInput("j");
+			openAdvancedTab(askModal);
+			expect(rolesConfig.getFullConfig().roles.ask).toBeUndefined();
+			askModal.handleInput("r");
+			expect(rolesConfig.getFullConfig().roles.ask).toBeUndefined();
+
+			const exploreModal = createModal(rolesConfig, { values });
+			for (let i = 0; i < 8; i++) {
+				exploreModal.handleInput("j");
+			}
+			openAdvancedTab(exploreModal);
+			expect(rolesConfig.getFullConfig().subagents.explore).toBeUndefined();
+			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
+			exploreModal.handleInput("r");
 			expect(rolesConfig.getFullConfig().subagents.explore).toBeUndefined();
 			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
 		} finally {

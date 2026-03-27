@@ -616,11 +616,30 @@ export class RolesConfig {
 	/** Sets the advanced config for a role and persists. Pass null to clear. */
 	setAdvancedForRole(role: string, advanced: AdvancedConfig | null): void {
 		const config = this.#getConfig();
-		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
-		config.roles[role] = {
+		const existingRoleConfig = config.roles[role];
+		if (advanced === null && existingRoleConfig?.advanced === undefined) return;
+
+		const roleConfig = existingRoleConfig ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		const nextConfig = {
 			...cloneRoleConfig(roleConfig),
 			advanced: advanced !== null ? cloneAdvancedConfig(advanced) : undefined,
 		};
+
+		if (advanced === null) {
+			delete nextConfig.advanced;
+			if (role !== "default") {
+				const baseRoleConfig = cloneRoleConfig(
+					DEFAULT_ROLES_CONFIG.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default,
+				);
+				if (JSON.stringify(cloneRoleConfig(nextConfig)) === JSON.stringify(baseRoleConfig)) {
+					delete config.roles[role];
+					this.#persistConfig(config);
+					return;
+				}
+			}
+		}
+
+		config.roles[role] = nextConfig;
 		this.#persistConfig(config);
 	}
 
@@ -633,11 +652,32 @@ export class RolesConfig {
 	/** Sets the advanced config for a subagent and persists. Pass null to clear. */
 	setAdvancedForSubagent(agent: string, advanced: AdvancedConfig | null): void {
 		const config = this.#getConfig();
-		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
-		config.subagents[agent] = {
+		const existingSubagentConfig = config.subagents[agent];
+		if (advanced === null && existingSubagentConfig?.advanced === undefined) return;
+
+		const inheritedMcp = normalizeMcpServers(
+			(config.subagents._default ?? DEFAULT_ROLES_CONFIG.subagents._default).mcp,
+		);
+		const subagentConfig = existingSubagentConfig ?? { mcp: inheritedMcp };
+		const nextConfig = {
 			...cloneSubagentConfig(subagentConfig),
 			advanced: advanced !== null ? cloneAdvancedConfig(advanced) : undefined,
 		};
+
+		if (advanced === null) {
+			delete nextConfig.advanced;
+			const hasOtherOverrides =
+				nextConfig.skills !== undefined || nextConfig.tools !== undefined || nextConfig.fallback !== undefined;
+			if (!hasOtherOverrides && mcpServerListsMatch(nextConfig.mcp, inheritedMcp)) {
+				delete config.subagents[agent];
+			} else {
+				config.subagents[agent] = nextConfig;
+			}
+			this.#persistConfig(config);
+			return;
+		}
+
+		config.subagents[agent] = nextConfig;
 		this.#persistConfig(config);
 	}
 

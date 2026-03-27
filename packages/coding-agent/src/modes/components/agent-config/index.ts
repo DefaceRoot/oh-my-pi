@@ -1,3 +1,4 @@
+export * from "./advanced-config-panel";
 export * from "./agent-config-modal";
 export * from "./agent-list-panel";
 export * from "./mcp-panel";

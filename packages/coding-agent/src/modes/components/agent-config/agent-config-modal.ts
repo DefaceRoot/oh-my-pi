@@ -6,14 +6,16 @@ import {
 	resolveFallbackModel,
 	resolveModelRoleValue,
 } from "../../../config/model-resolver";
-import type { RolesConfig, ToolsInheritConfig } from "../../../config/roles-config";
+import type { AdvancedConfig, RolesConfig, ToolsInheritConfig } from "../../../config/roles-config";
 import type { Settings } from "../../../config/settings";
 import type { Skill } from "../../../extensibility/skills";
 import { resolveSubagentRole } from "../../../task/model-role";
+import { parseThinkingLevel } from "../../../thinking";
 import { getTabBarTheme } from "../../shared";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { DynamicBorder } from "../dynamic-border";
+import { AdvancedConfigPanel } from "./advanced-config-panel";
 import { AgentListPanel } from "./agent-list-panel";
 import { FallbackModelPanel } from "./fallback-model-panel";
 import { McpPanel } from "./mcp-panel";
@@ -65,16 +67,17 @@ export interface AgentConfigModalOptions {
  *
  * Two-panel layout:
  *   Left  — AgentListPanel (~28 chars wide, fixed)
- *   Right — TabBar (Model / Skills / Tools / MCP) + active tab content
+ *   Right — TabBar (Model / MCP / Skills / Tools / Advanced) + active tab content
  *
  * Focus model:
  *   Tab / Shift+Tab                       — toggle focus between left and right panels
- *   ←/→ arrows (right panel)              — switch between Model / Skills / Tools / MCP tabs
+ *   ←/→ arrows (right panel)              — switch between Model / MCP / Skills / Tools / Advanced tabs
  *   ↑/↓ (left panel)                      — navigate the agent list
- *   ↑/↓ (right panel, Skills / Tools / MCP tab) — navigate the active list
+ *   ↑/↓ (right panel, non-model tabs)     — navigate the active list or field editor
  *   Space (right panel, Skills tab)       — cycle skill mode (disabled→auto→frontmatter)
  *   Space (right panel, Tools tab)        — toggle/cycle the selected tool
  *   Space (right panel, MCP tab)          — toggle MCP server on/off
+ *   Space / Enter / r (Advanced tab)      — cycle, edit, or reset the selected override
  *   Escape                                — close
  */
 export class AgentConfigModal implements Component {
@@ -98,6 +101,7 @@ export class AgentConfigModal implements Component {
 	readonly #skillPanel: SkillConfigPanel;
 	readonly #toolsPanel: ToolsConfigPanel;
 	#mcpPanel: McpPanel; // rebuilt on each role switch to keep role/isSubagent in sync
+	readonly #advancedPanel: AdvancedConfigPanel;
 	readonly #modelTabPanel: FallbackModelPanel;
 
 	/**
@@ -150,9 +154,10 @@ export class AgentConfigModal implements Component {
 			"Config",
 			[
 				{ id: "model", label: "Model" },
+				{ id: "mcp", label: "MCP" },
 				{ id: "skills", label: "Skills" },
 				{ id: "tools", label: "Tools" },
-				{ id: "mcp", label: "MCP" },
+				{ id: "advanced", label: "Advanced" },
 			],
 			agentConfigTabBarTheme,
 		);
@@ -213,6 +218,16 @@ export class AgentConfigModal implements Component {
 			},
 		});
 
+		// Advanced tab — per-agent overrides layered on top of global settings.
+
+		this.#advancedPanel = new AdvancedConfigPanel({
+			...this.#getAdvancedPanelState("default"),
+			callbacks: {
+				onConfigChange: config => this.#handleAdvancedConfigChange(config),
+				onClose: () => this.#onDismiss(),
+			},
+		});
+
 		// Composite right-side panel: tabs + separator + active content.
 
 		this.#rightPanel = {
@@ -226,9 +241,10 @@ export class AgentConfigModal implements Component {
 			invalidate: () => {
 				this.#tabBar.invalidate();
 				this.#modelTabPanel.invalidate();
+				this.#mcpPanel.invalidate();
 				this.#skillPanel.invalidate();
 				this.#toolsPanel.invalidate();
-				this.#mcpPanel.invalidate();
+				this.#advancedPanel.invalidate();
 			},
 		};
 	}
@@ -239,9 +255,10 @@ export class AgentConfigModal implements Component {
 	get #activeContentPanel(): Component {
 		const idx = this.#tabBar.getActiveIndex();
 		if (idx === 0) return this.#modelTabPanel;
-		if (idx === 1) return this.#skillPanel;
-		if (idx === 2) return this.#toolsPanel;
-		return this.#mcpPanel;
+		if (idx === 1) return this.#mcpPanel;
+		if (idx === 2) return this.#skillPanel;
+		if (idx === 3) return this.#toolsPanel;
+		return this.#advancedPanel;
 	}
 
 	// ── Private helpers ───────────────────────────────────────────────────────
@@ -364,6 +381,30 @@ export class AgentConfigModal implements Component {
 			availableModelKeys,
 			selectedFallbackKey: explicitFallback,
 		};
+	}
+
+	#getAdvancedPanelState(role: ModelRole) {
+		const isSubagent = this.#isSubagentRole(role);
+		return {
+			advancedConfig: isSubagent
+				? this.#rolesConfig.getAdvancedForSubagent(role)
+				: this.#rolesConfig.getAdvancedForRole(role),
+			globalValues: {
+				thinkingLevel: parseThinkingLevel(this.#settings.get("defaultThinkingLevel")),
+				maxRecursionDepth: this.#settings.get("task.maxRecursionDepth") ?? 2,
+				compactionStrategy: this.#settings.get("compaction.strategy"),
+				temperature: this.#settings.get("temperature") ?? -1,
+			},
+		};
+	}
+
+	#handleAdvancedConfigChange(config: AdvancedConfig | null): void {
+		if (this.#isSubagentRole(this.#activeRole)) {
+			this.#rolesConfig.setAdvancedForSubagent(this.#activeRole, config);
+		} else {
+			this.#rolesConfig.setAdvancedForRole(this.#activeRole, config);
+		}
+		this.#onRequestRender();
 	}
 
 	#handleToolsConfigChange(change: ToolsConfigChange): void {
@@ -544,13 +585,14 @@ export class AgentConfigModal implements Component {
 		this.#activeRole = role;
 		const isSubagent = this.#isSubagentRole(role);
 
-		// Refresh model, skills, and tools panels in-place (preserves cursor position where possible).
+		// Refresh model, MCP, skills, tools, and advanced panels in-place (preserves cursor position where possible).
 		this.#modelTabPanel.update(this.#getModelPanelState(role));
 		const skillConfig = (isSubagent
 			? this.#rolesConfig.getSkillConfigForSubagent(role)
 			: this.#rolesConfig.getSkillConfigForRole(role)) ?? { auto: [], frontmatter: [] };
 		this.#skillPanel.update(this.#discoveredSkills, skillConfig);
 		this.#toolsPanel.update(this.#getToolsPanelState(role));
+		this.#advancedPanel.update(this.#getAdvancedPanelState(role));
 
 		// Rebuild MCP panel so the persistence target is correct for the new role.
 
@@ -621,13 +663,15 @@ export class AgentConfigModal implements Component {
 			if (activeTabIdx === 0) {
 				parts.push(" ↑/↓:navigate  space:select");
 			} else if (activeTabIdx === 1) {
-				parts.push(" ↑/↓:navigate  space:cycle");
+				parts.push(" ↑/↓:navigate  space:toggle");
 			} else if (activeTabIdx === 2) {
+				parts.push(" ↑/↓:navigate  space:cycle");
+			} else if (activeTabIdx === 3) {
 				parts.push(
 					` ↑/↓:navigate  space:${this.#isDirectSubagentToolsConfig(this.#activeRole) ? "toggle" : this.#isSubagentRole(this.#activeRole) ? "cycle" : "toggle"}`,
 				);
-			} else if (activeTabIdx === 3) {
-				parts.push(" ↑/↓:navigate  space:toggle");
+			} else if (activeTabIdx === 4) {
+				parts.push(" ↑/↓:navigate  space:cycle  enter:edit  r:reset");
 			}
 		} else {
 			parts.push(" ↑/↓:navigate");
