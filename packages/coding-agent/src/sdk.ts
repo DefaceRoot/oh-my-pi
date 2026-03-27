@@ -1441,7 +1441,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 		});
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
-		const currentRole = sessionManager.getLastModelChangeRole() ?? options.role;
+		const currentRole = configuredRole;
 		const currentMode = normalizePromptRole(currentRole);
 		const personality = settings.get("personality");
 		// Subagents return results to a parent agent, not a user — skip communication formatting.
