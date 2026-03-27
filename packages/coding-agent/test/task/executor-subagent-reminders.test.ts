@@ -412,6 +412,77 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(subagentSettings?.get("compaction.autoContinue")).toBe(false);
 	});
 
+	it("applies advanced config overrides to subagent settings and thinking level", async () => {
+		vi.clearAllMocks();
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-advanced-settings",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-advanced-settings",
+			thinkingLevel: Effort.High,
+			settings: Settings.isolated({
+				"task.maxRecursionDepth": 2,
+				"compaction.strategy": "context-full",
+				temperature: -1,
+			}),
+			advancedConfig: {
+				thinkingLevel: "low",
+				maxRecursionDepth: 5,
+				compactionStrategy: "handoff",
+				temperature: 0.4,
+			},
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		expect(createAgentSessionMock.mock.calls).toHaveLength(1);
+		const createSessionOptions = createAgentSessionMock.mock.calls[0]?.[0];
+		const subagentSettings = createSessionOptions?.settings as Settings | undefined;
+		expect(createSessionOptions?.thinkingLevel).toBe(Effort.Low);
+		expect(subagentSettings?.get("task.maxRecursionDepth")).toBe(5);
+		expect(subagentSettings?.get("compaction.strategy")).toBe("handoff");
+		expect(subagentSettings?.get("temperature")).toBe(0.4);
+	});
+
+	it("forwards explicit null advanced config into nested session creation", async () => {
+		vi.clearAllMocks();
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-null-advanced",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-null-advanced",
+			advancedConfig: null,
+		});
+
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.advancedConfig).toBeNull();
+	});
+
 	it("prefers explicit modelOverride thinking suffix over provided thinking level, including off", async () => {
 		vi.clearAllMocks();
 		const modelRegistry = {

@@ -5,15 +5,19 @@
  */
 import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import Ajv, { type ValidateFunction } from "ajv";
-import type { SkillConfig } from "../config/roles-config";
+import {
+	applyAdvancedConfigToSettings,
+	cloneSettingsSnapshot,
+	resolveAdvancedThinkingLevel,
+} from "../config/advanced-config";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverride } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
+import type { AdvancedConfig, SkillConfig } from "../config/roles-config";
 import { Settings } from "../config/settings";
-import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp/manager";
 import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
@@ -129,6 +133,8 @@ export interface ExecutorOptions {
 	settings?: Settings;
 	/** V2 skill configuration for this agent from roles.yml */
 	skillConfig?: SkillConfig;
+	/** Advanced session overrides for this agent from roles.yml */
+	advancedConfig?: AdvancedConfig | null;
 	/**
 	 * When set, open this session file to restore full conversation history before resuming.
 	 * The entry is removed from cancelledSubagents and the session continues from the prior context.
@@ -461,11 +467,10 @@ function resolveSubmitResultOutcome(item: SubmitResultItem | undefined): Subagen
 }
 
 function createSubagentSettings(baseSettings: Settings): Settings {
-	const snapshot: Partial<Record<SettingPath, unknown>> = {};
-	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
-		snapshot[key] = baseSettings.get(key);
-	}
-	return Settings.isolated({ ...snapshot, "async.enabled": false, "compaction.autoContinue": false });
+	const snapshot = cloneSettingsSnapshot(baseSettings);
+	snapshot.override("async.enabled", false);
+	snapshot.override("compaction.autoContinue", false);
+	return snapshot;
 }
 
 /**
@@ -551,7 +556,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const settings = options.settings ?? Settings.isolated();
 	const subagentSettings = createSubagentSettings(settings);
-	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	applyAdvancedConfigToSettings(subagentSettings, options.advancedConfig);
+	const advancedThinkingLevel = resolveAdvancedThinkingLevel(options.advancedConfig);
+	const maxRecursionDepth = subagentSettings.get("task.maxRecursionDepth") ?? 2;
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
@@ -569,7 +576,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	const pythonToolMode = settings.get("python.toolMode") ?? "both";
+	const pythonToolMode = subagentSettings.get("python.toolMode") ?? "both";
 	if (toolNames?.includes("exec")) {
 		const expanded = toolNames.filter(name => name !== "exec");
 		if (pythonToolMode === "bash-only") {
@@ -1065,9 +1072,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
 			} = resolveModelOverride(modelPatterns, modelRegistry, settings);
+			const requestedThinkingLevel = advancedThinkingLevel ?? thinkingLevel;
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
-				: (thinkingLevel ?? resolvedThinkingLevel);
+				: (requestedThinkingLevel ?? resolvedThinkingLevel);
 
 			// When resuming a cancelled subagent, restore history from the prior session file.
 			// Remove from the store before starting to prevent concurrent double-resume.
@@ -1123,6 +1131,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				mcpManager: options.mcpManager,
 				customTools: inheritedMcpTools.length > 0 ? inheritedMcpTools : undefined,
 				skillConfig: options.skillConfig,
+				advancedConfig: options.advancedConfig,
 			});
 
 			activeSession = session;

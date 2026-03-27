@@ -23,7 +23,7 @@ import { $ } from "bun";
 import type { ToolSession } from "..";
 
 import { renderPromptTemplate } from "../config/prompt-templates";
-import { RolesConfig, type SkillConfig } from "../config/roles-config";
+import { type AdvancedConfig, RolesConfig, type SkillConfig } from "../config/roles-config";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
@@ -1018,6 +1018,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			outputSchema: unknown;
 			subagentMcpManager: ToolSession["mcpManager"];
 			skillConfig: SkillConfig | undefined;
+			advancedConfig: AdvancedConfig | null;
 		}> = [];
 		for (let i = 0; i < tasks.length; i++) {
 			const task = tasks[i];
@@ -1113,6 +1114,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				: { ...agent, tools: toolBase };
 			const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
 			const subagentSkillConfig = rolesConfig.getSkillConfigForSubagent(effectiveAgent.name);
+			const subagentAdvancedConfig = rolesConfig.getAdvancedForSubagent(effectiveAgent.name);
 			const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
 			const settingsModelOverride = agentModelOverrides[agent.name]?.trim() || undefined;
 			const { modelOverride, thinkingLevelOverride } = resolveSubagentLaunchOverrides({
@@ -1131,6 +1133,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				outputSchema: effectiveAgent.output ?? outputSchema ?? this.session.outputSchema,
 				subagentMcpManager,
 				skillConfig: subagentSkillConfig,
+				advancedConfig: subagentAdvancedConfig,
 			});
 		}
 		const batchAgentLabel = summarizeAgentNames(taskExecutions.map(execution => execution.agent.name));
@@ -1360,6 +1363,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					outputSchema: taskOutputSchema,
 					subagentMcpManager,
 					skillConfig: subagentSkillConfig,
+					advancedConfig: subagentAdvancedConfig,
 				} = execution;
 				const taskAbortController = new AbortController();
 				subtaskAbortControllers.set(taskItem.id, taskAbortController);
@@ -1407,6 +1411,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							promptTemplates,
 							images: parentImages,
 							skillConfig: subagentSkillConfig,
+							advancedConfig: subagentAdvancedConfig,
 						});
 					}
 
@@ -1462,6 +1467,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							promptTemplates,
 							images: parentImages,
 							skillConfig: subagentSkillConfig,
+							advancedConfig: subagentAdvancedConfig,
 						});
 						if (mergeMode === "branch" && result.exitCode === 0) {
 							try {

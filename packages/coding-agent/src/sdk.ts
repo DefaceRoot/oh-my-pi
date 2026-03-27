@@ -30,10 +30,15 @@ import {
 	type PromptTemplate,
 	renderPromptTemplate,
 } from "./config/prompt-templates";
-import type { SkillConfig } from "./config/roles-config";
+import type { AdvancedConfig, SkillConfig } from "./config/roles-config";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
+import {
+	applyAdvancedConfigToSettings,
+	cloneSettingsSnapshot,
+	resolveAdvancedThinkingLevel,
+} from "./config/advanced-config";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { TtsrManager } from "./export/ttsr";
@@ -226,6 +231,8 @@ export interface CreateAgentSessionOptions {
 
 	/** V2 skill configuration — when provided, uses loadSkillsWithConfig instead of category-based loading */
 	skillConfig?: SkillConfig;
+	/** Advanced runtime overrides for this session. */
+	advancedConfig?: AdvancedConfig | null;
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
 }
@@ -698,7 +705,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { authStorage, modelRegistry };
 	});
 
-	const settings = await logger.timeAsync(
+	let settings = await logger.timeAsync(
 		"settings",
 		async () => options.settings ?? (await Settings.init({ cwd, agentDir })),
 	);
@@ -772,6 +779,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const startupRole = resolveRoleName(sessionManager.getLastModelChangeRole());
+	const configuredRole = resolveRoleName(options.role ?? startupRole);
+	const sessionAdvancedConfig =
+		options.advancedConfig === undefined ? rolesConfig.getAdvancedForRole(configuredRole) : options.advancedConfig;
+	if (sessionAdvancedConfig !== undefined && sessionAdvancedConfig !== null) {
+		settings = cloneSettingsSnapshot(settings);
+		applyAdvancedConfigToSettings(settings, sessionAdvancedConfig);
+	}
 	const startupRoleToolAllowlist = getRoleToolAllowlist(startupRole);
 	const startupRoleMcpAllowlist = getRoleMcpAllowlist(startupRole);
 	// Use explicit mcpAllowlist from options if provided, otherwise fall back to role-based defaults
@@ -841,6 +855,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// If session has data and includes a thinking entry, restore it
 	if (thinkingLevel === undefined && hasExistingSession && hasThinkingEntry) {
 		thinkingLevel = parseThinkingLevel(existingSession.thinkingLevel);
+	}
+	const advancedThinkingLevel = resolveAdvancedThinkingLevel(sessionAdvancedConfig);
+
+	if (thinkingLevel === undefined && advancedThinkingLevel !== undefined) {
+		thinkingLevel = advancedThinkingLevel;
 	}
 
 	if (thinkingLevel === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {

@@ -3,34 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
+import { RolesConfig } from "../src/config/roles-config";
 
-type RolesConfigContract = {
-	getToolsForRole(role: string): string[] | Promise<string[]>;
-	setToolsForRole(role: string, tools: string[]): void;
-	getMcpForRole(role: string): string[] | Promise<string[]>;
-	getMcpForSubagent(agentName: string): string[] | Promise<string[]>;
-	// V2 accessors
-	getSkillConfigForRole(role: string): { auto: string[]; frontmatter: string[] } | undefined;
-	setSkillConfigForRole(role: string, config: { auto: string[]; frontmatter: string[] }): void;
-	getSkillConfigForSubagent(agent: string): { auto: string[]; frontmatter: string[] } | undefined;
-	setSkillConfigForSubagent(agent: string, config: { auto: string[]; frontmatter: string[] }): void;
-	getToolsForSubagent(agent: string): string[] | null;
-	setToolsForSubagent(agent: string, config: { inherit?: string; add?: string[]; remove?: string[] }): void;
-	setMcpForSubagent(agent: string, servers: string[]): void;
-	setConfigForAgent(agentName: string, config: Record<string, unknown>): void;
-	// Fallback accessors
-	getFallbackForRole(role: string): string | null;
-	setFallbackForRole(role: string, fallback: string | null): void;
-	getFallbackForSubagent(agent: string): string | null;
-	setFallbackForSubagent(agent: string, fallback: string | null): void;
-};
-
-type RolesConfigModuleContract = {
-	RolesConfig: new (configPath?: string) => RolesConfigContract;
-};
-
-async function loadRolesConfigModule(): Promise<RolesConfigModuleContract> {
-	return (await import("../src/config/roles-config")) as RolesConfigModuleContract;
+async function loadRolesConfigModule(): Promise<{ RolesConfig: typeof RolesConfig }> {
+	return { RolesConfig };
 }
 
 async function resolveArray(value: string[] | Promise<string[]>): Promise<string[]> {
@@ -934,5 +910,173 @@ subagents:
 		expect(result).toContain("read");
 		expect(result).toContain("task");
 		expect(result).not.toContain("write");
+	});
+});
+
+describe("RolesConfig advanced accessors", () => {
+	let tempDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-advanced-${Snowflake.next()}`);
+		await fs.mkdir(tempDir, { recursive: true });
+		rolesPath = path.join(tempDir, "roles.yml");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	const writeRoles = async (content: string) => {
+		await fs.writeFile(rolesPath, content, "utf8");
+	};
+
+	it("setAdvancedForRole / getAdvancedForRole round-trip partial values and nulls", async () => {
+		await writeRoles(`roles:
+	  default:
+	    tools:
+	      - read
+	    mcp:
+	      - augment
+	    skills: all
+	subagents:
+	  _default:
+	    mcp:
+	      - augment
+	`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setAdvancedForRole("default", {
+			thinkingLevel: "low",
+			maxRecursionDepth: null,
+			compactionStrategy: "handoff",
+			temperature: 0.3,
+		});
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getAdvancedForRole("default")).toEqual({
+			thinkingLevel: "low",
+			maxRecursionDepth: null,
+			compactionStrategy: "handoff",
+			temperature: 0.3,
+		});
+	});
+
+	it("setAdvancedForSubagent round-trips and clears stored advanced config", async () => {
+		await writeRoles(`roles:
+	  default:
+	    tools:
+	      - read
+	    mcp:
+	      - augment
+	    skills: all
+	subagents:
+	  _default:
+	    mcp:
+	      - augment
+	  research:
+	    mcp:
+	      - augment
+	`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const rolesConfig = new RolesConfig(rolesPath);
+
+		rolesConfig.setAdvancedForSubagent("research", {
+			thinkingLevel: "medium",
+			maxRecursionDepth: 4,
+			temperature: 0.2,
+		});
+
+		const persisted = new RolesConfig(rolesPath);
+		expect(persisted.getAdvancedForSubagent("research")).toEqual({
+			thinkingLevel: "medium",
+			maxRecursionDepth: 4,
+			temperature: 0.2,
+		});
+
+		rolesConfig.setAdvancedForSubagent("research", null);
+
+		const fresh = new RolesConfig(rolesPath);
+		expect(fresh.getAdvancedForSubagent("research")).toBeNull();
+	});
+});
+
+describe("RolesConfig full snapshot restore", () => {
+	let tempDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-restore-${Snowflake.next()}`);
+		await fs.mkdir(tempDir, { recursive: true });
+		rolesPath = path.join(tempDir, "roles.yml");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	const writeRoles = async (content: string) => {
+		await fs.writeFile(rolesPath, content, "utf8");
+	};
+
+	it("restores a full config snapshot exactly, including custom roles and subagents", async () => {
+		await writeRoles(`roles:
+	  default:
+	    tools:
+	      - read
+	    mcp:
+	      - augment
+	    skills: all
+	  custom-role:
+	    tools:
+	      - read
+	      - task
+	    mcp:
+	      - augment
+	    skills: all
+	    advanced:
+	      maxRecursionDepth: 5
+	subagents:
+	  _default:
+	    mcp:
+	      - augment
+	  custom-agent:
+	    mcp:
+	      - augment
+	    advanced:
+	      thinkingLevel: low
+	      temperature: 0.2
+	`);
+		const { RolesConfig } = await loadRolesConfigModule();
+		const original = new RolesConfig(rolesPath).getFullConfig();
+
+		await writeRoles(`roles:
+	  default:
+	    tools:
+	      - read
+	      - grep
+	    mcp:
+	      - augment
+	    skills: all
+	  stale-role:
+	    tools:
+	      - read
+	    mcp:
+	      - augment
+	    skills: all
+	subagents:
+	  _default:
+	    mcp:
+	      - augment
+	  stale-agent:
+	    mcp:
+	      - augment
+	      - ref
+	`);
+		const rolesConfig = new RolesConfig(rolesPath);
+		rolesConfig.replaceConfig(original as never);
+
+		expect(rolesConfig.getFullConfig()).toEqual(original);
 	});
 });

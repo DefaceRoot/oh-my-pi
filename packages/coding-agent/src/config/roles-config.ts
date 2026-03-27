@@ -51,7 +51,7 @@ const RoleSkillsSchema = Type.Union([
 	SkillConfigSchema,
 ]);
 
-const RoleConfigSchema = Type.Object({
+export const RoleConfigSchemaV2 = Type.Object({
 	tools: Type.Array(Type.String({ minLength: 1 })),
 	mcp: Type.Array(Type.String({ minLength: 1 })),
 	skills: RoleSkillsSchema,
@@ -59,7 +59,7 @@ const RoleConfigSchema = Type.Object({
 	advanced: AdvancedConfigSchema,
 });
 
-const SubagentConfigSchema = Type.Object({
+export const SubagentConfigSchemaV2 = Type.Object({
 	mcp: Type.Array(Type.String({ minLength: 1 })),
 	skills: Type.Optional(SkillConfigSchema),
 	tools: Type.Optional(Type.Union([ToolsInheritSchema, Type.Array(Type.String({ minLength: 1 }))])),
@@ -68,17 +68,17 @@ const SubagentConfigSchema = Type.Object({
 });
 
 const RolesConfigSchema = Type.Object({
-	roles: Type.Record(Type.String({ minLength: 1 }), RoleConfigSchema),
-	subagents: Type.Record(Type.String({ minLength: 1 }), SubagentConfigSchema),
+	roles: Type.Record(Type.String({ minLength: 1 }), RoleConfigSchemaV2),
+	subagents: Type.Record(Type.String({ minLength: 1 }), SubagentConfigSchemaV2),
 });
 
-type RoleConfig = Static<typeof RoleConfigSchema>;
-type SubagentConfig = Static<typeof SubagentConfigSchema>;
+export type RoleConfigV2 = Static<typeof RoleConfigSchemaV2>;
+export type SubagentConfigV2 = Static<typeof SubagentConfigSchemaV2>;
 export type RolesConfigData = Static<typeof RolesConfigSchema>;
 
-// V2 type aliases — same underlying types since the schemas are unified supersets
-export type RoleConfigV2 = RoleConfig;
-export type SubagentConfigV2 = SubagentConfig;
+// Internal aliases keep the implementation readable while exporting the V2 contract directly.
+type RoleConfig = RoleConfigV2;
+type SubagentConfig = SubagentConfigV2;
 
 const ALWAYS_ON_MCP_SERVER = "augment";
 
@@ -592,6 +592,68 @@ export class RolesConfig {
 		this.#persistConfig(config);
 	}
 
+	/** Returns the stored advanced config for a role, or null if not configured. */
+	getAdvancedForRole(role: string): AdvancedConfig | null {
+		const advanced = this.#getConfig().roles[role]?.advanced;
+		return advanced !== undefined ? cloneAdvancedConfig(advanced) : null;
+	}
+
+	/** Sets the advanced config for a role and persists. Pass null to clear. */
+	setAdvancedForRole(role: string, advanced: AdvancedConfig | null): void {
+		const config = this.#getConfig();
+		const roleConfig = config.roles[role] ?? config.roles.default ?? DEFAULT_ROLES_CONFIG.roles.default;
+		config.roles[role] = {
+			...cloneRoleConfig(roleConfig),
+			advanced: advanced !== null ? cloneAdvancedConfig(advanced) : undefined,
+		};
+		this.#persistConfig(config);
+	}
+
+	/** Returns the stored advanced config for a subagent, or null if not configured. */
+	getAdvancedForSubagent(agent: string): AdvancedConfig | null {
+		const advanced = this.#getConfig().subagents[agent]?.advanced;
+		return advanced !== undefined ? cloneAdvancedConfig(advanced) : null;
+	}
+
+	/** Sets the advanced config for a subagent and persists. Pass null to clear. */
+	setAdvancedForSubagent(agent: string, advanced: AdvancedConfig | null): void {
+		const config = this.#getConfig();
+		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
+		config.subagents[agent] = {
+			...cloneSubagentConfig(subagentConfig),
+			advanced: advanced !== null ? cloneAdvancedConfig(advanced) : undefined,
+		};
+		this.#persistConfig(config);
+	}
+
+	getFullConfig(): RolesConfigData {
+		return cloneRolesConfig(this.#getConfig());
+	}
+
+	replaceConfig(config: RolesConfigData): void {
+		this.#persistConfig(cloneRolesConfig(config));
+	}
+
+	mergeConfig(configPatch: Partial<Pick<RolesConfigData, "roles" | "subagents">>): void {
+		const config = cloneRolesConfig(this.#getConfig());
+
+		for (const [roleName, roleConfig] of Object.entries(configPatch.roles ?? {})) {
+			if (config.roles[roleName] === undefined && DEFAULT_ROLES_CONFIG.roles[roleName] === undefined) {
+				continue;
+			}
+			config.roles[roleName] = cloneRoleConfig(roleConfig);
+		}
+
+		for (const [agentName, subagentConfig] of Object.entries(configPatch.subagents ?? {})) {
+			if (config.subagents[agentName] === undefined && DEFAULT_ROLES_CONFIG.subagents[agentName] === undefined) {
+				continue;
+			}
+			config.subagents[agentName] = cloneSubagentConfig(subagentConfig);
+		}
+
+		this.#persistConfig(config);
+	}
+
 	/**
 	 * Routes a partial config write to the correct section.
 	 *
@@ -599,10 +661,10 @@ export class RolesConfig {
 	 *
 	 * **Limitation**: when a name appears in both `roles` and `subagents` (e.g., `implement`
 	 * in the default V1 config), this method always writes to `roles`. Use the dedicated
-	 * `setSkillConfigForSubagent` / `setMcpForSubagent` / `setToolsForSubagent` methods to
-	 * update the subagent entry for such names explicitly.
+	 * `setSkillConfigForSubagent` / `setMcpForSubagent` / `setToolsForSubagent` /
+	 * `setAdvancedForSubagent` methods to update the subagent entry for such names explicitly.
 	 */
-	setConfigForAgent(agentName: string, agentConfig: Partial<RoleConfigV2 | SubagentConfigV2>): void {
+	setConfigForAgent(agentName: string, agentConfig: Partial<RoleConfigV2> | Partial<SubagentConfigV2>): void {
 		const config = this.#getConfig();
 
 		if (agentName in config.roles) {
