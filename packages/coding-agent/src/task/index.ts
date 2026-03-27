@@ -1086,20 +1086,31 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}
-			const effectiveAgent: typeof agent = planModeState?.enabled
-				? agent.name === "plan-verifier"
+			const isPlanMode = !!planModeState?.enabled;
+			const isPlanVerifier = agent.name === "plan-verifier";
+			let toolBase: string[] | undefined;
+			if (isPlanMode && isPlanVerifier) {
+				toolBase = [...PLAN_MODE_PLAN_VERIFIER_TOOLS];
+			} else if (isPlanMode) {
+				toolBase = [...PLAN_MODE_SUBAGENT_TOOLS];
+			} else {
+				const configTools = rolesConfig.getToolsForSubagent(agent.name);
+				toolBase = configTools !== null ? configTools : agent.tools;
+			}
+			const effectiveAgent: typeof agent = isPlanMode
+				? isPlanVerifier
 					? {
 							...agent,
-							tools: [...PLAN_MODE_PLAN_VERIFIER_TOOLS],
+							tools: toolBase,
 							spawns: undefined,
 						}
 					: {
 							...agent,
 							systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-							tools: [...PLAN_MODE_SUBAGENT_TOOLS],
+							tools: toolBase,
 							spawns: undefined,
 						}
-				: agent;
+				: { ...agent, tools: toolBase };
 			const subagentMcpAllowlist = rolesConfig.getMcpForSubagent(effectiveAgent.name);
 			const subagentSkillConfig = rolesConfig.getSkillConfigForSubagent(effectiveAgent.name);
 			const subagentMcpManager = createScopedMcpManager(this.session.mcpManager, subagentMcpAllowlist);
