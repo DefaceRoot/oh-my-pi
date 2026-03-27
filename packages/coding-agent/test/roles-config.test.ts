@@ -3,7 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { RolesConfig } from "../src/config/roles-config";
+import { YAML } from "bun";
+import { RolesConfig, type RolesConfigData } from "../src/config/roles-config";
+import { _resetSettingsForTest, Settings } from "../src/config/settings";
 
 async function loadRolesConfigModule(): Promise<{ RolesConfig: typeof RolesConfig }> {
 	return { RolesConfig };
@@ -1078,5 +1080,54 @@ describe("RolesConfig full snapshot restore", () => {
 		rolesConfig.mergeConfig(original as never);
 
 		expect(rolesConfig.getFullConfig()).toEqual(original);
+	});
+});
+
+const repoRolesPath = path.resolve(import.meta.dir, "../../../agent/roles.yml");
+
+describe("repository roles fallback and advanced fields", () => {
+	let tempDir: string;
+	let projectDir: string;
+	let agentDir: string;
+	let rolesPath: string;
+
+	beforeEach(async () => {
+		_resetSettingsForTest();
+		tempDir = path.join(os.tmpdir(), `pi-roles-config-repo-${Snowflake.next()}`);
+		projectDir = path.join(tempDir, "project");
+		agentDir = path.join(tempDir, "agent");
+		rolesPath = path.join(agentDir, "roles.yml");
+		await fs.mkdir(projectDir, { recursive: true });
+		await fs.mkdir(agentDir, { recursive: true });
+		await fs.copyFile(repoRolesPath, rolesPath);
+		await Settings.init({ cwd: projectDir, agentDir });
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+		_resetSettingsForTest();
+	});
+
+	it("loads repository roles.yml and returns raw fallback and advanced values", async () => {
+		const settingsRolesPath = path.join(Settings.instance.getAgentDir(), "roles.yml");
+		expect(settingsRolesPath).toBe(rolesPath);
+		const rawConfig = YAML.parse(await fs.readFile(settingsRolesPath, "utf8")) as RolesConfigData;
+		const rolesConfig = new RolesConfig(settingsRolesPath);
+
+		expect(rolesConfig.getFullConfig()).toEqual(rawConfig);
+
+		for (const [roleName, roleConfig] of Object.entries(rawConfig.roles)) {
+			expect(rolesConfig.getFallbackForRole(roleName)).toBe(
+				typeof roleConfig.fallback === "string" ? roleConfig.fallback : null,
+			);
+			expect(rolesConfig.getAdvancedForRole(roleName)).toEqual(roleConfig.advanced ?? null);
+		}
+
+		for (const [agentName, subagentConfig] of Object.entries(rawConfig.subagents)) {
+			expect(rolesConfig.getFallbackForSubagent(agentName)).toBe(
+				typeof subagentConfig.fallback === "string" ? subagentConfig.fallback : null,
+			);
+			expect(rolesConfig.getAdvancedForSubagent(agentName)).toEqual(subagentConfig.advanced ?? null);
+		}
 	});
 });
