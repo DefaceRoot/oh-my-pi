@@ -23,7 +23,7 @@ describe("subagent thinking guard", () => {
 		expect(content).toMatch(/skipping parent runtime default sync for subagent turn/);
 	});
 
-	test("before_agent_start resets gate state for TOON delegation envelopes before legacy delegated markers", async () => {
+	test("before_agent_start routes TOON delegation through the worker gate transition helper before legacy delegated markers", async () => {
 		const content = await readExtensionSource();
 
 		const toonDelegationPath = 'if (/^delegation:/m.test(promptText)) {';
@@ -38,11 +38,17 @@ describe("subagent thinking guard", () => {
 		const toonBlock = content.slice(toonIndex, legacyIndex);
 		expect(toonBlock).toContain('activeAgentIsParentTurn = false;');
 		expect(toonBlock).toContain('activeParentRuntimeRole = "default";');
-		expect(toonBlock).toContain('activeImplementationWorkerGate = isImplementationWorkerPrompt(');
+		expect(toonBlock).toContain('const nextGateActive = isImplementationWorkerPrompt(');
 		expect(toonBlock).toContain(') && !isQualityGateSkipDirective(event.systemPrompt, promptText);');
-		expect(toonBlock).toContain('implementationWorkerGateState = createImplementationWorkerGateState();');
-		expect(toonBlock).toContain('implementationUnitScopeById = new Map<string, Set<string>>();');
-		expect(toonBlock).toContain('await refreshImplementationWorkerBaseline();');
+		expect(toonBlock).toContain('await syncImplementationWorkerGateForTurn(nextGateActive, promptText);');
+	});
+
+
+	test("before_agent_start routes worker gate lifecycle through the transition helper", async () => {
+		const content = await readExtensionSource();
+
+		expect(content).toMatch(/resolveImplementationWorkerGateTurnTransition\(/);
+		expect(content).toMatch(/gateTransition === "enter" \|\| gateTransition === "exit"/);
 	});
 
 

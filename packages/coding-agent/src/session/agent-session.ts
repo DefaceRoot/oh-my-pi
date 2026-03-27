@@ -263,6 +263,11 @@ export interface AgentSessionConfig {
 	 * Returns a fallback Model, or null when no fallback is configured.
 	 */
 	resolveFallbackModel?: (primaryModelKey: string) => Model | null;
+
+	/** Returns the configured thinking level for the primary model (re-read live on each switch). */
+	resolvePrimaryThinkingLevel?: () => ThinkingLevel | undefined;
+	/** Returns the configured thinking level for the fallback model (re-read live on each switch). */
+	resolveFallbackThinkingLevel?: () => ThinkingLevel | undefined;
 }
 
 /** Options for AgentSession.prompt() */
@@ -461,8 +466,12 @@ export class AgentSession {
 	// Fallback model state (auto-retry threshold switching)
 	#fallbackActive = false;
 	#primaryModel: Model | null = null;
+	/** Thinking level active immediately before fallback activation; restored on primary restore. */
+	#preFallbackThinkingLevel: ThinkingLevel | undefined = undefined;
 	#sessionRole = "default";
 	#resolveFallbackModel: ((primaryModelKey: string) => Model | null) | undefined = undefined;
+	#resolvePrimaryThinkingLevel: (() => ThinkingLevel | undefined) | undefined = undefined;
+	#resolveFallbackThinkingLevel: (() => ThinkingLevel | undefined) | undefined = undefined;
 
 	// Todo completion reminder state
 	#todoReminderCount = 0;
@@ -653,6 +662,8 @@ export class AgentSession {
 		this.#enforceServiceTierForCurrentModel(false);
 		this.#sessionRole = config.role ?? "default";
 		this.#resolveFallbackModel = config.resolveFallbackModel;
+		this.#resolvePrimaryThinkingLevel = config.resolvePrimaryThinkingLevel;
+		this.#resolveFallbackThinkingLevel = config.resolveFallbackThinkingLevel;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -1068,6 +1079,14 @@ export class AgentSession {
 			// Restore succeeded — session is back on the primary model.
 			this.#fallbackActive = false;
 			this.#primaryModel = null;
+			// Prefer the configured primary level; fall back to the pre-fallback level captured at
+			// fallback activation so manual thinking-level changes (Alt+T) are preserved.
+			const preFallback = this.#preFallbackThinkingLevel;
+			this.#preFallbackThinkingLevel = undefined;
+			const restoreLevel = this.#resolvePrimaryThinkingLevel?.() ?? preFallback;
+			if (restoreLevel !== undefined) {
+				this.setThinkingLevel(restoreLevel);
+			}
 			return undefined;
 		} catch (err) {
 			// Restore failed (e.g. no API key for primary provider). Clear the retry-sequence state
@@ -5101,6 +5120,14 @@ export class AgentSession {
 				try {
 					await this.setModelTemporary(fallbackModel);
 					this.#fallbackActive = true;
+					const fallbackThinkingLevel = this.#resolveFallbackThinkingLevel?.();
+					if (fallbackThinkingLevel !== undefined) {
+						// Save current thinking so it can be restored after the fallback model cycle ends.
+						this.#preFallbackThinkingLevel = this.#thinkingLevel;
+						this.setThinkingLevel(fallbackThinkingLevel);
+					} else {
+						this.#preFallbackThinkingLevel = undefined;
+					}
 					await this.#emitSessionEvent({
 						type: "auto_retry_fallback",
 						fallbackModel: `${fallbackModel.provider}/${fallbackModel.id}`,

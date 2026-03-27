@@ -9,7 +9,7 @@ type CompactionStrategy = "context-full" | "handoff" | "off";
 const VALID_COMPACTION_STRATEGIES = new Set<CompactionStrategy>(["context-full", "handoff", "off"]);
 
 export function resolveAdvancedThinkingLevel(config?: AdvancedConfig | null): ThinkingLevel | undefined {
-	return parseThinkingLevel(config?.thinkingLevel ?? undefined);
+	return parseThinkingLevel(config?.primaryThinkingLevel ?? config?.thinkingLevel ?? undefined);
 }
 
 export function applyAdvancedConfigToSettings(settings: Settings, config?: AdvancedConfig | null): void {

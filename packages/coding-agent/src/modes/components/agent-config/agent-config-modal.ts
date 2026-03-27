@@ -1,4 +1,14 @@
-import { type Component, hasCursorMarker, matchesKey, padding, TabBar, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import {
+	type Component,
+	hasCursorMarker,
+	matchesKey,
+	padding,
+	TabBar,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
+import { resolveAdvancedThinkingLevel } from "../../../config/advanced-config";
 import { MODEL_ROLE_IDS_BY_CATEGORY, type ModelRegistry, type ModelRole } from "../../../config/model-registry";
 import {
 	findExactModelReferenceMatch,
@@ -24,8 +34,8 @@ import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { DynamicBorder } from "../dynamic-border";
 import { AdvancedConfigPanel } from "./advanced-config-panel";
 import { AgentListPanel } from "./agent-list-panel";
-import { ModelPanel } from "./model-panel";
 import { McpPanel } from "./mcp-panel";
+import { ModelPanel } from "./model-panel";
 import { PresetBar } from "./preset-bar";
 import { PresetSelector } from "./preset-selector";
 import { SkillConfigPanel } from "./skill-config-panel";
@@ -270,6 +280,8 @@ export class AgentConfigModal implements Component {
 			callbacks: {
 				onSelectPrimary: modelKey => this.#persistPrimaryModel(this.#activeRole, modelKey),
 				onSelectFallback: fallback => this.#persistFallbackModel(this.#activeRole, fallback),
+				onCyclePrimaryThinkingLevel: () => this.#cycleModelThinkingLevel("primary"),
+				onCycleFallbackThinkingLevel: () => this.#cycleModelThinkingLevel("fallback"),
 				onClose: () => this.#dismiss(),
 			},
 		});
@@ -450,7 +462,9 @@ export class AgentConfigModal implements Component {
 				return line;
 			}
 			const rawOverlayLine = overlayLines[overlayIndex] ?? "";
-			const overlayLine = hasCursorMarker(rawOverlayLine) ? rawOverlayLine : truncateToWidth(rawOverlayLine, overlayWidth);
+			const overlayLine = hasCursorMarker(rawOverlayLine)
+				? rawOverlayLine
+				: truncateToWidth(rawOverlayLine, overlayWidth);
 			const overlayLineWidth = visibleWidth(overlayLine);
 			const leftPad = Math.max(0, Math.floor((width - overlayLineWidth) / 2));
 			const rightPad = Math.max(0, width - leftPad - overlayLineWidth);
@@ -590,6 +604,9 @@ export class AgentConfigModal implements Component {
 
 	#getModelPanelState(role: ModelRole) {
 		const isSubagent = this.#isSubagentRole(role);
+		const advancedConfig = isSubagent
+			? this.#rolesConfig.getAdvancedForSubagent(role)
+			: this.#rolesConfig.getAdvancedForRole(role);
 		const explicitFallback = this.#normalizeModelKey(
 			isSubagent ? this.#rolesConfig.getFallbackForSubagent(role) : this.#rolesConfig.getFallbackForRole(role),
 		);
@@ -632,6 +649,8 @@ export class AgentConfigModal implements Component {
 			clearOptionLabel: globalDefault ? `Use global default (${globalDefault})` : "No fallback",
 			availableModelKeys,
 			selectedFallbackKey: explicitFallback,
+			primaryThinkingLevel: resolveAdvancedThinkingLevel(advancedConfig),
+			fallbackThinkingLevel: parseThinkingLevel(advancedConfig?.fallbackThinkingLevel ?? undefined),
 		};
 	}
 
@@ -664,6 +683,43 @@ export class AgentConfigModal implements Component {
 		}
 		this.#syncPresetState();
 		this.#onRequestRender();
+	}
+
+	#cycleModelThinkingLevel(target: "primary" | "fallback"): void {
+		const isSubagent = this.#isSubagentRole(this.#activeRole);
+		const existingConfig = isSubagent
+			? this.#rolesConfig.getAdvancedForSubagent(this.#activeRole)
+			: this.#rolesConfig.getAdvancedForRole(this.#activeRole);
+		const field = target === "primary" ? "primaryThinkingLevel" : "fallbackThinkingLevel";
+		const levels: Array<ThinkingLevel | undefined> = [
+			undefined,
+			ThinkingLevel.Off,
+			ThinkingLevel.Minimal,
+			ThinkingLevel.Low,
+			ThinkingLevel.Medium,
+			ThinkingLevel.High,
+			ThinkingLevel.XHigh,
+		];
+		// For primary: start from the effective level (primaryThinkingLevel ?? thinkingLevel) so
+		// legacy configs don't appear unset and the first cycle step is relative to current state.
+		const current =
+			target === "primary"
+				? resolveAdvancedThinkingLevel(existingConfig)
+				: parseThinkingLevel(existingConfig?.fallbackThinkingLevel ?? undefined);
+		const currentIdx = levels.indexOf(current);
+		const next = levels[(currentIdx + 1) % levels.length];
+		const nextConfig: AdvancedConfig = { ...(existingConfig ?? {}) };
+		if (next === undefined) {
+			delete nextConfig[field];
+		} else {
+			nextConfig[field] = next;
+		}
+		const hasAnyField = Object.keys(nextConfig).length > 0;
+		this.#handleAdvancedConfigChange(hasAnyField ? nextConfig : null);
+		this.#modelTabPanel.update(this.#getModelPanelState(this.#activeRole));
+		// Keep the advanced panel in sync so a later Advanced-tab edit doesn't
+		// overwrite the thinking level we just changed via the model tab.
+		this.#advancedPanel.update(this.#getAdvancedPanelState(this.#activeRole));
 	}
 
 	#handleToolsConfigChange(change: ToolsConfigChange): void {

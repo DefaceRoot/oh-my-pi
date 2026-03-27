@@ -9,10 +9,20 @@ export type AdvancedCompactionStrategy = "context-full" | "handoff" | "off";
 
 type AdvancedFieldId = keyof AdvancedConfigPanelState;
 type ToggleFieldId = "thinkingLevel" | "compactionStrategy" | "memoriesEnabled";
-type NumericFieldId = "maxRecursionDepth" | "temperature" | "grepContextBefore" | "grepContextAfter" | "compactionThresholdPercent" | "compactionThresholdTokens";
+type NumericFieldId =
+	| "maxRecursionDepth"
+	| "temperature"
+	| "grepContextBefore"
+	| "grepContextAfter"
+	| "compactionThresholdPercent"
+	| "compactionThresholdTokens";
 
 type AdvancedConfigPanelState = {
 	thinkingLevel?: ThinkingLevel;
+	/** Passthrough: set by the model panel, preserved but not displayed here. */
+	primaryThinkingLevel?: ThinkingLevel;
+	/** Passthrough: set by the model panel, preserved but not displayed here. */
+	fallbackThinkingLevel?: ThinkingLevel;
 	maxRecursionDepth?: number;
 	compactionStrategy?: AdvancedCompactionStrategy;
 	temperature?: number;
@@ -57,6 +67,8 @@ const FIELD_LABELS: Record<AdvancedFieldId, string> = {
 	grepContextAfter: "Grep Context After",
 	compactionThresholdPercent: "Compaction Threshold %",
 	compactionThresholdTokens: "Compaction Token Limit",
+	primaryThinkingLevel: "Primary Thinking",
+	fallbackThinkingLevel: "Fallback Thinking",
 };
 
 const FIELD_ORDER: AdvancedFieldId[] = [
@@ -282,11 +294,15 @@ export class AdvancedConfigPanel implements Component {
 				}
 				return formatGlobalValue(formatThresholdTokens(this.#globalValues.compactionThresholdTokens));
 			}
+			default:
+				// Passthrough fields (primaryThinkingLevel, fallbackThinkingLevel) are not displayed.
+				return "";
 		}
 	}
 
 	#renderDraftValue(fieldId: AdvancedFieldId): string {
-		if (fieldId === "thinkingLevel" || fieldId === "compactionStrategy" || fieldId === "memoriesEnabled") {
+		if (!this.#isNumericField(fieldId)) {
+			// Toggle and passthrough fields do not have a draft editing mode.
 			return this.#renderFieldValue(fieldId);
 		}
 		const placeholder = this.#getNumericFieldPlaceholder(fieldId);
@@ -529,6 +545,14 @@ function normalizeConfig(config: AdvancedConfig | null | undefined): AdvancedCon
 	if (thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit) {
 		normalized.thinkingLevel = thinkingLevel;
 	}
+	const primaryThinkingLevel = parseThinkingLevel(config?.primaryThinkingLevel ?? undefined);
+	if (primaryThinkingLevel && primaryThinkingLevel !== ThinkingLevel.Inherit) {
+		normalized.primaryThinkingLevel = primaryThinkingLevel;
+	}
+	const fallbackThinkingLevel = parseThinkingLevel(config?.fallbackThinkingLevel ?? undefined);
+	if (fallbackThinkingLevel && fallbackThinkingLevel !== ThinkingLevel.Inherit) {
+		normalized.fallbackThinkingLevel = fallbackThinkingLevel;
+	}
 	if (
 		typeof config?.maxRecursionDepth === "number" &&
 		Number.isInteger(config.maxRecursionDepth) &&
@@ -582,14 +606,18 @@ function normalizeConfig(config: AdvancedConfig | null | undefined): AdvancedCon
 function toAdvancedConfig(config: AdvancedConfigPanelState): AdvancedConfig | null {
 	const next: AdvancedConfig = {};
 	if (config.thinkingLevel !== undefined) next.thinkingLevel = config.thinkingLevel;
+	if (config.primaryThinkingLevel !== undefined) next.primaryThinkingLevel = config.primaryThinkingLevel;
+	if (config.fallbackThinkingLevel !== undefined) next.fallbackThinkingLevel = config.fallbackThinkingLevel;
 	if (config.maxRecursionDepth !== undefined) next.maxRecursionDepth = config.maxRecursionDepth;
 	if (config.compactionStrategy !== undefined) next.compactionStrategy = config.compactionStrategy;
 	if (config.temperature !== undefined) next.temperature = config.temperature;
 	if (config.memoriesEnabled !== undefined) next.memoriesEnabled = config.memoriesEnabled;
 	if (config.grepContextBefore !== undefined) next.grepContextBefore = config.grepContextBefore;
 	if (config.grepContextAfter !== undefined) next.grepContextAfter = config.grepContextAfter;
-	if (config.compactionThresholdPercent !== undefined) next.compactionThresholdPercent = config.compactionThresholdPercent;
-	if (config.compactionThresholdTokens !== undefined) next.compactionThresholdTokens = config.compactionThresholdTokens;
+	if (config.compactionThresholdPercent !== undefined)
+		next.compactionThresholdPercent = config.compactionThresholdPercent;
+	if (config.compactionThresholdTokens !== undefined)
+		next.compactionThresholdTokens = config.compactionThresholdTokens;
 	return Object.keys(next).length > 0 ? next : null;
 }
 

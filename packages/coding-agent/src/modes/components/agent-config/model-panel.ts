@@ -1,4 +1,6 @@
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { getThinkingLevelMetadata } from "../../../thinking";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 
@@ -15,6 +17,10 @@ export interface ModelPanelOptions {
 	clearOptionLabel: string;
 	availableModelKeys: string[];
 	selectedFallbackKey: string | null;
+	/** Thinking level for the primary model, undefined = no override. */
+	primaryThinkingLevel?: ThinkingLevel;
+	/** Thinking level for the fallback model, undefined = no override. */
+	fallbackThinkingLevel?: ThinkingLevel;
 	callbacks: ModelPanelCallbacks;
 }
 
@@ -23,6 +29,10 @@ export interface ModelPanelCallbacks {
 	onSelectPrimary: (modelKey: string) => void;
 	/** Called when the user selects a fallback model (null = clear the override). */
 	onSelectFallback: (modelKey: string | null) => void;
+	/** Cycle the thinking level for the primary model. */
+	onCyclePrimaryThinkingLevel?: () => void;
+	/** Cycle the thinking level for the fallback model. */
+	onCycleFallbackThinkingLevel?: () => void;
 	onClose?: () => void;
 }
 
@@ -46,6 +56,8 @@ export class ModelPanel implements Component {
 	#clearOptionLabel = "No fallback";
 	#availableModelKeys: string[] = [];
 	#selectedFallbackKey: string | null = null;
+	#primaryThinkingLevel: ThinkingLevel | undefined = undefined;
+	#fallbackThinkingLevel: ThinkingLevel | undefined = undefined;
 	#selectedIndex = 0;
 	#scrollOffset = 0;
 	#activeTarget: "primary" | "fallback" = "fallback";
@@ -67,11 +79,12 @@ export class ModelPanel implements Component {
 		this.#clearOptionLabel = options.clearOptionLabel;
 		this.#availableModelKeys = options.availableModelKeys;
 		this.#selectedFallbackKey = options.selectedFallbackKey;
+		this.#primaryThinkingLevel = options.primaryThinkingLevel;
+		this.#fallbackThinkingLevel = options.fallbackThinkingLevel;
 
 		// When no previous key is known, initialise the cursor at the current
 		// selection for the active target so the highlighted entry is visible.
-		const initialKey =
-			this.#activeTarget === "primary" ? options.primaryModelKey : options.selectedFallbackKey;
+		const initialKey = this.#activeTarget === "primary" ? options.primaryModelKey : options.selectedFallbackKey;
 		const nextIndex = this.#findOptionIndex(previousKey ?? initialKey);
 		this.#selectedIndex = Math.max(0, Math.min(nextIndex, this.#optionCount - 1));
 	}
@@ -82,21 +95,27 @@ export class ModelPanel implements Component {
 
 	render(width: number): string[] {
 		const isPrimary = this.#activeTarget === "primary";
-		const primaryLabel = isPrimary
-			? `${theme.fg("success", "▶")} Primary (editing)`
-			: theme.fg("dim", "  Primary");
+		const primaryLabel = isPrimary ? `${theme.fg("success", "▶")} Primary (editing)` : theme.fg("dim", "  Primary");
 		const fallbackLabel = isPrimary
 			? theme.fg("dim", "  Fallback")
 			: `${theme.fg("success", "▶")} Fallback (editing)`;
 
+		const primaryThinkingStr =
+			this.#primaryThinkingLevel !== undefined
+				? theme.fg("dim", ` [thinking: ${getThinkingLevelMetadata(this.#primaryThinkingLevel).label}]`)
+				: theme.fg("dim", " [thinking: —]");
+		const fallbackThinkingStr =
+			this.#fallbackThinkingLevel !== undefined
+				? theme.fg("dim", ` [thinking: ${getThinkingLevelMetadata(this.#fallbackThinkingLevel).label}]`)
+				: theme.fg("dim", " [thinking: —]");
 		const lines: string[] = [
-			truncateToWidth(`  ${primaryLabel}`, width),
+			truncateToWidth(`  ${primaryLabel}${primaryThinkingStr}`, width),
 			truncateToWidth(
 				`  ${theme.bold(this.#currentModelLabel)} ${theme.fg("dim", `(${this.#currentModelSourceLabel})`)}`,
 				width,
 			),
 			"",
-			truncateToWidth(`  ${fallbackLabel}`, width),
+			truncateToWidth(`  ${fallbackLabel}${fallbackThinkingStr}`, width),
 			truncateToWidth(theme.fg("dim", `  ${this.#currentFallbackLabel}`), width),
 			"",
 		];
@@ -144,10 +163,7 @@ export class ModelPanel implements Component {
 
 		lines.push("");
 		lines.push(
-			truncateToWidth(
-				theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle primary/fallback  esc:close"),
-				width,
-			),
+			truncateToWidth(theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle  l:cycle thinking  esc:close"), width),
 		);
 		return lines;
 	}
@@ -176,10 +192,17 @@ export class ModelPanel implements Component {
 		if (data === "t" || data === "T") {
 			this.#activeTarget = this.#activeTarget === "primary" ? "fallback" : "primary";
 			// Jump cursor to the current selection for the newly active target.
-			const currentKey =
-				this.#activeTarget === "primary" ? this.#primaryModelKey : this.#selectedFallbackKey;
+			const currentKey = this.#activeTarget === "primary" ? this.#primaryModelKey : this.#selectedFallbackKey;
 			const jumpIndex = this.#findOptionIndex(currentKey);
 			this.#selectedIndex = Math.max(0, Math.min(jumpIndex, this.#optionCount - 1));
+			return;
+		}
+		if (data === "l" || data === "L") {
+			if (this.#activeTarget === "primary") {
+				this.#callbacks.onCyclePrimaryThinkingLevel?.();
+			} else {
+				this.#callbacks.onCycleFallbackThinkingLevel?.();
+			}
 			return;
 		}
 		if (matchesAppInterrupt(data)) {

@@ -13,6 +13,7 @@ import {
 	isQualityGateSkipDirective,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
+	resolveImplementationWorkerGateTurnTransition,
 	rewriteCodeRabbitTaskInput,
 } from "./task-file-tracker";
 
@@ -499,6 +500,52 @@ describe("evaluateImplementationWorkerGateTaskResult", () => {
 		expect(outcome).toEqual({ success: true });
 	});
 });
+
+describe("resolveImplementationWorkerGateTurnTransition", () => {
+	test("treats fresh delegated assignments as gate entry points", () => {
+		expect(
+			resolveImplementationWorkerGateTurnTransition({
+				previousGateActive: true,
+				nextGateActive: true,
+				prompt: "delegation:\nworktree_path: /tmp/demo",
+			}),
+		).toBe("enter");
+
+		expect(
+			resolveImplementationWorkerGateTurnTransition({
+				previousGateActive: true,
+				nextGateActive: true,
+				prompt: "═══════════Task═══════════\nYour assignment is below.",
+			}),
+		).toBe("enter");
+	});
+
+	test("preserves completed gate progress across follow-up reminder turns", () => {
+		let state = createImplementationWorkerGateState();
+
+		state = recordImplementationWorkerGateOutcome(state, "lint", { success: true });
+		state = recordImplementationWorkerGateOutcome(state, "code-reviewer", {
+			success: true,
+		});
+		state = recordImplementationWorkerGateOutcome(state, "commit", { success: true });
+
+		const transition = resolveImplementationWorkerGateTurnTransition({
+			previousGateActive: true,
+			nextGateActive: true,
+			prompt: [
+				"<system-reminder>",
+				"You stopped without calling submit_result.",
+				"You MUST call submit_result as your only action now.",
+				"</system-reminder>",
+			].join("\n"),
+		});
+		const nextState = transition === "preserve" ? state : createImplementationWorkerGateState();
+
+		expect(transition).toBe("preserve");
+		expect(getImplementationWorkerSubmitDecision(nextState).allowed).toBe(true);
+	});
+});
+
 
 describe("implementation worker submit gate", () => {
 	test("allows documentation-only workflows to skip lint once review and commit succeed", () => {

@@ -35,6 +35,7 @@ import {
 	isQualityGateSkipDirective,
 	parseGitStatusSnapshot,
 	recordImplementationWorkerGateOutcome,
+	resolveImplementationWorkerGateTurnTransition,
 	rewriteCodeRabbitTaskInput,
 } from "./task-file-tracker.ts";
 import {
@@ -387,6 +388,29 @@ export default function implementationEngine(pi: ExtensionAPI) {
 		implementationWorkerBaselineSnapshot = new Set<string>();
 		implementationWorkerBaselineCaptured = false;
 	};
+	const resetImplementationWorkerGateTracking = async () => {
+		implementationWorkerGateState = createImplementationWorkerGateState();
+		implementationUnitScopeById = new Map<string, Set<string>>();
+		await refreshImplementationWorkerBaseline();
+	};
+
+	const syncImplementationWorkerGateForTurn = async (
+		nextGateActive: boolean,
+		prompt: string | undefined,
+) => {
+		const gateTransition = resolveImplementationWorkerGateTurnTransition({
+			previousGateActive: activeImplementationWorkerGate,
+			nextGateActive,
+			prompt,
+		});
+		activeImplementationWorkerGate = nextGateActive;
+		if (gateTransition === "enter" || gateTransition === "exit") {
+			await resetImplementationWorkerGateTracking();
+		}
+		return gateTransition;
+	};
+
+
 
 
 	const mergeTaskUnitsForScope = (
@@ -4249,42 +4273,36 @@ const notifyWorktreeProgress = (
 			if (!sessionInheritedRepoRoot && toonCtx.worktreePath)
 				sessionInheritedRepoRoot = toonCtx.worktreePath;
 		}
-		// TOON delegation envelopes do not include the legacy delegated-work marker, so reset worker gate state here.
+		// TOON delegation envelopes identify fresh worker assignments even when the older delegated marker is absent.
 		if (/^delegation:/m.test(promptText)) {
 			activeAgentIsParentTurn = false;
 			activeParentRuntimeRole = "default";
-			activeImplementationWorkerGate = isImplementationWorkerPrompt(
+			const nextGateActive = isImplementationWorkerPrompt(
 				event.systemPrompt,
 				promptText,
 			) && !isQualityGateSkipDirective(event.systemPrompt, promptText);
-			implementationWorkerGateState = createImplementationWorkerGateState();
-			implementationUnitScopeById = new Map<string, Set<string>>();
-			await refreshImplementationWorkerBaseline();
+			await syncImplementationWorkerGateForTurn(nextGateActive, promptText);
 			return;
 		}
 
 		if (/your assignment is below\./i.test(promptText) || /═══════════Task═══════════/.test(promptText)) {
 			activeAgentIsParentTurn = false;
 			activeParentRuntimeRole = "default";
-			activeImplementationWorkerGate = isImplementationWorkerPrompt(
+			const nextGateActive = isImplementationWorkerPrompt(
 				event.systemPrompt,
 				promptText,
 			) && !isQualityGateSkipDirective(event.systemPrompt, promptText);
-			implementationWorkerGateState = createImplementationWorkerGateState();
-			implementationUnitScopeById = new Map<string, Set<string>>();
-			await refreshImplementationWorkerBaseline();
+			await syncImplementationWorkerGateForTurn(nextGateActive, promptText);
 			return;
 		}
 		if (!ctx.hasUI) {
 			activeAgentIsParentTurn = false;
 			activeParentRuntimeRole = "default";
-			activeImplementationWorkerGate = isImplementationWorkerPrompt(
+			const nextGateActive = isImplementationWorkerPrompt(
 				event.systemPrompt,
 				promptText,
 			) && !isQualityGateSkipDirective(event.systemPrompt, promptText);
-			implementationWorkerGateState = createImplementationWorkerGateState();
-			implementationUnitScopeById = new Map<string, Set<string>>();
-			await refreshImplementationWorkerBaseline();
+			await syncImplementationWorkerGateForTurn(nextGateActive, promptText);
 			return;
 		}
 		const sessionFile = (ctx.sessionManager as { getSessionFile?: () => string | undefined }).getSessionFile?.();
@@ -4302,13 +4320,16 @@ const notifyWorktreeProgress = (
 				: resolveParentRuntimeRole(lastModelRole)
 			: "default";
 
-		activeImplementationWorkerGate =
+		const nextGateActive =
 			!activeAgentIsParentTurn &&
 			isImplementationWorkerPrompt(event.systemPrompt, promptText) &&
 			!isQualityGateSkipDirective(event.systemPrompt, promptText);
-		implementationWorkerGateState = createImplementationWorkerGateState();
-		implementationUnitScopeById = new Map<string, Set<string>>();
-		await refreshImplementationWorkerBaseline();
+		const gateTransition = await syncImplementationWorkerGateForTurn(nextGateActive, promptText);
+		if (gateTransition === "preserve") {
+			pi.logger.debug(
+				"implementation-engine: preserved worker gate progress for follow-up turn",
+			);
+		}
 
 		// Bypass orchestrator mode for native /handoff — the agent must directly generate
 		// the handoff document, not delegate it to subagents.

@@ -28,6 +28,8 @@ const FallbackSchema = Type.Optional(Type.Union([Type.String({ minLength: 1 }), 
 const AdvancedConfigSchema = Type.Optional(
 	Type.Object({
 		thinkingLevel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		primaryThinkingLevel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		fallbackThinkingLevel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 		maxRecursionDepth: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
 		compactionStrategy: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 		temperature: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
@@ -41,6 +43,8 @@ const AdvancedConfigSchema = Type.Optional(
 
 export type AdvancedConfig = {
 	thinkingLevel?: string | null;
+	primaryThinkingLevel?: string | null;
+	fallbackThinkingLevel?: string | null;
 	maxRecursionDepth?: number | null;
 	compactionStrategy?: string | null;
 	temperature?: number | null;

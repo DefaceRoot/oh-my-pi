@@ -1441,7 +1441,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 		});
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
-		const currentRole = sessionManager.getLastModelChangeRole();
+		const currentRole = sessionManager.getLastModelChangeRole() ?? options.role;
 		const currentMode = normalizePromptRole(currentRole);
 		const personality = settings.get("personality");
 		// Subagents return results to a parent agent, not a user — skip communication formatting.
@@ -1449,9 +1449,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// MCP server instructions removed — tool descriptions in available tools are sufficient
 		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
-		// Compute effective skills for this mode: use role's V2 skill config when no explicit config was given
+		// Compute effective skills for this mode: explicit config wins, then subagent config, then core-role config.
 		const effectiveSkills = await (async () => {
 			if (options.skillConfig) return skills; // explicit config already applied at session creation
+			const subagentSkillConfig =
+				currentRole && currentMode === "default" && currentRole !== "default"
+					? rolesConfig.getSkillConfigForSubagent(currentRole)
+					: undefined;
+			if (subagentSkillConfig) return await loadSkillsWithConfig(skills, subagentSkillConfig);
 			const roleSkillConfig = rolesConfig.getSkillConfigForRole(currentMode);
 			if (roleSkillConfig) return await loadSkillsWithConfig(skills, roleSkillConfig);
 			return skills; // V1 "all" or no config → pass all skills through
@@ -1785,6 +1790,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				modelRegistry,
 				primaryModelKey,
 			),
+		resolvePrimaryThinkingLevel: () => {
+			const config = taskDepth > 0
+				? rolesConfig.getAdvancedForSubagent(configuredRole)
+				: rolesConfig.getAdvancedForRole(configuredRole);
+			// Honour the same precedence as session startup: primaryThinkingLevel ?? thinkingLevel.
+			return resolveAdvancedThinkingLevel(config);
+		},
+		resolveFallbackThinkingLevel: () => {
+			const config = taskDepth > 0
+				? rolesConfig.getAdvancedForSubagent(configuredRole)
+				: rolesConfig.getAdvancedForRole(configuredRole);
+			return parseThinkingLevel(config?.fallbackThinkingLevel ?? undefined);
+		},
 	});
 
 	if (model?.api === "openai-codex-responses") {

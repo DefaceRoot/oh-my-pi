@@ -583,6 +583,9 @@ const IMPLEMENTATION_WORKER_MARKER_RE =
 const IMPLEMENTATION_WORKER_DELIVERY_LOOP_RE =
 	/<delivery_loop>[\s\S]*?spawn a `lint` subagent[\s\S]*?code-reviewer[\s\S]*?commit/i;
 const QUALITY_GATE_SKIP_DIRECTIVE_RE = /<skip_quality_gates\s*\/>/i;
+const IMPLEMENTATION_WORKER_TOON_DELEGATION_RE = /^delegation:/m;
+const IMPLEMENTATION_WORKER_LEGACY_ASSIGNMENT_RE = /your assignment is below\./i;
+const IMPLEMENTATION_WORKER_TASK_BLOCK_RE = /═══════════Task═══════════/;
 const IMPLEMENTATION_WORKER_DOC_EXTENSIONS = new Set([
 	".md",
 	".mdc",
@@ -695,6 +698,39 @@ export function isQualityGateSkipDirective(
 	const mergedPrompt = `${systemPrompt ?? ""}\n${prompt ?? ""}`;
 	return QUALITY_GATE_SKIP_DIRECTIVE_RE.test(mergedPrompt);
 }
+
+export type ImplementationWorkerGateTurnTransition =
+ 	| "enter"
+ 	| "preserve"
+ 	| "exit"
+ 	| "inactive";
+
+function isFreshImplementationWorkerAssignmentPrompt(
+	prompt: string | undefined,
+): boolean {
+	const promptText = prompt?.trim() ?? "";
+	if (!promptText) return false;
+	return (
+		IMPLEMENTATION_WORKER_TOON_DELEGATION_RE.test(promptText) ||
+		IMPLEMENTATION_WORKER_LEGACY_ASSIGNMENT_RE.test(promptText) ||
+		IMPLEMENTATION_WORKER_TASK_BLOCK_RE.test(promptText)
+	);
+}
+
+export function resolveImplementationWorkerGateTurnTransition(input: {
+	previousGateActive: boolean;
+	nextGateActive: boolean;
+	prompt: string | undefined;
+}): ImplementationWorkerGateTurnTransition {
+	if (!input.nextGateActive) {
+		return input.previousGateActive ? "exit" : "inactive";
+	}
+
+	return !input.previousGateActive || isFreshImplementationWorkerAssignmentPrompt(input.prompt)
+		? "enter"
+		: "preserve";
+}
+
 
 export function isImplementationWorkerGateAgent(
 	value: string | undefined,
