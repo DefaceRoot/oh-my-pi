@@ -59,3 +59,5 @@ pi-*.html
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 
 agent/config.yml
+agent.db*
+agent/presets.yml
