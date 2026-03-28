@@ -191,3 +191,60 @@ describe("ModelPanel – l key cycles thinking level", () => {
 		expect(() => panel.handleInput("l")).not.toThrow();
 	});
 });
+
+
+function enterSearch(panel: ModelPanel, query: string): void {
+	panel.handleInput("/");
+	for (const char of query) {
+		panel.handleInput(char);
+	}
+}
+
+describe("ModelPanel – search filtering", () => {
+	test("shows the empty state when the query matches nothing", () => {
+		const panel = makePanel();
+		panel.handleInput("t");
+		enterSearch(panel, "zzz");
+		const output = renderJoined(panel);
+
+		expect(output).toContain("Search (editing)");
+		expect(output).toContain("No matching models.");
+		expect(output).not.toContain("provider/other-model");
+	});
+
+	test("keeps the fallback clear entry visible while filtering", () => {
+		const panel = makePanel();
+		enterSearch(panel, "zzz");
+
+		const output = renderJoined(panel);
+
+		expect(output).toContain("No matching models.");
+		expect(output).toContain("No fallback");
+	});
+	test("escape clears the query without closing the panel", () => {
+		let closeCalled = 0;
+		const panel = makePanel({}, { onClose: () => { closeCalled += 1; } });
+
+		panel.handleInput("t");
+		enterSearch(panel, "zzz");
+		panel.handleInput("\x1b");
+
+		const output = renderJoined(panel);
+
+		expect(closeCalled).toBe(0);
+		expect(output).toContain("Search (/ to edit)");
+		expect(output).not.toContain("No matching models.");
+		expect(output).toContain("provider/other-model");
+	});
+});
+
+describe("ModelPanel – escape handling", () => {
+	test("escape closes the panel when not filtering", () => {
+		let closeCalled = 0;
+		const panel = makePanel({}, { onClose: () => { closeCalled += 1; } });
+
+		panel.handleInput("\x1b");
+
+		expect(closeCalled).toBe(1);
+	});
+});

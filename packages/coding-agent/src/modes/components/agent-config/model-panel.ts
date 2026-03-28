@@ -1,8 +1,9 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, Input, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getThinkingLevelMetadata } from "../../../thinking";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
+import { fuzzyFilter } from "../../../utils/fuzzy";
 
 const MAX_VISIBLE = 12;
 
@@ -60,6 +61,10 @@ export class ModelPanel implements Component {
 	#fallbackThinkingLevel: ThinkingLevel | undefined = undefined;
 	#selectedIndex = 0;
 	#scrollOffset = 0;
+
+	#filterMode = false;
+	readonly #searchInput = new Input();
+	#filteredModelKeys: string[] = [];
 	#activeTarget: "primary" | "fallback" = "fallback";
 	readonly #callbacks: ModelPanelCallbacks;
 
@@ -78,6 +83,7 @@ export class ModelPanel implements Component {
 		this.#globalDefaultLabel = options.globalDefaultLabel;
 		this.#clearOptionLabel = options.clearOptionLabel;
 		this.#availableModelKeys = options.availableModelKeys;
+		this.#refreshFilteredKeys();
 		this.#selectedFallbackKey = options.selectedFallbackKey;
 		this.#primaryThinkingLevel = options.primaryThinkingLevel;
 		this.#fallbackThinkingLevel = options.fallbackThinkingLevel;
@@ -99,7 +105,6 @@ export class ModelPanel implements Component {
 		const fallbackLabel = isPrimary
 			? theme.fg("dim", "  Fallback")
 			: `${theme.fg("success", "▶")} Fallback (editing)`;
-
 		const primaryThinkingStr =
 			this.#primaryThinkingLevel !== undefined
 				? theme.fg("dim", ` [thinking: ${getThinkingLevelMetadata(this.#primaryThinkingLevel).label}]`)
@@ -108,6 +113,8 @@ export class ModelPanel implements Component {
 			this.#fallbackThinkingLevel !== undefined
 				? theme.fg("dim", ` [thinking: ${getThinkingLevelMetadata(this.#fallbackThinkingLevel).label}]`)
 				: theme.fg("dim", " [thinking: —]");
+		this.#searchInput.focused = this.#filterMode;
+		const searchQuery = this.#searchInput.getValue().trim();
 		const lines: string[] = [
 			truncateToWidth(`  ${primaryLabel}${primaryThinkingStr}`, width),
 			truncateToWidth(
@@ -119,9 +126,6 @@ export class ModelPanel implements Component {
 			truncateToWidth(theme.fg("dim", `  ${this.#currentFallbackLabel}`), width),
 			"",
 		];
-
-		// Show override/global-default info only for fallback editing to keep the
-		// primary section uncluttered.
 		if (!isPrimary) {
 			lines.push(
 				truncateToWidth(theme.fg("dim", `  Override: ${this.#overrideLabel}`), width),
@@ -129,22 +133,20 @@ export class ModelPanel implements Component {
 				"",
 			);
 		}
-
 		lines.push(
 			truncateToWidth(
-				` ${theme.fg("success", "[✓]")}=selected  ${theme.fg("dim", "[~]")}=inherit  ${theme.fg("dim", "[ ]")}=available   space:select`,
+				` ${theme.fg("success", "[✓]")}=selected  ${theme.fg("dim", "[~]")}=inherit  ${theme.fg("dim", "[ ]")}=available   space:select  /:search`,
 				width,
 			),
 			"",
+			truncateToWidth(
+				` ${theme.fg(this.#filterMode ? "accent" : "dim", "Search")} ${theme.fg("dim", this.#filterMode ? "(editing)" : "(/ to edit)")}`,
+				width,
+			),
+			truncateToWidth(this.#searchInput.render(width)[0] ?? "> ", width),
+			"",
 		);
-
-		this.#ensureVisible(this.#selectedIndex);
-		if (this.#scrollOffset > 0) {
-			lines.push(truncateToWidth(theme.fg("dim", "  ▲ more"), width));
-		}
-
-		const endIndex = Math.min(this.#scrollOffset + MAX_VISIBLE, this.#optionCount);
-		for (let index = this.#scrollOffset; index < endIndex; index += 1) {
+		const renderOptionLine = (index: number): string => {
 			const optionKey = this.#optionKeyAt(index);
 			const label = this.#getOptionLabel(index, optionKey);
 			const tag = this.#renderStateTag(index, optionKey);
@@ -154,27 +156,69 @@ export class ModelPanel implements Component {
 			if (isSelected) {
 				line = theme.bg("selectedBg", truncateToWidth(line, width));
 			}
-			lines.push(truncateToWidth(line, width));
+			return truncateToWidth(line, width);
+		};
+		if (this.#filteredModelKeys.length === 0 && searchQuery) {
+			lines.push(truncateToWidth(theme.fg("dim", "  No matching models."), width));
+			if (this.#activeTarget === "fallback") {
+				lines.push(renderOptionLine(0));
+			}
+		} else {
+			this.#ensureVisible(this.#selectedIndex);
+			if (this.#scrollOffset > 0) {
+				lines.push(truncateToWidth(theme.fg("dim", "  ▲ more"), width));
+			}
+			const endIndex = Math.min(this.#scrollOffset + MAX_VISIBLE, this.#optionCount);
+			for (let index = this.#scrollOffset; index < endIndex; index += 1) {
+				lines.push(renderOptionLine(index));
+			}
+			if (endIndex < this.#optionCount) {
+				lines.push(truncateToWidth(theme.fg("dim", "  ▼ more"), width));
+			}
 		}
-
-		if (endIndex < this.#optionCount) {
-			lines.push(truncateToWidth(theme.fg("dim", "  ▼ more"), width));
-		}
-
-		lines.push("");
-		lines.push(
-			truncateToWidth(theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle  l:cycle thinking  esc:close"), width),
-		);
+		lines.push("", truncateToWidth(theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle  l:cycle thinking  /:search  esc:close"), width));
 		return lines;
 	}
 
+
+	#handleFilterInput(data: string): void {
+		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			this.#filterMode = false;
+			return;
+		}
+		if (matchesAppInterrupt(data)) {
+			this.#filterMode = false;
+			this.#searchInput.setValue("");
+			this.#refreshFilteredKeys();
+			this.#selectedIndex = 0;
+			this.#scrollOffset = 0;
+			return;
+		}
+		const prevKey = this.#optionKeyAt(this.#selectedIndex);
+		this.#searchInput.handleInput(data);
+		this.#refreshFilteredKeys();
+		// Keep the cursor on the previously selected item when it remains visible.
+		const nextIndex = prevKey !== null ? this.#findOptionIndex(prevKey) : 0;
+		this.#selectedIndex = Math.max(0, Math.min(nextIndex, this.#optionCount - 1));
+		this.#scrollOffset = 0;
+	}
+
+	#refreshFilteredKeys(): void {
+		const query = this.#searchInput.getValue().trim();
+		this.#filteredModelKeys = query ? fuzzyFilter(this.#availableModelKeys, query, key => key) : this.#availableModelKeys;
+	}
+
 	handleInput(data: string): void {
+		if (this.#filterMode) {
+			this.#handleFilterInput(data);
+			return;
+		}
 		if (matchesKey(data, "up") || data === "k") {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
+			this.#selectedIndex = Math.max(0, Math.min(this.#optionCount - 1, this.#selectedIndex - 1));
 			return;
 		}
 		if (matchesKey(data, "down") || data === "j") {
-			this.#selectedIndex = Math.min(this.#optionCount - 1, this.#selectedIndex + 1);
+			this.#selectedIndex = Math.max(0, Math.min(this.#optionCount - 1, this.#selectedIndex + 1));
 			return;
 		}
 		if (data === " " || matchesKey(data, "space")) {
@@ -205,28 +249,35 @@ export class ModelPanel implements Component {
 			}
 			return;
 		}
+		if (data === "/") {
+			this.#filterMode = true;
+			return;
+		}
 		if (matchesAppInterrupt(data)) {
 			this.#callbacks.onClose?.();
 		}
 	}
 
+
 	get #optionCount(): number {
 		if (this.#activeTarget === "primary") {
 			// No "clear" entry for primary — every model is a valid explicit choice.
-			return this.#availableModelKeys.length;
+			return this.#filteredModelKeys.length;
 		}
 		// Fallback: index 0 = "No fallback" (null); 1+ = model keys.
-		return this.#availableModelKeys.length + 1;
+		return this.#filteredModelKeys.length + 1;
 	}
+
 
 	#optionKeyAt(index: number): string | null {
 		if (this.#activeTarget === "primary") {
-			return this.#availableModelKeys[index] ?? null;
+			return this.#filteredModelKeys[index] ?? null;
 		}
 		// Fallback mode: index 0 = null (clear override), 1+ = model keys.
 		if (index <= 0) return null;
-		return this.#availableModelKeys[index - 1] ?? null;
+		return this.#filteredModelKeys[index - 1] ?? null;
 	}
+
 
 	#getOptionLabel(index: number, optionKey: string | null): string {
 		if (this.#activeTarget === "fallback" && index === 0) {
@@ -237,13 +288,14 @@ export class ModelPanel implements Component {
 
 	#findOptionIndex(optionKey: string | null | undefined): number {
 		if (!optionKey) return 0;
-		const modelIndex = this.#availableModelKeys.indexOf(optionKey);
+		const modelIndex = this.#filteredModelKeys.indexOf(optionKey);
 		if (this.#activeTarget === "primary") {
 			return modelIndex >= 0 ? modelIndex : 0;
 		}
 		// Fallback: offset by 1 to account for the null entry at index 0.
 		return modelIndex >= 0 ? modelIndex + 1 : 0;
 	}
+
 
 	#renderStateTag(index: number, optionKey: string | null): string {
 		if (this.#activeTarget === "primary") {
