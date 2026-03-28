@@ -85,6 +85,7 @@ export interface ThinkingConfig {
 }
 
 export type KnownProvider =
+	| "apertis"
 	| "alibaba-coding-plan"
 	| "amazon-bedrock"
 	| "anthropic"

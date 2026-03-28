@@ -39,11 +39,14 @@ import type {
  * - vLLM
  * - ZenMux
  * - Alibaba Coding Plan
+ * - Apertis.ai (API key)
  */
 // Alibaba Coding Plan
 export { loginAlibabaCodingPlan } from "./alibaba-coding-plan";
 // Anthropic
 export { loginAnthropic, refreshAnthropicToken } from "./anthropic";
+// Apertis.ai (API key)
+export { loginApertis } from "./apertis";
 // Cerebras (API key)
 export { loginCerebras } from "./cerebras";
 // Cloudflare AI Gateway (API key)
@@ -131,6 +134,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "alibaba-coding-plan",
 		name: "Alibaba Coding Plan",
+		available: true,
+	},
+	{
+		id: "apertis",
+		name: "Apertis.ai",
 		available: true,
 	},
 	{
@@ -371,6 +379,9 @@ export async function refreshOAuthToken(
 			newCredentials = await refreshKimiToken(credentials.refresh);
 			break;
 		case "kilo":
+			newCredentials = credentials;
+			break;
+		case "apertis":
 			newCredentials = credentials;
 			break;
 		case "gitlab-duo":

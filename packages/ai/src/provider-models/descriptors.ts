@@ -10,6 +10,7 @@ import { googleModelManagerOptions } from "./google";
 import {
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
+	apertisModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	githubCopilotModelManagerOptions,
@@ -128,6 +129,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		"qwen3.5-plus",
 		config => alibabaCodingPlanModelManagerOptions(config),
 		catalog("Alibaba Coding Plan", ["ALIBABA_CODING_PLAN_API_KEY"]),
+	),
+	catalogDescriptor(
+		"apertis",
+		"deepseek-v3.2",
+		config => apertisModelManagerOptions(config),
+		catalog("Apertis.ai", ["APERTIS_API_KEY"]),
 	),
 	descriptor("openai", "gpt-5.4", config => openaiModelManagerOptions(config)),
 	descriptor("groq", "openai/gpt-oss-120b", config => groqModelManagerOptions(config)),

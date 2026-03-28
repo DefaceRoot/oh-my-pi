@@ -9,6 +9,7 @@ export type OAuthCredentials = {
 };
 
 export type OAuthProvider =
+	| "apertis"
 	| "alibaba-coding-plan"
 	| "anthropic"
 	| "cerebras"

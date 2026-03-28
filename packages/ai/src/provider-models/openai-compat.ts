@@ -870,6 +870,39 @@ export function alibabaCodingPlanModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Apertis.ai
+// ---------------------------------------------------------------------------
+
+export interface ApertisModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function apertisModelManagerOptions(
+	config?: ApertisModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.apertis.ai/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"apertis" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "apertis",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "apertis",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 11. Vercel AI Gateway
 // ---------------------------------------------------------------------------
 

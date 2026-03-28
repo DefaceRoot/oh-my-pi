@@ -62,6 +62,7 @@ function isFoundryEnabled(): boolean {
 }
 
 const serviceProviderMap: Record<string, KeyResolver> = {
+	apertis: "APERTIS_API_KEY",
 	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
 	openai: "OPENAI_API_KEY",
 	google: "GEMINI_API_KEY",

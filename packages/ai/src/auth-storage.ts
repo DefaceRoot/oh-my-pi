@@ -33,6 +33,7 @@ import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oau
 // (these are used inside the login() switch-case)
 import { loginAlibabaCodingPlan } from "./utils/oauth/alibaba-coding-plan";
 import { loginAnthropic } from "./utils/oauth/anthropic";
+import { loginApertis } from "./utils/oauth/apertis";
 import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
 import { loginCursor } from "./utils/oauth/cursor";
@@ -190,7 +191,6 @@ type UsageFetchResult = {
 	credential: UsageCredential;
 };
 
-
 type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
@@ -273,7 +273,6 @@ type OAuthCredentialIdentity = {
 	email?: string;
 	projectId?: string;
 };
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
@@ -769,6 +768,11 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "apertis": {
+				const apiKey = await loginApertis(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "github-copilot":
 				credentials = await loginGitHubCopilot({
 					onAuth: (url, instructions) => ctrl.onAuth({ url, instructions }),
@@ -1102,16 +1106,11 @@ export class AuthStorage {
 		};
 	}
 
-
 	#findStoredOAuthCredentialIndexForCredential(provider: Provider, credential: OAuthCredentials): number {
 		return this.#findStoredOAuthCredentialIndex(provider, this.#getOAuthCredentialIdentity(credential));
 	}
 
-
-	#findStoredOAuthCredentialIndex(
-		provider: Provider,
-		previous: OAuthCredentialIdentity,
-	): number {
+	#findStoredOAuthCredentialIndex(provider: Provider, previous: OAuthCredentialIdentity): number {
 		const entries = this.#getStoredCredentials(provider);
 		const hasStableIdentity = Boolean(previous.accountId || previous.email || previous.projectId);
 		return entries.findIndex(entry => {
@@ -1504,7 +1503,9 @@ export class AuthStorage {
 			const results = await Promise.all(
 				requests.map(request => this.#fetchUsageCached(request, this.#usageRequestTimeoutMs)),
 			);
-			const reports = results.map(result => result.report).filter((report): report is UsageReport => report !== null);
+			const reports = results
+				.map(result => result.report)
+				.filter((report): report is UsageReport => report !== null);
 			const deduped = this.#dedupeUsageReports(reports);
 			if (deduped.length > 0) {
 				this.#usageCache.set(cacheKey, { value: deduped, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
@@ -1676,7 +1677,7 @@ export class AuthStorage {
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
 			const result = usageResults[orderPos];
 			if (!result) continue;
-			const { selection, usage, usageChecked } = result
+			const { selection, usage, usageChecked } = result;
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
 			if (!blocked && usage && this.#isUsageLimitReached(usage)) {
@@ -1802,7 +1803,10 @@ export class AuthStorage {
 					return;
 				}
 				try {
-					const refreshedCredentials = await this.#refreshOAuthCredential(provider, candidate.selection.credential);
+					const refreshedCredentials = await this.#refreshOAuthCredential(
+						provider,
+						candidate.selection.credential,
+					);
 					candidate.selection.credential = {
 						...candidate.selection.credential,
 						...refreshedCredentials,
@@ -1937,7 +1941,7 @@ export class AuthStorage {
 				}
 				return undefined;
 			}
-			}
+		}
 
 		try {
 			let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
