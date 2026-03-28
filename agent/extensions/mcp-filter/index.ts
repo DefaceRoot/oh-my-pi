@@ -322,12 +322,9 @@ const LEGACY_SKILL_ALLOW: Record<string, string[] | null> = {
 type SkillConfig = { auto: string[]; frontmatter: string[] };
 
 function isV2Skills(skills: unknown): skills is SkillConfig {
-	return (
-		skills !== null &&
-		typeof skills === "object" &&
-		"auto" in (skills as Record<string, unknown>) &&
-		Array.isArray((skills as Record<string, unknown>).auto)
-	);
+	if (skills === null || typeof skills !== "object") return false;
+	const record = skills as Record<string, unknown>;
+	return Array.isArray(record.auto) && Array.isArray(record.frontmatter);
 }
 
 function resolveSkillConfig(agent: string): SkillConfig | null {
@@ -352,7 +349,7 @@ function resolveSkillConfig(agent: string): SkillConfig | null {
 }
 
 const skillsSectionRe = /^# Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
-const availableSkillsSectionRe = /^# Available Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
+const mustReadSkillsSectionRe = /^# Must-Read Skills\n[\s\S]*?(?=^# [A-Z]|$(?!\n))/m;
 
 /**
  * Core skill-section filter: applies an allowlist to one `#`-headed section.
@@ -400,6 +397,43 @@ function filterSkillSection(
 	return systemPrompt.replace(sectionRe, filteredSection);
 }
 
+/**
+ * Filter the `# Must-Read Skills` section which uses list format:
+ * `- \`skill://name\` — description`
+ *
+ * `null` = keep all; `[]` = remove entire section; string[] = keep only named skills.
+ */
+function filterMustReadSkillsSection(
+	systemPrompt: string,
+	allowed: string[] | null,
+): string {
+	if (allowed === null) return systemPrompt;
+
+	const sectionMatch = systemPrompt.match(mustReadSkillsSectionRe);
+	if (!sectionMatch) return systemPrompt;
+
+	if (allowed.length === 0) {
+		return systemPrompt.replace(mustReadSkillsSectionRe, "");
+	}
+
+	const allowedSet = new Set(allowed);
+	const sectionText = sectionMatch[0];
+	const lines = sectionText.split("\n");
+	const filteredLines = lines.filter(line => {
+		const nameMatch = line.match(/^- `skill:\/\/([^`/]+)/);
+		if (!nameMatch) return true; // keep header lines, description text
+		return allowedSet.has(nameMatch[1]);
+	});
+
+	// If no skill entries remain after filtering, remove the entire section
+	const hasRemainingSkills = filteredLines.some(line => /^- `skill:\/\//.test(line));
+	if (!hasRemainingSkills) {
+		return systemPrompt.replace(mustReadSkillsSectionRe, "");
+	}
+
+	return systemPrompt.replace(sectionText, filteredLines.join("\n"));
+}
+
 /** V1 fallback: filter `# Skills` section using LEGACY_SKILL_ALLOW map. */
 function stripSkillsV1(systemPrompt: string, agent: string): string {
 	const allowed = LEGACY_SKILL_ALLOW[agent] ?? LEGACY_SKILL_ALLOW.default;
@@ -407,13 +441,15 @@ function stripSkillsV1(systemPrompt: string, agent: string): string {
 }
 
 /**
- * V2 skill filtering: filter both `# Skills` (auto) and `# Available Skills`
+ * V2 skill filtering: filter `# Must-Read Skills` (auto) and `# Skills`
  * (frontmatter) sections using the SkillConfig read from roles.yml.
  */
 function stripSkillsV2(systemPrompt: string, config: SkillConfig): string {
 	let result = systemPrompt;
-	result = filterSkillSection(result, skillsSectionRe, config.auto);
-	result = filterSkillSection(result, availableSkillsSectionRe, config.frontmatter);
+	// auto skills appear in # Must-Read Skills (list format)
+	result = filterMustReadSkillsSection(result, config.auto);
+	// frontmatter skills appear in # Skills (block format)
+	result = filterSkillSection(result, skillsSectionRe, config.frontmatter);
 	return result;
 }
 
@@ -421,7 +457,7 @@ function stripSkillsV2(systemPrompt: string, config: SkillConfig): string {
  * Filter skill sections from the system prompt based on agent role.
  *
  * V2 (roles.yml has `skills: { auto, frontmatter }` for this agent): filter
- * both `# Skills` and `# Available Skills` sections independently.
+ * `# Must-Read Skills` and `# Skills` sections independently.
  *
  * V1 fallback: filter only `# Skills` using the LEGACY_SKILL_ALLOW map.
  */
