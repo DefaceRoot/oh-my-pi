@@ -14,26 +14,26 @@ roles:
       - ast_grep
       - ast_edit
       - task
-      - cancel_job
       - await
       - todo_write
       - ask
-      - checkpoint
-      - rewind
       - browser
       - resolve
       - bash
-      - render_mermaid
+      - notebook
     mcp: 
       - augment
       - ref
     skills: 
       auto: 
         - agent-browser
+        - dispatching-parallel-agents
       frontmatter: 
         - brainstorming
+        - toon-delegation
     fallback: openai-codex/gpt-5.4
     advanced: 
+      thinkingLevel: medium
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
       temperature: 1
@@ -46,42 +46,70 @@ roles:
       - cancel_job
       - todo_write
       - ask
+      - rewind
+      - notebook
+      - checkpoint
     mcp: 
       - augment
       - ref
     skills: 
-      categories: 
-        - workflow
-        - infra
+      auto: 
+        - toon-delegation
+        - dispatching-parallel-agents
+      frontmatter: 
+        - oh-my-pi-customization
+        - autoresearch
+    fallback: openai-codex/gpt-5.4-mini
+    advanced: 
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: xhigh
+      maxRecursionDepth: 5
+      compactionStrategy: handoff
+      memoriesEnabled: true
+      compactionThresholdPercent: 60
   plan: 
     tools: 
       - read
       - write
       - edit
-      - find
-      - grep
       - bash
-      - web_search
-      - fetch
       - ast_grep
-      - ast_edit
       - task
       - cancel_job
       - await
       - todo_write
       - ask
-      - checkpoint
-      - rewind
-      - render_mermaid
       - resolve
       - exit_plan_mode
+      - checkpoint
+      - find
+      - rewind
+      - notebook
     mcp: 
       - augment
       - ref
     skills: 
-      categories: 
-        - planning
-        - workflow
+      auto: 
+        - writing-plans
+        - toon-delegation
+        - dispatching-parallel-agents
+      frontmatter: 
+        - web-design-guidelines
+        - system-prompts
+        - simplify
+        - semantic-compression
+        - oh-my-pi-customization
+        - monorepo-management
+        - error-handling-patterns
+        - auth-implementation-patterns
+    fallback: anthropic/claude-sonnet-4-6
+    advanced: 
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: xhigh
+      maxRecursionDepth: 4
+      compactionStrategy: handoff
+      memoriesEnabled: true
+      compactionThresholdPercent: 55
   ask: 
     tools: 
       - read
@@ -95,7 +123,17 @@ roles:
     mcp: 
       - augment
       - ref
-    skills: none
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - toon-delegation
+    fallback: kilo/xiaomi/mimo-v2-pro:free
+    advanced: 
+      primaryThinkingLevel: medium
+      fallbackThinkingLevel: medium
+      memoriesEnabled: true
+      compactionThresholdPercent: 50
   explore: 
     tools: 
       - read
@@ -578,6 +616,19 @@ subagents:
       - augment
       - chrome-devtools
       - ref
+    skills: 
+      auto: 
+        - web-design-guidelines
+        - ui-ux-pro-max
+      frontmatter: 
+        - toon-delegation
+        - simplify
+        - frontend-design
+        - dispatching-parallel-agents
+    fallback: openai-codex/gpt-5.4
+    advanced: 
+      fallbackThinkingLevel: minimal
+      primaryThinkingLevel: high
   grafana: 
     mcp: 
       - augment
@@ -604,3 +655,110 @@ subagents:
     mcp: 
       - augment
       - ref
+  implement: 
+    mcp: 
+      - augment
+      - ref
+    skills: 
+      auto: 
+        - toon-delegation
+      frontmatter: 
+        - vercel-react-best-practices
+        - simplify
+        - semantic-compression
+        - fastapi-templates
+        - error-handling-patterns
+        - dispatching-parallel-agents
+        - auth-implementation-patterns
+    tools: 
+      inherit: implement
+      remove: 
+        - browser
+        - cancel_job
+        - ask
+        - checkpoint
+        - rewind
+    fallback: zai/glm-5.1
+    advanced: 
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: high
+      maxRecursionDepth: 4
+      memoriesEnabled: false
+  debug: 
+    mcp: 
+      - augment
+      - ref
+      - chrome-devtools
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - code-review-foundations
+        - dispatching-parallel-agents
+        - e2e-testing-patterns
+        - error-handling-patterns
+    tools: 
+      inherit: debug
+      add: 
+        - notebook
+      remove: 
+        - web_search
+        - rewind
+        - cancel_job
+        - browser
+        - ask
+    advanced: 
+      thinkingLevel: xhigh
+      primaryThinkingLevel: xhigh
+      maxRecursionDepth: 3
+      compactionStrategy: context-full
+      compactionThresholdPercent: 65
+  verifier: 
+    mcp: 
+      - augment
+      - ref
+      - chrome-devtools
+    tools: 
+      - read
+      - grep
+      - find
+      - bash
+      - lsp
+      - submit_result
+      - python
+      - todo_write
+      - fetch
+      - ast_grep
+    advanced: 
+      primaryThinkingLevel: high
+      compactionThresholdPercent: 80
+  plan-verifier: 
+    mcp: 
+      - augment
+      - ref
+    skills: 
+      auto: 
+        - writing-plans
+        - simplify
+      frontmatter: 
+        - system-prompts
+        - dispatching-parallel-agents
+        - code-review-foundations
+        - auth-implementation-patterns
+    tools: 
+      - read
+      - grep
+      - find
+      - write
+      - bash
+      - submit_result
+      - ast_grep
+      - fetch
+      - checkpoint
+      - lsp
+      - rewind
+      - todo_write
+    advanced: 
+      primaryThinkingLevel: xhigh
+      memoriesEnabled: true
+      compactionThresholdPercent: 75

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { _testExports } from "./index.ts";
 
 type PolicyContext = ReturnType<(typeof _testExports)["isOrchestratorContext"]>;
@@ -181,15 +184,15 @@ describe("orchestrator-mode policy", () => {
 		expectBlocked(parentOrchestratorContext(), "write");
 	});
 
-	it("blocks notebook tool", () => {
-		expectBlocked(parentOrchestratorContext(), "notebook");
+	it("allows notebook tool from the orchestrator role config", () => {
+		expectAllowed(parentOrchestratorContext(), "notebook");
 	});
 
 	it("blocks grep tool", () => {
 		expectBlocked(parentOrchestratorContext(), "grep");
 	});
 
-	it("blocks find tool", () => {
+	it("blocks find tool from the orchestrator role config", () => {
 		expectBlocked(parentOrchestratorContext(), "find");
 	});
 
@@ -244,12 +247,92 @@ describe("orchestrator-mode policy", () => {
 		expectAllowed(parentOrchestratorContext(), "bash", { command: "git status --short" });
 	});
 
+
+	it("reads orchestrator tools and MCP prefixes from roles.yml", () => {
+		const rolesPath = path.resolve(import.meta.dir, "..", "..", "roles.yml");
+		const access = _testExports.resolveOrchestratorToolAccess?.(rolesPath);
+		expect(access?.toolNames.has("notebook")).toBe(true);
+		expect(access?.toolNames.has("find")).toBe(false);
+		expect(access?.toolNames.has("ast_grep")).toBe(false);
+		expect(access?.toolNames.has("bash")).toBe(true);
+		expect(access?.mcpPrefixes).toContain("mcp_augment_");
+	});
+
+	it("reloads orchestrator access after roles.yml changes", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-orchestrator-roles-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		try {
+			await fs.writeFile(
+				rolesPath,
+				`roles:\n  orchestrator:\n    tools:\n      - read\n    mcp:\n      - augment\n    skills: all\nsubagents: {}\n`,
+			);
+
+			const initialAccess = _testExports.resolveOrchestratorToolAccess?.(rolesPath);
+			expect(initialAccess?.toolNames.has("notebook")).toBe(false);
+
+			await fs.writeFile(
+				rolesPath,
+				`roles:\n  orchestrator:\n    tools:\n      - read\n      - notebook\n    mcp:\n      - augment\n    skills: all\nsubagents: {}\n`,
+			);
+
+			const updatedAccess = _testExports.resolveOrchestratorToolAccess?.(rolesPath);
+			expect(updatedAccess?.toolNames.has("notebook")).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("blocks ast_grep from the orchestrator role config", () => {
+		expectBlocked(parentOrchestratorContext(), "ast_grep", { command: "ast_grep query" });
+	});
+
+	it("blocks discovery tools when role access is unavailable", () => {
+		expectBlocked({ ...parentOrchestratorContext(), orchestratorToolAccess: undefined }, "find");
+	});
+
+	it("allows augment MCP retrieval from the orchestrator role config", () => {
+		expectAllowed(parentOrchestratorContext(), "mcp_augment_codebase_retrieval");
+	});
+
+	it("allows cd-prefixed git status commands when bash fallback applies", () => {
+		expect(_testExports.shouldBlockBashCommand?.("git status --short", false)).toBeUndefined();
+		expect(_testExports.shouldBlockBashCommand?.("cd /tmp && git status --short", false)).toBeUndefined();
+		expect(_testExports.shouldBlockBashCommand?.("git status --short; rm -rf /tmp/x", false)?.block).toBe(true);
+		expect(_testExports.shouldBlockBashCommand?.("cd /tmp && git status --short; echo pwned", false)?.block).toBe(true);
+		expect(_testExports.shouldBlockBashCommand?.("cd $(touch /tmp/pwned) && git status --short", false)?.block).toBe(true);
+		expect(_testExports.shouldBlockBashCommand?.("cd `echo /tmp` && git status --short", false)?.block).toBe(true);
+		expect(_testExports.shouldBlockBashCommand?.("echo hi", false)?.block).toBe(true);
+	});
+
+	it("allows bash to reach the fallback when the role config omits it", () => {
+		const restrictedAccess = { toolNames: new Set(["read"]), mcpPrefixes: [] };
+		expect(
+			_testExports.shouldBlockTool(
+				{ toolName: "bash", input: { command: "git status --short" } },
+				{ ...parentOrchestratorContext(), orchestratorToolAccess: restrictedAccess } as never,
+				),
+		).toBeUndefined();
+		expect(_testExports.shouldBlockBashCommand?.("cd /tmp && git status", false)).toBeUndefined();
+		expect(_testExports.shouldBlockBashCommand?.("echo hi", false)?.block).toBe(true);
+	});
+
+	it("blocks todo_write until Must-Read Skills are read", () => {
+		try {
+			_testExports.syncAutoSkillTracking?.("session-1", "# Must-Read Skills\n- `skill://toon-delegation`\n");
+			expectBlocked(parentOrchestratorContext(), "todo_write");
+			expectAllowed(parentOrchestratorContext(), "read", { path: "skill://toon-delegation" });
+		} finally {
+			_testExports.syncAutoSkillTracking?.(undefined, undefined);
+		}
+	});
+
 	it("prompt requires immediate orchestration without preamble", () => {
 		const prompt = _testExports.buildOrchestratorPrompt();
 		expect(prompt).toContain("This role NEVER implements directly, even for tiny requests.");
 		expect(prompt).toContain("Skip the preamble. Do not output a numbered execution list before acting.");
 		expect(prompt).toContain("create a detailed phased todo list with todo_write");
-		expect(prompt).toContain("You MAY use up to 5 narrow read calls first when that context is required to build a comprehensive todo list.");
+		expect(prompt).toContain("otherwise only the git status fallback is permitted");
+		expect(prompt).toContain("If Must-Read Skills remain unread, read them before calling todo_write.");
 		expect(prompt).toContain("Do not keep a shallow todo list.");
 		expect(prompt).toContain("After every subagent result or new user instruction, update todo_write before any other orchestration action.");
 		expect(prompt).toContain("Never park on indefinite await. Every await call MUST set timeout");

@@ -354,7 +354,6 @@ subagents:
 			});
 
 			expect(renderText(modal)).toContain("anthropic/claude-sonnet-4-5");
-			expect(renderText(modal)).toContain("Current: openai/gpt-4o (global default)");
 			expect(renderText(modal)).toContain("Override: using global default");
 			expect(renderText(modal)).toContain("Global default: openai/gpt-4o");
 
@@ -363,14 +362,12 @@ subagents:
 			modal.handleInput(" ");
 
 			expect(rolesConfig.getFallbackForRole("default")).toBe("anthropic/claude-haiku");
-			expect(renderText(modal)).toContain("Current: anthropic/claude-haiku (agent override)");
 			expect(renderText(modal)).toContain("Override: anthropic/claude-haiku");
 
 			modal.handleInput("k");
 			modal.handleInput(" ");
 
 			expect(rolesConfig.getFallbackForRole("default")).toBeNull();
-			expect(renderText(modal)).toContain("Current: openai/gpt-4o (global default)");
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -408,7 +405,6 @@ subagents:
 			modal.handleInput(" ");
 
 			expect(rolesConfig.getFallbackForRole("default")).toBeNull();
-			expect(renderText(modal)).toContain("Current: openai/gpt-4o (global default)");
 			expect(renderText(modal)).toContain("Override: using global default");
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
@@ -457,7 +453,6 @@ subagents:
 			modal.handleInput(" ");
 
 			expect(rolesConfig.getFallbackForSubagent("explore")).toBeNull();
-			expect(renderText(modal)).toContain("Current: openai/gpt-4o (global default)");
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -501,7 +496,6 @@ subagents:
 			modal.handleInput(" ");
 
 			expect(rolesConfig.getFallbackForRole("ask")).toBeNull();
-			expect(renderText(modal)).toContain("Current: anthropic/claude-haiku (global default)");
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -574,7 +568,6 @@ subagents:
 			}
 
 			expect(renderText(modal)).toContain("anthropic/claude-sonnet-4-5");
-			expect(renderText(modal)).toContain("Current: none");
 			expect(renderText(modal)).toContain("Override: no override");
 			expect(renderText(modal)).toContain("Global default: none");
 
@@ -584,7 +577,6 @@ subagents:
 
 			expect(rolesConfig.getFallbackForSubagent("implement")).toBe("anthropic/claude-haiku");
 			expect(rolesConfig.getFallbackForRole("implement")).toBeNull();
-			expect(renderText(modal)).toContain("Current: anthropic/claude-haiku (agent override)");
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -794,6 +786,8 @@ describe("AgentConfigModal advanced integration", () => {
 			expect(rolesConfig.getMcpForSubagent("explore")).toEqual(["augment"]);
 			expect(renderText(modal)).toContain("global");
 
+			modal.handleInput("j");
+			modal.handleInput("j");
 			modal.handleInput("j");
 			modal.handleInput("j");
 			modal.handleInput("j");

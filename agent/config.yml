@@ -3,21 +3,21 @@ modelRoles:
   default: anthropic/claude-sonnet-4-6
   ask: kimi-code/kimi-k2.5:high
   orchestrator: anthropic/claude-sonnet-4-6:high
-  plan: github-copilot/claude-opus-4.6:xhigh
+  plan: anthropic/claude-opus-4-6
   commit: zai/glm-5:medium
-  implement: github-copilot/claude-sonnet-4.6:high
+  implement: openai-codex/gpt-5.4-mini
   explore: openai-codex/gpt-5.4-mini:low
   lint: zai/glm-5:medium
   merge: openai-codex/gpt-5.4:xhigh
   curator: zai/glm-5:medium
   research: openai-codex/gpt-5.4-mini:medium
-  verifier: github-copilot/gpt-5.4:xhigh
+  verifier: openai-codex/gpt-5.4
   worktree-setup: zai/glm-5:medium
   code-reviewer: openai-codex/gpt-5.4:high
-  plan-verifier: github-copilot/gpt-5.4:xhigh
+  plan-verifier: openai-codex/gpt-5.4
   coderabbit: zai/glm-5:low
   frontend: github-copilot/gemini-3.1-pro-preview
-  designer: github-copilot/claude-opus-4.6:high
+  designer: anthropic/claude-opus-4-6
   grafana: github-copilot/claude-opus-4.6:high
   debug: openai-codex/gpt-5.4:xhigh
   vision: github-copilot/gemini-3.1-pro-preview:high
