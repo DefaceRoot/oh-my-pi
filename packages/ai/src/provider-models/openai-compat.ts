@@ -903,6 +903,34 @@ export function apertisModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Fireworks AI
+// ---------------------------------------------------------------------------
+
+export interface FireworksModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function fireworksModelManagerOptions(
+	config?: FireworksModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.fireworks.ai/inference/v1";
+	return {
+		providerId: "fireworks",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "fireworks",
+					baseUrl,
+					apiKey,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 11. Vercel AI Gateway
 // ---------------------------------------------------------------------------
 

@@ -60,6 +60,7 @@ import { loginQianfan } from "./utils/oauth/qianfan";
 import { loginQwenPortal } from "./utils/oauth/qwen-portal";
 import { loginSynthetic } from "./utils/oauth/synthetic";
 import { loginTavily } from "./utils/oauth/tavily";
+import { loginFireworks } from "./utils/oauth/fireworks";
 import { loginTogether } from "./utils/oauth/together";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 import { loginVenice } from "./utils/oauth/venice";
@@ -901,6 +902,11 @@ export class AuthStorage {
 			}
 			case "nanogpt": {
 				const apiKey = await loginNanoGPT(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "fireworks": {
+				const apiKey = await loginFireworks(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}

@@ -172,6 +172,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "fireworks",
+		name: "Fireworks AI",
+		available: true,
+	},
+	{
 		id: "github-copilot",
 		name: "GitHub Copilot",
 		available: true,
