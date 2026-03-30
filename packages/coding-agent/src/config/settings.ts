@@ -381,10 +381,12 @@ export class Settings {
 			const resolution = configured
 				? resolveModelRoleValue(configured, fallbackModels, { settings: this, matchPreferences })
 				: { explicitThinkingLevel: false, model: fallbackModels[0], thinkingLevel: undefined };
-			if (!resolution.model) {
+			// Configured role aliases can be temporarily unresolved while dynamic providers load, so keep the UI usable when models exist.
+			const resolvedModel = resolution.model ?? fallbackModels[0];
+			if (!resolvedModel) {
 				throw new Error(`Cannot resolve model for role ${role}`);
 			}
-			const modelKey = `${resolution.model.provider}/${resolution.model.id}`;
+			const modelKey = `${resolvedModel.provider}/${resolvedModel.id}`;
 			const resolvedValue =
 				resolution.explicitThinkingLevel && resolution.thinkingLevel !== undefined
 					? `${modelKey}:${resolution.thinkingLevel}`
