@@ -99,6 +99,10 @@ export class ModelPanel implements Component {
 		// Stateless render; nothing to flush.
 	}
 
+	isFilterMode(): boolean {
+		return this.#filterMode;
+	}
+
 	render(width: number): string[] {
 		const isPrimary = this.#activeTarget === "primary";
 		const primaryLabel = isPrimary ? `${theme.fg("success", "▶")} Primary (editing)` : theme.fg("dim", "  Primary");

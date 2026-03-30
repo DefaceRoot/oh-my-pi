@@ -77,6 +77,10 @@ export class SkillConfigPanel implements Component {
 		// Stateless render; nothing to flush.
 	}
 
+	isFilterMode(): boolean {
+		return this.#filterMode;
+	}
+
 	render(width: number): string[] {
 		const lines: string[] = [];
 		this.#searchInput.focused = this.#filterMode;
