@@ -151,6 +151,36 @@ test_toon_delegation_skill() {
     [[ -f "$AGENT_DIR/skills/toon-delegation/SKILL.md" ]]
 }
 
+test_skills_exist() {
+	[[ -d "$AGENT_DIR/skills" ]] || return 1
+	local symlink_count=0
+	local missing_skill_md=0
+	local dir_count=0
+	local skill_name
+
+	while IFS= read -r link; do
+		[[ -z "$link" ]] && continue
+		skill_name=$(basename "$link")
+		echo -e "  ${YELLOW}symlink${NC}: $skill_name"
+		symlink_count=$((symlink_count + 1))
+	done < <(find "$AGENT_DIR/skills" -maxdepth 1 -type l 2>/dev/null)
+
+	while IFS= read -r dir; do
+		[[ -z "$dir" ]] && continue
+		skill_name=$(basename "$dir")
+		dir_count=$((dir_count + 1))
+		if [[ ! -f "$dir/SKILL.md" ]]; then
+			echo -e "  ${RED}missing SKILL.md${NC}: $skill_name"
+			missing_skill_md=$((missing_skill_md + 1))
+		fi
+	done < <(find "$AGENT_DIR/skills" -maxdepth 1 -mindepth 1 -type d 2>/dev/null)
+
+	echo "  Real directories: $dir_count, Symlinks: $symlink_count"
+
+	[[ $symlink_count -eq 0 && $missing_skill_md -eq 0 ]]
+}
+
+# ============================================================================
 test_agents_directory() {
     [[ -d "$AGENT_DIR/agents" ]]
 }
@@ -371,10 +401,10 @@ main() {
 
     # Skills
     log_header "Skills System"
-    run_test "Skills directory" test_skills_directory || true
-    run_test "Skills have content" test_skills_content || true
-    run_test "toon-delegation skill" test_toon_delegation_skill || true
-
+	run_test "Skills directory" test_skills_directory || true
+	run_test "Skills have content" test_skills_content || true
+	run_test "toon-delegation skill" test_toon_delegation_skill || true
+	run_test "Skills installed as real directories" test_skills_exist || true
     # Agents
     log_header "Agent Definitions"
     run_test "Agents directory" test_agents_directory || true
