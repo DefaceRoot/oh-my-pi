@@ -3,6 +3,7 @@ import {
 	type BranchSummaryEntry,
 	buildSessionContext,
 	type CompactionEntry,
+	type ModeChangeEntry,
 	type ModelChangeEntry,
 	type SessionEntry,
 	type SessionMessageEntry,
@@ -338,5 +339,102 @@ describe("buildSessionContext", () => {
 			// Should only get the orphan since parent chain is broken
 			expect(ctx.messages).toHaveLength(1);
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// RED: session mode-authority contract
+//
+// These tests FAIL on current code because buildSessionContext derives `mode`
+// exclusively from `mode_change` entries, while the agent role
+// ("orchestrator", "ask") is only recorded in `model_change` entries.
+// The divergence means TTSR rule gating and system-prompt generation use
+// different authority sources for "current mode".
+// ---------------------------------------------------------------------------
+
+describe("buildSessionContext mode authority (RED)", () => {
+	it("mode reflects orchestrator role from model_change entry when no mode_change exists", () => {
+		// Defect: when a session starts with role 'orchestrator' (model_change
+		// with role='orchestrator'), SessionContext.mode is 'none' instead of
+		// 'orchestrator'. Downstream consumers (TTSR gating, system-prompt)
+		// disagree on the active mode because they read different sources.
+		//
+		// Fix contract: buildSessionContext should derive the canonical mode
+		// from the latest model_change.role when no mode_change entry is present.
+		const entries: SessionEntry[] = [
+			msg("1", null, "user", "start"),
+			{
+				type: "model_change" as const,
+				id: "2",
+				parentId: "1",
+				timestamp: "2025-01-01T00:00:00Z",
+				model: "anthropic/claude-test",
+				role: "orchestrator",
+			} satisfies ModelChangeEntry,
+			msg("3", "2", "assistant", "orchestrating"),
+		];
+
+		const ctx = buildSessionContext(entries);
+
+		// FAILS: returns 'none' because only mode_change entries influence ctx.mode.
+		expect(ctx.mode).toBe("orchestrator");
+	});
+
+	it("mode reflects ask role from model_change entry when no mode_change exists", () => {
+		// Defect: same authority gap for the 'ask' role.
+		//
+		// Fix contract: the ask role established via model_change must be
+		// observable in SessionContext.mode so that TTSR rule gating and
+		// system-prompt generation share the same single source of truth.
+		const entries: SessionEntry[] = [
+			msg("1", null, "user", "start"),
+			{
+				type: "model_change" as const,
+				id: "2",
+				parentId: "1",
+				timestamp: "2025-01-01T00:00:00Z",
+				model: "anthropic/claude-test",
+				role: "ask",
+			} satisfies ModelChangeEntry,
+			msg("3", "2", "assistant", "answering"),
+		];
+
+		const ctx = buildSessionContext(entries);
+
+		// FAILS: returns 'none'.
+		expect(ctx.mode).toBe("ask");
+	});
+
+	it("mode reverts to the last model_change role after a mode_change returns to none", () => {
+		// Defect: after plan mode exits (mode_change 'none'), and a prior
+		// model_change established 'orchestrator', the canonical mode should
+		// revert to 'orchestrator', not fall back to the hardcoded 'none' sentinel.
+		const entries: SessionEntry[] = [
+			msg("1", null, "user", "start"),
+			{
+				type: "model_change" as const,
+				id: "2",
+				parentId: "1",
+				timestamp: "2025-01-01T00:00:00Z",
+				model: "anthropic/claude-test",
+				role: "orchestrator",
+			} satisfies ModelChangeEntry,
+			msg("3", "2", "assistant", "in orchestrator"),
+			{
+				type: "mode_change" as const,
+				id: "4",
+				parentId: "3",
+				timestamp: "2025-01-01T00:00:00Z",
+				mode: "none",
+			} satisfies ModeChangeEntry,
+			msg("5", "4", "user", "plan mode exited"),
+		];
+
+		const ctx = buildSessionContext(entries);
+
+		// After exiting plan mode the canonical authority should be the latest
+		// model_change role ('orchestrator'), not the raw 'none' sentinel.
+		// FAILS: returns 'none'.
+		expect(ctx.mode).toBe("orchestrator");
 	});
 });
