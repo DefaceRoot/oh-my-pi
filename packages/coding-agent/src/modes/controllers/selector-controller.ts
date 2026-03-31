@@ -648,10 +648,7 @@ export class SelectorController {
 		) as Record<string, string>;
 		const configuredSubagentTools = Object.values(rolesSnapshot.subagents).flatMap(subagentConfig => {
 			if (subagentConfig.tools === undefined) return [];
-			if (Array.isArray(subagentConfig.tools)) return subagentConfig.tools.filter(tool => !isHiddenToolName(tool));
-			return [...(subagentConfig.tools.add ?? []), ...(subagentConfig.tools.remove ?? [])].filter(
-				tool => !isHiddenToolName(tool),
-			);
+			return subagentConfig.tools.filter(tool => !isHiddenToolName(tool));
 		});
 		const configuredDisabledTools = [
 			...Object.values(rolesSnapshot.roles).flatMap(roleConfig => roleConfig.disabledTools ?? []),
