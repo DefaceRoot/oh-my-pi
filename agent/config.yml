@@ -2,10 +2,10 @@ lastChangelogVersion: 13.15.0
 modelRoles: 
   default: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
   ask: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
-  orchestrator: anthropic/claude-sonnet-4-6
+  orchestrator: github-copilot/claude-sonnet-4.6
   plan: apertis/code:claude-opus-4-6
   commit: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
-  implement: anthropic/claude-sonnet-4-6
+  implement: github-copilot/claude-sonnet-4.6:high
   explore: apertis/gemini-3-flash-preview
   lint: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
   merge: openai-codex/gpt-5.4:xhigh

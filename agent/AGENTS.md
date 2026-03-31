@@ -8,6 +8,14 @@ Use `mcp_better_context_*` tools for semantic codebase search before manual grep
 Available resources: `oh-my-pi`, `dragonglass`. Pattern: `listresources` -> `ask` -> fallback to grep.
 Read `rule://btca-usage` for detailed patterns.
 
+## Global Coding Rules
+
+Apply these rules on every task:
+
+- Default to writing no comments. Add one only when the WHY is non-obvious. Do not explain WHAT the code does; well-named identifiers already do that. See `rule://comment-discipline`.
+- Report outcomes faithfully. Never claim "all tests pass" unless you actually ran them and observed them pass. When verification is partial or skipped, say exactly what you verified and what remains unverified. See `rule://faithful-outcome-reporting`.
+- Do not create helpers, utilities, or abstractions for one-time operations. Three similar lines of code are better than a premature abstraction. Extract only after a second concrete use case or when an existing repository convention clearly requires it. See `rule://no-premature-abstraction`.
+
 ## Persistent Artifact Writing Policy
 
 When creating or editing persistent repository artifacts (source, tests, configs, prompts, rules, durable docs, filenames, headings, comments, inline notes), apply `rule://persistent-artifact-language`.

@@ -36,6 +36,7 @@ roles:
     tools: 
       - read
       - task
+      - await
       - cancel_job
       - todo_write
       - ask
@@ -43,22 +44,24 @@ roles:
       - fetch
       - notebook
       - rewind
-      - await
     mcp: 
       - augment
     skills: 
       auto: 
-        - autoresearch
         - dispatching-parallel-agents
         - toon-delegation
+        - test-driven-development
       frontmatter: 
         - oh-my-pi-customization
         - system-prompts
+        - using-tmux-for-interactive-commands
+        - web-design-guidelines
+        - autoresearch
     fallback: github-copilot/claude-opus-4.6
     advanced: 
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
-      maxRecursionDepth: 10
+      maxRecursionDepth: 5
       temperature: 0.5
       memoriesEnabled: true
       compactionThresholdPercent: 50
@@ -89,6 +92,9 @@ roles:
       auto: 
         - writing-plans
         - dispatching-parallel-agents
+        - brainstorming
+        - generate-creative-ideas
+        - test-driven-development
       frontmatter: 
         - toon-delegation
         - system-prompts
@@ -96,11 +102,14 @@ roles:
         - monorepo-management
         - fastapi-templates
         - error-handling-patterns
-        - e2e-testing-patterns
         - auth-implementation-patterns
         - web-design-guidelines
+        - clarify
+        - delight
+        - extract
     fallback: github-copilot/claude-opus-4.6
     advanced: 
+      thinkingLevel: high
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
       maxRecursionDepth: 3
@@ -618,6 +627,10 @@ subagents:
     skills: 
       auto: 
         - ui-ux-pro-max
+        - arrange
+        - colorize
+        - delight
+        - overdrive
       frontmatter: 
         - auth-implementation-patterns
         - autoresearch
@@ -628,6 +641,22 @@ subagents:
         - frontend-design
         - vercel-react-best-practices
         - web-design-guidelines
+        - adapt
+        - animate
+        - audit
+        - bolder
+        - clarify
+        - critique
+        - distill
+        - extract
+        - normalize
+        - onboard
+        - quieter
+        - simplify
+        - svg-art
+        - toon-delegation
+        - typeset
+        - verification-before-completion
     tools: 
       inherit: designer
       add: 
@@ -683,7 +712,6 @@ subagents:
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
       maxRecursionDepth: 3
-      temperature: 0.5
       compactionThresholdPercent: 60
   explore: 
     mcp: 
@@ -710,6 +738,13 @@ subagents:
       compactionStrategy: context-full
       temperature: 0.2
       compactionThresholdPercent: 60
+  ask-explore: 
+    mcp: 
+      []
+  ask-research: 
+    mcp: 
+      - augment
+      - ref
   _default: 
     mcp: 
       - augment
@@ -722,6 +757,8 @@ subagents:
       auto: 
         - toon-delegation
         - dispatching-parallel-agents
+        - verification-before-completion
+        - test-driven-development
       frontmatter: 
         - vercel-react-best-practices
         - system-prompts
@@ -731,6 +768,15 @@ subagents:
         - fastapi-templates
         - error-handling-patterns
         - auth-implementation-patterns
+        - using-tmux-for-interactive-commands
+        - systematic-debugging
+        - optimize
+        - normalize
+        - harden
+        - extract
+        - commit-hygiene
+        - clarify
+        - adapt
     tools: 
       inherit: implement
       remove: 
@@ -756,10 +802,14 @@ subagents:
         - autoresearch
         - dispatching-parallel-agents
         - toon-delegation
+        - systematic-debugging
+        - audit
       frontmatter: 
         - code-review-foundations
         - e2e-testing-patterns
         - simplify
+        - optimize
+        - harden
     tools: 
       inherit: debug
       remove: 
@@ -771,8 +821,7 @@ subagents:
       primaryThinkingLevel: xhigh
       fallbackThinkingLevel: xhigh
       maxRecursionDepth: 3
-      compactionStrategy: context-full
-      temperature: 1.2
+      compactionStrategy: handoff
       memoriesEnabled: true
       compactionThresholdPercent: 60
   commit: 
@@ -850,7 +899,6 @@ subagents:
       fallbackThinkingLevel: xhigh
       maxRecursionDepth: 4
       compactionStrategy: handoff
-      temperature: 0.4
       compactionThresholdPercent: 70
   curator: 
     mcp: 
@@ -916,6 +964,10 @@ subagents:
       auto: 
         - code-review-foundations
         - simplify
+        - audit
+        - critique
+        - security-review
+        - polish
       frontmatter: 
         - auth-implementation-patterns
         - e2e-testing-patterns
@@ -923,6 +975,14 @@ subagents:
         - fastapi-templates
         - monorepo-management
         - web-design-guidelines
+        - clarify
+        - dispatching-parallel-agents
+        - extract
+        - optimize
+        - harden
+        - qa-test-planner
+        - typeset
+        - vercel-react-best-practices
     tools: 
       - read
       - grep
@@ -939,8 +999,8 @@ subagents:
       thinkingLevel: high
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
-      compactionStrategy: handoff
-      temperature: 0.5
+      compactionStrategy: context-full
+      memoriesEnabled: false
       compactionThresholdPercent: 65
   coderabbit: 
     mcp: 
