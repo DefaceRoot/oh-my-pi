@@ -5104,13 +5104,22 @@ export class AgentSession {
 			}
 		}
 
-		// At threshold: switch to fallback model when one is available and account rotation did not fire.
-		// Guards: only activates once per retry sequence (!#fallbackActive), and skips when an account
-		// was just rotated (usage limit precedence per spec).
+		// Switch to fallback model when one is available and account rotation did not fire.
+		// Activates in two cases:
+		//   1. At-or-past threshold: retryAttempt >= maxRetriesBeforeFallback (use >= not === so
+		//      that account rotations consuming threshold attempts don't silently bypass fallback).
+		//   2. Quota exhaustion with no rotation available: isUsageLimitError && !accountSwitched.
+		//      Quota errors won't self-resolve within the retry window; activating fallback
+		//      immediately avoids blocking the session for 30+ minutes before the threshold fires.
+		// Guards: only activates once per retry sequence (!#fallbackActive), and skips when an
+		// account was just rotated (usage limit precedence over fallback on the same attempt).
+		const atFallbackThreshold =
+			this.#retryAttempt >= retrySettings.maxRetriesBeforeFallback ||
+			(isUsageLimitError(errorMessage) && !accountSwitched);
 		if (
 			!this.#fallbackActive &&
 			!accountSwitched &&
-			this.#retryAttempt === retrySettings.maxRetriesBeforeFallback &&
+			atFallbackThreshold &&
 			this.#resolveFallbackModel
 		) {
 			const primaryModelKey = this.model ? `${this.model.provider}/${this.model.id}` : "";
@@ -5120,6 +5129,10 @@ export class AgentSession {
 				try {
 					await this.setModelTemporary(fallbackModel);
 					this.#fallbackActive = true;
+					// Reset retry delay: the fallback is on a different model (possibly a different
+					// provider) and does not share the primary model's rate-limit constraint.
+					// Retrying immediately avoids the primary model's long backoff window.
+					delayMs = 0;
 					const fallbackThinkingLevel = this.#resolveFallbackThinkingLevel?.();
 					if (fallbackThinkingLevel !== undefined) {
 						// Save current thinking so it can be restored after the fallback model cycle ends.

@@ -42,6 +42,10 @@ type OrchestratorPolicyContext = {
 	todoRefreshRequired: boolean;
 	todoDeficiencyReason?: string;
 	orchestratorToolAccess?: OrchestratorToolAccess;
+	/** True once checkpoint() succeeds in this turn; cleared at turn start. */
+	checkpointCreatedThisTurn: boolean;
+	/** True when explore/research results land; must call rewind before dispatching impl agents. */
+	rewindRequiredBeforeImplementation: boolean;
 };
 
 type OrchestratorContextParams = {
@@ -288,6 +292,8 @@ function isOrchestratorContext(
 			activeAgentIsParentTurn: false,
 			todoBootstrapRequired: false,
 			todoRefreshRequired: false,
+			checkpointCreatedThisTurn: false,
+			rewindRequiredBeforeImplementation: false,
 		};
 	}
 
@@ -297,6 +303,8 @@ function isOrchestratorContext(
 			activeAgentIsParentTurn: false,
 			todoBootstrapRequired: false,
 			todoRefreshRequired: false,
+			checkpointCreatedThisTurn: false,
+			rewindRequiredBeforeImplementation: false,
 		};
 	}
 
@@ -306,6 +314,8 @@ function isOrchestratorContext(
 			activeAgentIsParentTurn: false,
 			todoBootstrapRequired: false,
 			todoRefreshRequired: false,
+			checkpointCreatedThisTurn: false,
+			rewindRequiredBeforeImplementation: false,
 		};
 	}
 
@@ -318,6 +328,8 @@ function isOrchestratorContext(
 			activeAgentIsParentTurn: false,
 			todoBootstrapRequired: false,
 			todoRefreshRequired: false,
+			checkpointCreatedThisTurn: false,
+			rewindRequiredBeforeImplementation: false,
 		};
 	}
 
@@ -330,6 +342,8 @@ function isOrchestratorContext(
 			activeAgentIsParentTurn: false,
 			todoBootstrapRequired: false,
 			todoRefreshRequired: false,
+			checkpointCreatedThisTurn: false,
+			rewindRequiredBeforeImplementation: false,
 		};
 	}
 
@@ -345,10 +359,33 @@ function isOrchestratorContext(
 		activeAgentIsParentTurn,
 		todoBootstrapRequired: false,
 		todoRefreshRequired: false,
+		checkpointCreatedThisTurn: false,
+		rewindRequiredBeforeImplementation: false,
 	};
 }
 function isTodoGateExceptionTool(toolName: string): boolean {
 	return toolName === "todo_write" || toolName === "await";
+}
+
+const EXPLORE_AGENT_TYPES = new Set(["explore", "research"]);
+const IMPLEMENTATION_AGENT_TYPES = new Set(["implement", "debug", "designer"]);
+
+function getTaskAgentTypes(input: unknown): string[] {
+	const raw = input as Record<string, unknown> | null;
+	const tasks = Array.isArray(raw?.tasks)
+		? (raw as { tasks: Array<{ agent?: unknown }> }).tasks
+		: [];
+	return tasks
+		.map(t => (typeof t.agent === "string" ? t.agent.toLowerCase().trim() : ""))
+		.filter(Boolean);
+}
+
+function hasExploreAgents(input: unknown): boolean {
+	return getTaskAgentTypes(input).some(a => EXPLORE_AGENT_TYPES.has(a));
+}
+
+function hasImplementationAgents(input: unknown): boolean {
+	return getTaskAgentTypes(input).some(a => IMPLEMENTATION_AGENT_TYPES.has(a));
 }
 
 function isTodoBootstrapExceptionTool(event: OrchestratorPolicyEvent): boolean {
@@ -418,6 +455,9 @@ function buildOrchestratorPrompt(): string {
 		"After each await timeout or completion, immediately check whether independent work can be dispatched now.",
 		"Dispatch any ready independent work before issuing another await call.",
 		"Only await when background work is already running and no independent dispatch is currently available.",
+		"When you need to spawn explore or research agents: call checkpoint first, then explore, then await results, then call rewind with a comprehensive summary (scope, affected files, findings, delegation plan).",
+		"After rewind: call todo_write to refresh tracking, then dispatch implementation agents.",
+		"This checkpoint → explore → rewind → implement sequence is enforced. Skipping checkpoint before explore dispatch is a protocol violation.",
 		"You do not edit files, write files, run discovery tools, or provide implementation details yourself.",
 		"All investigation beyond the small read budget, all code changes, all tests, and all verification are delegated.",
 		"Routing decision tree: bug reports, failing tests, and unexpected behavior MUST go to the debug subagent.",
@@ -496,7 +536,11 @@ function shouldBlockTool(
 	}
 
 	const allowTodoRefreshGateBypass =
-		isTodoGateExceptionTool(event.toolName) || isAgentResultRead(event) || isSkillRead(event);
+		isTodoGateExceptionTool(event.toolName) ||
+		isAgentResultRead(event) ||
+		isSkillRead(event) ||
+		event.toolName === "checkpoint" ||
+		event.toolName === "rewind";
 
 	if (context.todoRefreshRequired && !allowTodoRefreshGateBypass) {
 		return {
@@ -511,6 +555,35 @@ function shouldBlockTool(
 			block: true,
 			reason:
 				`Orchestrator mode: create a detailed phased todo list with todo_write before continuing unless unread Must-Read Skills still need to be read. ${context.todoDeficiencyReason ?? ""}`.trim(),
+		};
+	}
+
+	// Gate: require checkpoint before dispatching explore/research agents
+	if (
+		event.toolName === "task" &&
+		!context.todoBootstrapRequired &&
+		!context.checkpointCreatedThisTurn &&
+		hasExploreAgents(event.input)
+	) {
+		return {
+			block: true,
+			reason:
+				"Orchestrator mode: call checkpoint with a context-gathering goal before dispatching exploration agents. " +
+				"After exploration, call rewind with a comprehensive findings summary, then dispatch implementation agents.",
+		};
+	}
+
+	// Gate: require rewind after exploration results before dispatching implementation agents
+	if (
+		event.toolName === "task" &&
+		context.rewindRequiredBeforeImplementation &&
+		hasImplementationAgents(event.input)
+	) {
+		return {
+			block: true,
+			reason:
+				"Orchestrator mode: call rewind with a comprehensive exploration summary before dispatching implementation agents. " +
+				"This compresses exploration context and keeps the orchestrator context window lean for the delegation phase.",
 		};
 	}
 
@@ -536,6 +609,14 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 	let todoRefreshRequired = false;
 	let todoDeficiencyReason: string | undefined;
 	const readBudget = new OrchestratorReadBudget();
+
+	// Per-turn and cross-turn state for context-gathering checkpoint protocol.
+	// checkpointCreatedThisTurn: reset each turn; set when checkpoint() succeeds.
+	// exploreTasksDispatchedThisTurn: reset each turn; set when explore/research task is sent.
+	// rewindRequiredBeforeImplementation: NOT reset per-turn; persists until rewind() clears it.
+	let checkpointCreatedThisTurn = false;
+	let exploreTasksDispatchedThisTurn = false;
+	let rewindRequiredBeforeImplementation = false;
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		const unreadSkillUrls = syncAutoSkillTracking(ctx.sessionManager.getSessionId?.(), getSessionInitSystemPrompt(ctx));
@@ -576,6 +657,11 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 			orchestratorModeThisTurn = orchestratorContext.orchestratorModeThisTurn;
 			activeAgentIsParentTurn = orchestratorContext.activeAgentIsParentTurn;
 			readBudget.resetForNextDelegation();
+			checkpointCreatedThisTurn = false;
+			exploreTasksDispatchedThisTurn = false;
+			// rewindRequiredBeforeImplementation is intentionally NOT reset here.
+			// Exploration results from a prior turn still require a rewind call before
+			// implementation agents can be dispatched in any subsequent turn.
 			const agentDir = (ctx.settings as { getAgentDir?: () => string | undefined }).getAgentDir?.();
 			const rolesPath =
 				typeof agentDir === "string" && agentDir.trim().length > 0
@@ -641,6 +727,8 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 			todoRefreshRequired,
 			todoDeficiencyReason,
 			orchestratorToolAccess,
+			checkpointCreatedThisTurn,
+			rewindRequiredBeforeImplementation,
 		});
 		if (decision) return decision;
 
@@ -672,6 +760,11 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 			const bashDecision = shouldBlockBashCommand(command, isToolAllowedByOrchestratorAccess("bash", orchestratorToolAccess));
 			if (bashDecision) return bashDecision;
 		}
+
+		// Track explore/research task dispatch so we know to require rewind once results land.
+		if (event.toolName === "task" && hasExploreAgents(event.input)) {
+			exploreTasksDispatchedThisTurn = true;
+		}
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
@@ -687,6 +780,20 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 
 		if (event.isError) return;
 
+		if (event.toolName === "checkpoint") {
+			checkpointCreatedThisTurn = true;
+			return;
+		}
+
+		if (event.toolName === "rewind") {
+			// Rewind with a comprehensive findings summary acts as both a context-window
+			// saver and a progress statement — clear both gates so the orchestrator can
+			// proceed to dispatch implementation agents and update todos without being blocked.
+			rewindRequiredBeforeImplementation = false;
+			todoRefreshRequired = false;
+			return;
+		}
+
 		if (event.toolName === "todo_write") {
 			const todoPhases = Array.isArray((event.details as { phases?: unknown } | undefined)?.phases)
 				? ((event.details as { phases: TodoPhase[] }).phases)
@@ -699,6 +806,11 @@ export default function orchestratorModeExtension(pi: ExtensionAPI) {
 
 		if (shouldRequireTodoRefreshAfterResult(event)) {
 			todoRefreshRequired = true;
+			// If explore/research tasks were dispatched this turn, incoming results signal
+			// exploration is complete — require rewind before implementation delegation.
+			if (exploreTasksDispatchedThisTurn) {
+				rewindRequiredBeforeImplementation = true;
+			}
 		}
 
 
@@ -715,4 +827,6 @@ export const _testExports = {
 	shouldBlockBashCommand,
 	shouldBlockTool,
 	shouldRequireTodoRefreshAfterResult,
+	hasExploreAgents,
+	hasImplementationAgents,
 };

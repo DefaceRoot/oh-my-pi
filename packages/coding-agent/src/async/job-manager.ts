@@ -18,6 +18,8 @@ export interface AsyncJob {
 	errorText?: string;
 	/** Latest progress snapshot for task-type jobs (updated during execution). */
 	progressSnapshot?: Record<string, unknown>;
+	/** Timestamp (ms) of the last updateProgress() call, used for stall detection. */
+	lastProgressAt?: number;
 }
 
 export interface AsyncJobManagerOptions {
@@ -173,6 +175,7 @@ export class AsyncJobManager {
 		const job = this.#jobs.get(id);
 		if (job && job.status === "running") {
 			job.progressSnapshot = snapshot;
+			job.lastProgressAt = Date.now();
 		}
 	}
 

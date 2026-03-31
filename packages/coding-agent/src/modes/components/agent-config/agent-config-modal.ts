@@ -538,6 +538,8 @@ export class AgentConfigModal implements Component {
 		}
 		this.#settings.setModelRole(role, modelKey);
 		this.#modelTabPanel.update(this.#getModelPanelState(role));
+		// Refresh the advanced panel so temperature bounds reflect the newly selected model.
+		this.#advancedPanel.update(this.#getAdvancedPanelState(role));
 		this.#syncPresetState();
 		this.#onRequestRender();
 	}
@@ -670,8 +672,28 @@ export class AgentConfigModal implements Component {
 				grepContextAfter: this.#settings.get("grep.contextAfter") ?? 0,
 				compactionThresholdPercent: this.#settings.get("compaction.thresholdPercent") ?? -1,
 				compactionThresholdTokens: this.#settings.get("compaction.thresholdTokens") ?? -1,
+				modelApi: this.#resolveModelApi(role),
 			},
 		};
+	}
+
+	/**
+	 * Resolves the API type string for the effective model of a given role,
+	 * honoring the same role-inheritance chain used for display (role → implement → default).
+	 * Returns undefined when no model is configured or the string cannot be resolved.
+	 * Uses the same live registry as the model display path so custom and discovered
+	 * models are resolved identically.
+	 */
+	#resolveModelApi(role: ModelRole): string | undefined {
+		for (const lookupRole of this.#getPrimaryModelLookupOrder(role)) {
+			const configured = this.#settings.getModelRole(lookupRole)?.trim();
+			if (!configured) continue;
+			const resolved = resolveModelRoleValue(configured, this.#modelRegistry.getAll(), {
+				settings: this.#settings,
+			}).model;
+			if (resolved) return resolved.api;
+		}
+		return undefined;
 	}
 
 	#handleAdvancedConfigChange(config: AdvancedConfig | null): void {

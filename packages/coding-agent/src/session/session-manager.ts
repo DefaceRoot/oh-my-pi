@@ -832,9 +832,13 @@ export async function loadEntriesFromFile(
 	}
 	const entries = parseJsonlLenient<FileEntry>(content);
 
-	// Validate session header
+	// Validate session header - accept both regular session headers and subagent session_init entries
 	if (entries.length === 0) return entries;
-	const header = entries[0] as SessionHeader;
+	const header = entries[0] as SessionHeader | SessionInitEntry;
+	if (header.type === "session_init") {
+		// Subagent sessions start with session_init instead of session header
+		return entries;
+	}
 	if (header.type !== "session" || typeof header.id !== "string") {
 		return [];
 	}

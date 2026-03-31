@@ -1,3 +1,4 @@
+import { getTemperatureBounds } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, extractPrintableText, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { AdvancedConfig } from "../../../config/roles-config";
@@ -43,6 +44,8 @@ export interface AdvancedConfigPanelGlobalValues {
 	grepContextAfter: number;
 	compactionThresholdPercent: number;
 	compactionThresholdTokens: number;
+	/** API type of the currently active model, used for temperature bound validation. */
+	modelApi?: string;
 }
 
 export interface AdvancedConfigPanelCallbacks {
@@ -101,6 +104,7 @@ const DEFAULT_THINKING_LEVELS = [
 export class AdvancedConfigPanel implements Component {
 	#config: AdvancedConfigPanelState;
 	#globalValues: AdvancedConfigPanelGlobalValues;
+	#modelApi: string | undefined;
 	#thinkingOptions: ThinkingLevel[];
 	readonly #callbacks: AdvancedConfigPanelCallbacks;
 	#selectedIndex = 0;
@@ -111,6 +115,7 @@ export class AdvancedConfigPanel implements Component {
 	constructor(options: AdvancedConfigPanelOptions) {
 		this.#config = normalizeConfig(options.advancedConfig);
 		this.#globalValues = { ...options.globalValues };
+		this.#modelApi = options.globalValues.modelApi;
 		this.#thinkingOptions = buildThinkingOptions(options.availableThinkingLevels);
 		this.#callbacks = options.callbacks;
 	}
@@ -118,11 +123,29 @@ export class AdvancedConfigPanel implements Component {
 	update(options: Omit<AdvancedConfigPanelOptions, "callbacks">): void {
 		this.#config = normalizeConfig(options.advancedConfig);
 		this.#globalValues = { ...options.globalValues };
+		this.#modelApi = options.globalValues.modelApi;
 		this.#thinkingOptions = buildThinkingOptions(options.availableThinkingLevels);
 		this.#selectedIndex = Math.max(0, Math.min(this.#selectedIndex, FIELD_ORDER.length - 1));
 		this.#editingField = null;
 		this.#draftValue = "";
 		this.#errorMessage = null;
+		// If the model changed and an explicit temperature override is now out of bounds,
+		// clear it and emit immediately so the stored config is corrected at the model-
+		// switch boundary rather than silently re-emitted on the next unrelated edit.
+		const storedTemp = this.#config.temperature;
+		if (storedTemp !== undefined && storedTemp !== -1) {
+			let isInvalid = false;
+			if (this.#modelApi === "openai-codex-responses") {
+				isInvalid = true;
+			} else {
+				const bounds = getTemperatureBounds(this.#modelApi ?? "");
+				isInvalid = bounds.applicable && (storedTemp < bounds.min || storedTemp > bounds.max);
+			}
+			if (isInvalid) {
+				this.#config.temperature = undefined;
+				this.#emitChange();
+			}
+		}
 	}
 
 	invalidate(): void {
@@ -391,13 +414,27 @@ export class AdvancedConfigPanel implements Component {
 			this.#config.maxRecursionDepth = value;
 		} else if (fieldId === "temperature") {
 			if (!isCompleteNumericDraft(fieldId, raw)) {
-				this.#errorMessage = "Temperature must be a number greater than or equal to -1.";
+				this.#errorMessage = "Temperature must be a number ≥ -1 (-1 = provider default).";
 				return;
 			}
 			const value = Number(raw);
 			if (!Number.isFinite(value) || value < -1) {
-				this.#errorMessage = "Temperature must be a number greater than or equal to -1.";
+				this.#errorMessage = "Temperature must be a number ≥ -1 (-1 = provider default).";
 				return;
+			}
+			// -1 is the sentinel for "use provider default" — skip bounds check
+			if (value !== -1) {
+				if (this.#modelApi === "openai-codex-responses") {
+					this.#errorMessage =
+						"This model does not support temperature adjustment. Use -1 for provider default.";
+					return;
+				}
+				const bounds = getTemperatureBounds(this.#modelApi ?? "");
+				if (bounds.applicable && (value < bounds.min || value > bounds.max)) {
+					const rangeLabel = this.#modelApi ? ` for ${this.#modelApi}` : "";
+					this.#errorMessage = `Temperature ${value} is out of range${rangeLabel}. Valid: ${bounds.min}\u2013${bounds.max} (or -1 for provider default).`;
+					return;
+				}
 			}
 			this.#config.temperature = value;
 		} else if (fieldId === "compactionThresholdPercent") {

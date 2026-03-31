@@ -417,3 +417,109 @@ describe("orchestrator-mode todo structure helpers", () => {
 		]);
 	});
 });
+
+
+describe("orchestrator-mode context-gathering checkpoint protocol", () => {
+	const exploreTaskInput = {
+		tasks: [{ agent: "explore", id: "e1", description: "scout", assignment: "explore the codebase" }],
+	};
+	const researchTaskInput = {
+		tasks: [{ agent: "research", id: "r1", description: "research", assignment: "research the API" }],
+	};
+	const implementTaskInput = {
+		tasks: [{ agent: "implement", id: "i1", description: "impl", assignment: "implement the feature" }],
+	};
+	const debugTaskInput = {
+		tasks: [{ agent: "debug", id: "d1", description: "debug", assignment: "debug the issue" }],
+	};
+	const verifierTaskInput = {
+		tasks: [{ agent: "verifier", id: "v1", description: "verify", assignment: "verify the work" }],
+	};
+
+	const contextWithCheckpoint = (): Record<string, unknown> => ({
+		...parentOrchestratorContext(),
+		checkpointCreatedThisTurn: true,
+		rewindRequiredBeforeImplementation: false,
+	});
+
+	const contextWithoutCheckpoint = (): Record<string, unknown> => ({
+		...parentOrchestratorContext(),
+		checkpointCreatedThisTurn: false,
+		rewindRequiredBeforeImplementation: false,
+	});
+
+	const contextWithRewindRequired = (): Record<string, unknown> => ({
+		...parentOrchestratorContext(),
+		checkpointCreatedThisTurn: true,
+		rewindRequiredBeforeImplementation: true,
+	});
+
+	it("blocks explore task dispatch without a prior checkpoint", () => {
+		expectBlocked(contextWithoutCheckpoint(), "task", exploreTaskInput);
+	});
+
+	it("blocks research task dispatch without a prior checkpoint", () => {
+		expectBlocked(contextWithoutCheckpoint(), "task", researchTaskInput);
+	});
+
+	it("allows explore task dispatch after checkpoint is created", () => {
+		expectAllowed(contextWithCheckpoint(), "task", exploreTaskInput);
+	});
+
+	it("allows research task dispatch after checkpoint is created", () => {
+		expectAllowed(contextWithCheckpoint(), "task", researchTaskInput);
+	});
+
+	it("does not enforce checkpoint gate when todo bootstrap is still required", () => {
+		// Bootstrap gate blocks first — checkpoint gate does not fire for explore tasks
+		// when the orchestrator hasn't initialized its todo list yet.
+		expectBlocked(emptyTodoContext(), "task", exploreTaskInput);
+	});
+
+	it("blocks implementation task dispatch when rewind is required after exploration", () => {
+		expectBlocked(contextWithRewindRequired(), "task", implementTaskInput);
+	});
+
+	it("blocks debug task dispatch when rewind is required after exploration", () => {
+		expectBlocked(contextWithRewindRequired(), "task", debugTaskInput);
+	});
+
+	it("allows implementation task dispatch when rewind is not required", () => {
+		expectAllowed(contextWithCheckpoint(), "task", implementTaskInput);
+	});
+
+	it("does not block non-implementation agent types when rewind is required", () => {
+		// verifier/coderabbit/commit are not affected by the rewind gate
+		expectAllowed(contextWithRewindRequired(), "task", verifierTaskInput);
+	});
+
+	it("allows checkpoint tool when todo refresh is required (bypasses refresh gate)", () => {
+		expectAllowed(staleTodoContext(), "checkpoint");
+	});
+
+	it("allows rewind tool when todo refresh is required (bypasses refresh gate)", () => {
+		expectAllowed(staleTodoContext(), "rewind");
+	});
+
+	it("detects explore agents in tasks array", () => {
+		const { hasExploreAgents } = _testExports as unknown as {
+			hasExploreAgents: (input: unknown) => boolean;
+		};
+		expect(hasExploreAgents(exploreTaskInput)).toBe(true);
+		expect(hasExploreAgents(researchTaskInput)).toBe(true);
+		expect(hasExploreAgents(implementTaskInput)).toBe(false);
+		expect(hasExploreAgents({})).toBe(false);
+		expect(hasExploreAgents(null)).toBe(false);
+	});
+
+	it("detects implementation agents in tasks array", () => {
+		const { hasImplementationAgents } = _testExports as unknown as {
+			hasImplementationAgents: (input: unknown) => boolean;
+		};
+		expect(hasImplementationAgents(implementTaskInput)).toBe(true);
+		expect(hasImplementationAgents(debugTaskInput)).toBe(true);
+		expect(hasImplementationAgents(exploreTaskInput)).toBe(false);
+		expect(hasImplementationAgents(verifierTaskInput)).toBe(false);
+		expect(hasImplementationAgents({})).toBe(false);
+	});
+});

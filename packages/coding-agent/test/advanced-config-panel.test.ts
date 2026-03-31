@@ -246,3 +246,167 @@ describe("AdvancedConfigPanel", () => {
 		});
 	});
 });
+
+// =============================================================================
+// Temperature bounds validation
+// =============================================================================
+
+import type { AdvancedConfigPanelGlobalValues } from "../src/modes/components/agent-config/advanced-config-panel";
+
+const TEMP_GLOBAL_BASE: AdvancedConfigPanelGlobalValues = {
+	maxRecursionDepth: 2,
+	compactionStrategy: "handoff",
+	temperature: -1,
+	memoriesEnabled: false,
+	grepContextBefore: 0,
+	grepContextAfter: 0,
+	compactionThresholdPercent: -1,
+	compactionThresholdTokens: -1,
+};
+
+function makeTempPanel(modelApi?: string): {
+	panel: AdvancedConfigPanel;
+	changes: Array<import("../src/config/roles-config").AdvancedConfig | null>;
+} {
+	const changes: Array<import("../src/config/roles-config").AdvancedConfig | null> = [];
+	const panel = new AdvancedConfigPanel({
+		advancedConfig: null,
+		globalValues: { ...TEMP_GLOBAL_BASE, modelApi },
+		callbacks: { onConfigChange: cfg => changes.push(cfg) },
+	});
+	return { panel, changes };
+}
+
+/** FIELD_ORDER index for temperature is 5 — navigate from index 0. */
+function goToTemp(panel: AdvancedConfigPanel): void {
+	for (let i = 0; i < 5; i++) panel.handleInput("j");
+}
+
+function enterTemp(panel: AdvancedConfigPanel, value: string): void {
+	panel.handleInput("\n"); // begin edit
+	for (const ch of value) panel.handleInput(ch);
+	panel.handleInput("\n"); // commit
+}
+
+function submitTemp(panel: AdvancedConfigPanel, value: string): void {
+	goToTemp(panel);
+	enterTemp(panel, value);
+}
+
+function getTempError(panel: AdvancedConfigPanel): string | undefined {
+	return panel.render(120).find(
+		l => l.includes("must be a number") || l.includes("out of range") || l.includes("does not support"),
+	);
+}
+
+describe("AdvancedConfigPanel temperature — sentinel -1", () => {
+	test("-1 is always valid regardless of modelApi", () => {
+		const { panel, changes } = makeTempPanel("anthropic-messages");
+		submitTemp(panel, "-1");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(-1);
+	});
+
+	test("-1 is valid even for openai-codex-responses", () => {
+		const { panel, changes } = makeTempPanel("openai-codex-responses");
+		submitTemp(panel, "-1");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(-1);
+	});
+});
+
+describe("AdvancedConfigPanel temperature — anthropic-messages", () => {
+	test("accepts 0.5 (within 0–1)", () => {
+		const { panel, changes } = makeTempPanel("anthropic-messages");
+		submitTemp(panel, "0.5");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(0.5);
+	});
+
+	test("accepts 1.0 (at the upper bound)", () => {
+		const { panel, changes } = makeTempPanel("anthropic-messages");
+		submitTemp(panel, "1");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(1);
+	});
+
+	test("rejects 1.5 (above anthropic max of 1)", () => {
+		const { panel } = makeTempPanel("anthropic-messages");
+		submitTemp(panel, "1.5");
+		const err = getTempError(panel);
+		expect(err).toBeDefined();
+		expect(err).toContain("out of range");
+	});
+});
+
+describe("AdvancedConfigPanel temperature — openai-responses", () => {
+	test("accepts 2.0 (at the upper bound)", () => {
+		const { panel, changes } = makeTempPanel("openai-responses");
+		submitTemp(panel, "2");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(2);
+	});
+
+	test("rejects 2.5 (above openai max of 2)", () => {
+		const { panel } = makeTempPanel("openai-responses");
+		submitTemp(panel, "2.5");
+		const err = getTempError(panel);
+		expect(err).toBeDefined();
+		expect(err).toContain("out of range");
+	});
+});
+
+describe("AdvancedConfigPanel temperature — openai-codex-responses", () => {
+	test("rejects any non-(-1) value", () => {
+		const { panel } = makeTempPanel("openai-codex-responses");
+		submitTemp(panel, "1.0");
+		const err = getTempError(panel);
+		expect(err).toBeDefined();
+		expect(err).toContain("does not support");
+	});
+
+	test("rejects 0 (no temperature supported)", () => {
+		const { panel } = makeTempPanel("openai-codex-responses");
+		submitTemp(panel, "0");
+		const err = getTempError(panel);
+		expect(err).toBeDefined();
+	});
+});
+
+describe("AdvancedConfigPanel temperature — unknown API falls back to 0–2", () => {
+	test("accepts 1.5 when modelApi is unknown", () => {
+		const { panel, changes } = makeTempPanel("some-unknown-api");
+		submitTemp(panel, "1.5");
+		expect(changes).toHaveLength(1);
+		expect(changes[0]?.temperature).toBe(1.5);
+	});
+});
+
+describe("AdvancedConfigPanel temperature — stale override cleared on model switch", () => {
+	test("clears out-of-bounds temperature when modelApi switches to anthropic", () => {
+		const { panel, changes } = makeTempPanel("openai-responses");
+		// Set temperature to 1.5 (valid for openai)
+		submitTemp(panel, "1.5");
+		expect(changes).toHaveLength(1);
+		// Switch to anthropic — 1.5 is now out of bounds; update() should clear it
+		panel.update({
+			advancedConfig: { temperature: 1.5 },
+			globalValues: { ...TEMP_GLOBAL_BASE, modelApi: "anthropic-messages" },
+		});
+		// The clear emits an immediate config change
+		expect(changes).toHaveLength(2);
+		expect(changes[1]?.temperature).toBeUndefined();
+	});
+
+	test("preserves valid temperature when modelApi switches to a compatible provider", () => {
+		const { panel, changes } = makeTempPanel("anthropic-messages");
+		submitTemp(panel, "0.7");
+		expect(changes).toHaveLength(1);
+		// Switch to openai — 0.7 is still within 0–2; no clear emitted
+		panel.update({
+			advancedConfig: { temperature: 0.7 },
+			globalValues: { ...TEMP_GLOBAL_BASE, modelApi: "openai-responses" },
+		});
+		expect(changes).toHaveLength(1); // no extra emit
+	});
+});

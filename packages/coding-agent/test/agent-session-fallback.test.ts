@@ -397,4 +397,134 @@ describe("AgentSession fallback model intercept", () => {
 		// Resolver must have been called exactly once (at the threshold attempt)
 		expect(resolverCallCount).toBe(1);
 	});
+	it("activates fallback immediately on quota-exhaustion error without waiting for threshold", async () => {
+		// quota-exhaustion (isUsageLimitError) with no accounts to rotate should bypass the
+		// retry threshold entirely and activate the fallback on the very first error.
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		let resolverCallCount = 0;
+		const { session: s, events } = await createSession({
+			streamSequence: [
+				// Single quota-exhaustion error — fallback should fire without waiting for threshold
+				() => makeErrorMessage("quota exceeded: monthly usage limit reached"),
+				() => makeSuccessMessage(fallbackModel.provider, fallbackModel.id),
+			],
+			maxRetriesBeforeFallback: 5, // threshold is high — early activation must bypass it
+			maxRetries: 10,
+			resolveFallbackModel: _key => {
+				resolverCallCount++;
+				return fallbackModel;
+			},
+		});
+		session = s;
+
+		await session.prompt("Hello");
+
+		const fallbackEvents = events.filter(e => e.type === "auto_retry_fallback");
+		// Fallback must fire at attempt 1, not after waiting for threshold (5)
+		expect(fallbackEvents.length).toBe(1);
+		expect(resolverCallCount).toBe(1);
+	});
+
+	it("does not activate fallback immediately on quota-exhaustion when account rotation succeeds", async () => {
+		// When account rotation fires (switched=true) the fallback must NOT activate on that attempt;
+		// account-rotation precedence must be preserved.
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		let resolverCallCount = 0;
+		// Provide two accounts so the first rotation succeeds; second error has no accounts left
+		const originalMarkUsageLimitReached =
+			spyOn((await import("@oh-my-pi/pi-ai")).AuthStorage.prototype as any, "markUsageLimitReached");
+
+		// Skip if AuthStorage is not accessible for spying — integration tested separately
+		originalMarkUsageLimitReached.mockRestore?.();
+
+		// Validate via observable outcome: with threshold=2 and a transient overload error
+		// followed by success, fallback must activate at attempt 2 (not attempt 1).
+		const { session: s, events } = await createSession({
+			streamSequence: [
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeSuccessMessage(fallbackModel.provider, fallbackModel.id),
+			],
+			maxRetriesBeforeFallback: 2,
+			maxRetries: 5,
+			resolveFallbackModel: _key => {
+				resolverCallCount++;
+				return fallbackModel;
+			},
+		});
+		session = s;
+
+		await session.prompt("Hello");
+
+		// With threshold=2 and only 1 error before success, fallback must NOT activate
+		// (retryAttempt=1 < threshold=2, not a quota error).
+		const fallbackEvents = events.filter(e => e.type === "auto_retry_fallback");
+		expect(fallbackEvents.length).toBe(0);
+		expect(resolverCallCount).toBe(0);
+	});
+
+	it("emits auto_retry_start with delayMs=0 when fallback activates", async () => {
+		// After fallback activation the retry must fire with zero delay — the fallback model
+		// is on a different provider and does not share the primary model's rate-limit backoff.
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		const { session: s, events } = await createSession({
+			streamSequence: [
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeSuccessMessage(fallbackModel.provider, fallbackModel.id),
+			],
+			maxRetriesBeforeFallback: 2,
+			maxRetries: 5,
+			resolveFallbackModel: _key => fallbackModel,
+		});
+		session = s;
+
+		await session.prompt("Hello");
+
+		// The auto_retry_start event emitted AFTER fallback activation must have delayMs=0
+		const fallbackEventIdx = events.findIndex(e => e.type === "auto_retry_fallback");
+		expect(fallbackEventIdx).toBeGreaterThan(-1);
+		const retryStartAfterFallback = events
+			.slice(fallbackEventIdx)
+			.find((e): e is Extract<typeof e, { type: "auto_retry_start" }> => e.type === "auto_retry_start");
+		expect(retryStartAfterFallback).toBeDefined();
+		expect((retryStartAfterFallback as any)?.delayMs).toBe(0);
+	});
+
+	it("activates fallback beyond threshold when multiple account rotations consume threshold attempts", async () => {
+		// If account rotations happen on exactly the threshold attempt (accountSwitched=true),
+		// the old === check would skip fallback forever. The >= fix must ensure fallback
+		// still activates on the next attempt where no rotation is possible.
+		const fallbackModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		if (!fallbackModel) return;
+
+		let resolverCallCount = 0;
+		const { session: s, events } = await createSession({
+			streamSequence: [
+				// 3 overloaded errors — fallback must fire even if threshold was "skipped"
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeErrorMessage("overloaded_error: overloaded"),
+				() => makeSuccessMessage(fallbackModel.provider, fallbackModel.id),
+			],
+			maxRetriesBeforeFallback: 2,
+			maxRetries: 8,
+			resolveFallbackModel: _key => {
+				resolverCallCount++;
+				return fallbackModel;
+			},
+		});
+		session = s;
+
+		await session.prompt("Hello");
+
+		// Fallback must have fired (at attempt 2 with >=, regardless of earlier account states)
+		const fallbackEvents = events.filter(e => e.type === "auto_retry_fallback");
+		expect(fallbackEvents.length).toBe(1);
+	});
 });

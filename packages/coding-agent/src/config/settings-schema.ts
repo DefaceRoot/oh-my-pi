@@ -1266,6 +1266,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"async.stallThresholdSeconds": {
+		type: "number",
+		default: 120,
+		ui: {
+			tab: "tools",
+			label: "Stall Detection Threshold",
+			description:
+				"Auto-cancel unresponsive background task agents after this many seconds of no progress (0 to disable)",
+			submenu: true,
+		},
+	},
+
 	// MCP
 	"mcp.enableProjectConfig": {
 		type: "boolean",

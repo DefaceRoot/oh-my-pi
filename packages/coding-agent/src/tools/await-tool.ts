@@ -4,6 +4,9 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import awaitDescription from "../prompts/tools/await.md" with { type: "text" };
 import type { ToolSession } from "./index";
 
+/** How often to poll for stalled jobs when no job has completed yet. */
+const STALL_POLL_INTERVAL_MS = 15_000;
+
 const awaitSchema = Type.Object({
 	jobs: Type.Optional(
 		Type.Array(Type.String(), {
@@ -28,6 +31,8 @@ interface AwaitResult {
 	durationMs: number;
 	resultText?: string;
 	errorText?: string;
+	/** True when this job was automatically cancelled because it produced no progress for the stall threshold. */
+	stalledAndCancelled?: boolean;
 }
 
 export interface AwaitToolDetails {
@@ -82,48 +87,86 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			};
 		}
 
-		// If all watched jobs are already done, return immediately
-		const runningJobs = jobsToWatch.filter(j => j.status === "running");
-		if (runningJobs.length === 0) {
-			return this.#buildResult(manager, jobsToWatch);
+		// Jobs already finished before we started — return immediately
+		const stalledJobIds = new Set<string>();
+		if (jobsToWatch.every(j => j.status !== "running")) {
+			return this.#buildResult(manager, jobsToWatch, stalledJobIds);
 		}
 
-		// Block until at least one running job finishes, timeout expires, or the call is aborted
-		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
+		const stallThresholdSeconds = this.session.settings.get("async.stallThresholdSeconds");
+		const stallThresholdMs = stallThresholdSeconds > 0 ? stallThresholdSeconds * 1000 : 0;
 
-		// Add timeout promise if specified (non-destructive: jobs keep running)
-		let timeoutId: NodeJS.Timeout | undefined;
-		const timeoutMs = params.timeout != null && params.timeout > 0 ? params.timeout * 1000 : undefined;
-		if (timeoutMs) {
-			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
-			timeoutId = setTimeout(timeoutResolve, timeoutMs);
-			racePromises.push(timeoutPromise);
-		}
+		const callStartMs = Date.now();
+		const callTimeoutMs = params.timeout != null && params.timeout > 0 ? params.timeout * 1000 : undefined;
 
-		if (signal) {
-			const { promise: abortPromise, resolve: abortResolve } = Promise.withResolvers<void>();
-			const onAbort = () => abortResolve();
-			signal.addEventListener("abort", onAbort, { once: true });
-			racePromises.push(abortPromise);
-			try {
-				await Promise.race(racePromises);
-			} finally {
-				signal.removeEventListener("abort", onAbort);
-				if (timeoutId) clearTimeout(timeoutId);
+		// Shared abort promise so we can break the inner race when the caller's signal fires.
+		const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<void>();
+		const onAbort = () => resolveAbort();
+		signal?.addEventListener("abort", onAbort, { once: true });
+
+		try {
+			while (true) {
+				// Exit: all jobs either finished or were stall-cancelled by us
+				const activeJobs = jobsToWatch.filter(j => j.status === "running" && !stalledJobIds.has(j.id));
+				if (activeJobs.length === 0) break;
+
+				// Exit: caller aborted
+				if (signal?.aborted) break;
+
+				// Exit: user-specified wall-clock timeout elapsed
+				const elapsedMs = Date.now() - callStartMs;
+				if (callTimeoutMs !== undefined && elapsedMs >= callTimeoutMs) break;
+
+				// Sleep until the next poll tick or the remaining call timeout, whichever is shorter.
+				// Short-circuits immediately if a job finishes or the abort fires.
+				const remainingTimeoutMs =
+					callTimeoutMs !== undefined ? Math.max(0, callTimeoutMs - elapsedMs) : undefined;
+				const sleepMs =
+					remainingTimeoutMs !== undefined
+						? Math.min(STALL_POLL_INTERVAL_MS, remainingTimeoutMs)
+						: STALL_POLL_INTERVAL_MS;
+
+				const { promise: sleepPromise, resolve: sleepResolve } = Promise.withResolvers<void>();
+				const sleepTimer = setTimeout(sleepResolve, sleepMs);
+				try {
+					await Promise.race([...activeJobs.map(j => j.promise), sleepPromise, abortPromise]);
+				} finally {
+					clearTimeout(sleepTimer);
+				}
+
+				// Stall detection: cancel task jobs that have produced no progress within the threshold.
+				if (stallThresholdMs > 0) {
+					const now = Date.now();
+					for (const job of jobsToWatch) {
+						if (job.status !== "running" || job.type !== "task" || stalledJobIds.has(job.id)) continue;
+						// Fall back to startTime when no progress snapshot has been received yet.
+						const lastProgress = job.lastProgressAt ?? job.startTime;
+						if (now - lastProgress >= stallThresholdMs) {
+							manager.cancel(job.id);
+							stalledJobIds.add(job.id);
+						}
+					}
+				}
+
+				// Preserve the original "return as soon as at least one non-stalled job finishes" contract.
+				const anyNonStalledFinished = jobsToWatch.some(
+					j => j.status !== "running" && !stalledJobIds.has(j.id),
+				);
+				if (anyNonStalledFinished || signal?.aborted) break;
+
+				// All remaining active jobs are stalled — nothing left to wait for.
+				const anyStillActive = jobsToWatch.some(
+					j => j.status === "running" && !stalledJobIds.has(j.id),
+				);
+				if (!anyStillActive) break;
+
+				// Poll timer fired with no stalls and no completions — continue waiting.
 			}
-		} else {
-			try {
-				await Promise.race(racePromises);
-			} finally {
-				if (timeoutId) clearTimeout(timeoutId);
-			}
+		} finally {
+			signal?.removeEventListener("abort", onAbort);
 		}
 
-		if (signal?.aborted) {
-			return this.#buildResult(manager, jobsToWatch);
-		}
-
-		return this.#buildResult(manager, jobsToWatch);
+		return this.#buildResult(manager, jobsToWatch, stalledJobIds);
 	}
 
 	#buildResult(
@@ -138,6 +181,7 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			errorText?: string;
 			progressSnapshot?: Record<string, unknown>;
 		}[],
+		stalledJobIds: Set<string>,
 	): AgentToolResult<AwaitToolDetails> {
 		const now = Date.now();
 		const jobResults: AwaitResult[] = jobs.map(j => ({
@@ -148,14 +192,35 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			durationMs: Math.max(0, now - j.startTime),
 			...(j.resultText ? { resultText: j.resultText } : {}),
 			...(j.errorText ? { errorText: j.errorText } : {}),
+			...(stalledJobIds.has(j.id) ? { stalledAndCancelled: true } : {}),
 		}));
 
-		manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
+		// Only acknowledge delivery for jobs that finished on their own (not stall-cancelled).
+		manager.acknowledgeDeliveries(
+			jobResults
+				.filter(j => j.status !== "running" && !j.stalledAndCancelled)
+				.map(j => j.id),
+		);
 
-		const completed = jobResults.filter(j => j.status !== "running");
-		const running = jobResults.filter(j => j.status === "running");
+		const stalled = jobResults.filter(j => j.stalledAndCancelled);
+		const completed = jobResults.filter(j => j.status !== "running" && !j.stalledAndCancelled);
+		const running = jobResults.filter(j => j.status === "running" && !j.stalledAndCancelled);
 
 		const lines: string[] = [];
+
+		if (stalled.length > 0) {
+			lines.push(`## Stalled — Auto-Cancelled (${stalled.length})\n`);
+			lines.push(
+				"⚠ These jobs produced no progress for the configured stall threshold and have been cancelled automatically. Resubmit them.\n",
+			);
+			for (const j of stalled) {
+				lines.push(`### \`${j.id}\` [${j.type}]`);
+				lines.push(`Label: ${j.label}`);
+				lines.push(`Duration: ${Math.round(j.durationMs / 1000)}s`);
+				lines.push("");
+			}
+		}
+
 		if (completed.length > 0) {
 			lines.push(`## Completed (${completed.length})\n`);
 			for (const j of completed) {
