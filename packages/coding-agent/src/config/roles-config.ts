@@ -12,14 +12,6 @@ const SkillConfigSchema = Type.Object({
 
 export type SkillConfig = Static<typeof SkillConfigSchema>;
 
-// V2 Tools inherit pattern for subagents
-const ToolsInheritSchema = Type.Object({
-	inherit: Type.Optional(Type.String({ minLength: 1 })),
-	add: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-	remove: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-});
-
-export type ToolsInheritConfig = Static<typeof ToolsInheritSchema>;
 
 // V2 Fallback model (placeholder for increment 2)
 const FallbackSchema = Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()]));
@@ -78,7 +70,7 @@ export const SubagentConfigSchemaV2 = Type.Object({
 	mcp: Type.Array(Type.String({ minLength: 1 })),
 	disabledTools: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
 	skills: Type.Optional(SkillConfigSchema),
-	tools: Type.Optional(Type.Union([ToolsInheritSchema, Type.Array(Type.String({ minLength: 1 }))])),
+	tools: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
 	fallback: FallbackSchema,
 	advanced: AdvancedConfigSchema,
 });
@@ -277,13 +269,6 @@ function cloneSkillConfig(config: SkillConfig): SkillConfig {
 	};
 }
 
-function cloneToolsInheritConfig(config: ToolsInheritConfig): ToolsInheritConfig {
-	return {
-		inherit: config.inherit,
-		add: config.add !== undefined ? [...config.add] : undefined,
-		remove: config.remove !== undefined ? [...config.remove] : undefined,
-	};
-}
 
 function cloneAdvancedConfig(config: AdvancedConfig): AdvancedConfig {
 	return { ...config };
@@ -325,9 +310,7 @@ function cloneSubagentConfig(config: SubagentConfig): SubagentConfig {
 		base.skills = cloneSkillConfig(config.skills);
 	}
 	if (config.tools !== undefined) {
-		base.tools = Array.isArray(config.tools)
-			? [...config.tools]
-			: cloneToolsInheritConfig(config.tools as ToolsInheritConfig);
+		base.tools = [...config.tools];
 	}
 	if (config.fallback !== undefined) {
 		base.fallback = config.fallback;
@@ -580,70 +563,24 @@ export class RolesConfig {
 	}
 
 	/**
-	 * Resolves the effective tool list for a subagent.
-	 *
-	 * - If the subagent has no tools config: returns null (caller uses agent defaults).
-	 * - If tools is a direct array: returns a copy.
-	 * - If tools is a ToolsInheritConfig: resolves by inheriting from the named role
-	 *   (defaulting to "default"), then applying `add` and `remove` patches.
+	 * Returns the tool list for a subagent if configured, otherwise null.
+	 * Callers should use agent defaults when null is returned.
 	 */
-	getToolsForSubagent(agent: string, _visited?: Set<string>): string[] | null {
-		const visited = _visited ?? new Set<string>();
-		if (visited.has(agent)) {
-			// Cycle detected — break by returning a copy of the default role tools
-			return [...this.getToolsForRole("default")];
-		}
-		visited.add(agent);
-
-		const config = this.#getConfig();
-		const subagentConfig = config.subagents[agent];
+	getToolsForSubagent(agent: string): string[] | null {
+		const subagentConfig = this.#getConfig().subagents[agent];
 		if (!subagentConfig || subagentConfig.tools === undefined) {
 			return null;
 		}
-
-		const tools = subagentConfig.tools;
-
-		if (Array.isArray(tools)) {
-			return [...tools];
-		}
-
-		// ToolsInheritConfig — resolve inheritance
-		// Role takes priority over subagent for the same name (backward compat).
-		// If inherit references neither a role nor a subagent, falls back to "default".
-		const toolsInherit = tools as ToolsInheritConfig;
-		const inheritFrom = toolsInherit.inherit ?? "default";
-
-		let result: string[];
-		if (config.roles[inheritFrom] !== undefined) {
-			result = [...this.getToolsForRole(inheritFrom)];
-		} else if (config.subagents[inheritFrom] !== undefined) {
-			// Recurse into subagent with cycle detection
-			const inherited = this.getToolsForSubagent(inheritFrom, visited);
-			// If the referenced subagent has no tools config, fall back to default role
-			result = inherited ?? [...this.getToolsForRole("default")];
-		} else {
-			// Unknown name — fall back to default role
-			result = [...this.getToolsForRole("default")];
-		}
-
-		if (toolsInherit.add) {
-			result = [...result, ...toolsInherit.add];
-		}
-		if (toolsInherit.remove) {
-			const toRemove = new Set(toolsInherit.remove);
-			result = result.filter(t => !toRemove.has(t));
-		}
-
-		return result;
+		return [...subagentConfig.tools];
 	}
 
-	/** Writes a ToolsInheritConfig to a subagent and persists. */
-	setToolsForSubagent(agent: string, toolsConfig: ToolsInheritConfig): void {
+	/** Writes a tool list to a subagent and persists. */
+	setToolsForSubagent(agent: string, tools: string[]): void {
 		const config = this.#getConfig();
 		const subagentConfig = config.subagents[agent] ?? { mcp: [] };
 		config.subagents[agent] = {
 			...cloneSubagentConfig(subagentConfig),
-			tools: cloneToolsInheritConfig(toolsConfig),
+			tools: [...tools],
 		};
 		this.#persistConfig(config);
 	}

@@ -1,6 +1,6 @@
 lastChangelogVersion: 13.15.0
 modelRoles: 
-  default: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  default: openai-codex/gpt-5.4
   ask: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
   orchestrator: github-copilot/claude-sonnet-4.6
   plan: apertis/code:claude-opus-4-6

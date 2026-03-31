@@ -24,7 +24,8 @@ mock.module("@oh-my-pi/pi-utils", () => ({
 	getProjectDir: () => "/fake/cwd",
 }));
 
-import { loadAllExtensions } from "./state-manager";
+import { loadAllExtensions, filterByProvider, buildProviderTabs } from "./state-manager";
+import type { Extension } from "./types";
 
 function emptyCapResult() {
 	return { items: [], all: [], warnings: [], providers: [] };
@@ -102,5 +103,73 @@ describe("loadAllExtensions — custom directories", () => {
 
 		expect(mockScanSkillsFromDir).not.toHaveBeenCalled();
 		expect(extensions.filter(e => e.kind === "skill")).toHaveLength(0);
+	});
+});
+
+
+function makeExtension(name: string, provider: string): Extension {
+	return {
+		id: `skill:${name}`,
+		kind: "skill",
+		name,
+		displayName: name,
+		path: `/fake/${name}`,
+		source: { provider, providerName: provider, level: "user" as const },
+		state: "active",
+		raw: {},
+	};
+}
+
+describe("filterByProvider — ALL tab native exclusion", () => {
+	const nativeExt = makeExtension("native-skill", "native");
+	const agentExt = makeExtension("agent-skill", "agents");
+	const customExt = makeExtension("custom-skill", "custom");
+	const mixed = [nativeExt, agentExt, customExt];
+
+	test("excludes native-provider entries from ALL", () => {
+		const result = filterByProvider(mixed, "all");
+		expect(result.some(e => e.source.provider === "native")).toBe(false);
+	});
+
+	test("includes non-native entries in ALL", () => {
+		const result = filterByProvider(mixed, "all");
+		expect(result).toHaveLength(2);
+		expect(result.map(e => e.name)).toContain("agent-skill");
+		expect(result.map(e => e.name)).toContain("custom-skill");
+	});
+
+	test("returns empty array when all entries are native", () => {
+		const result = filterByProvider([nativeExt], "all");
+		expect(result).toHaveLength(0);
+	});
+
+	test("provider-specific filtering is unaffected by native exclusion logic", () => {
+		const result = filterByProvider(mixed, "agents");
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe("agent-skill");
+	});
+});
+
+describe("buildProviderTabs — ALL tab count native exclusion", () => {
+	const nativeExt = makeExtension("native-skill", "native");
+	const agentExt = makeExtension("agent-skill", "agents");
+	const customExt = makeExtension("custom-skill", "custom");
+
+	test("ALL tab count excludes native entries", () => {
+		const tabs = buildProviderTabs([nativeExt, agentExt, customExt]);
+		const allTab = tabs.find(t => t.id === "all");
+		expect(allTab?.count).toBe(2);
+	});
+
+	test("ALL tab count is 0 when all entries are native", () => {
+		const tabs = buildProviderTabs([nativeExt]);
+		const allTab = tabs.find(t => t.id === "all");
+		expect(allTab?.count).toBe(0);
+	});
+
+	test("ALL tab count matches non-native-only list", () => {
+		const tabs = buildProviderTabs([agentExt, customExt]);
+		const allTab = tabs.find(t => t.id === "all");
+		expect(allTab?.count).toBe(2);
 	});
 });

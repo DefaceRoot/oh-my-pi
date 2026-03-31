@@ -397,3 +397,115 @@ describe("TtsrManager repeat behavior", () => {
 		expect(manager.checkDelta("forbidden", turnContext)).toEqual([rule]);
 	});
 });
+
+describe("TtsrManager orchestrator-delegate gating", () => {
+	const createOrchestratorDelegateRule = (): Rule =>
+		makeRule({
+			name: "orchestrator-delegate",
+			condition: ['_i":\\s*"(Reading|Editing|Writing|Finding|Grep|Bash|Running|Executing)'],
+			scope: ["tool"],
+		});
+	const createOrchestratorManager = (runningJobsChecker?: () => boolean) =>
+		new TtsrManager(undefined, runningJobsChecker, () => "orchestrator");
+
+	const createToolContext = (toolName: string): { source: "tool"; toolName: string } => ({
+		source: "tool",
+		toolName,
+	});
+
+	it("does not trigger orchestrator-delegate with fewer than 10 tool calls", () => {
+		const manager = createOrchestratorManager();
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		expect(manager.getRecentToolCalls().length).toBe(9);
+	});
+
+	it("triggers orchestrator-delegate after 10 non-task tool calls", () => {
+		const manager = createOrchestratorManager();
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([rule]);
+		expect(manager.getRecentToolCalls().length).toBe(10);
+	});
+
+	it("does not trigger orchestrator-delegate when task is in recent calls", () => {
+		const manager = createOrchestratorManager();
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 5; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		manager.checkDelta('_i":"Delegating task', createToolContext("task"));
+		for (let i = 0; i < 5; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+	});
+
+	it("triggers orchestrator-delegate when task was older than 10 calls ago", () => {
+		const manager = createOrchestratorManager();
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		manager.checkDelta('_i":"Delegating task', createToolContext("task"));
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([rule]);
+	});
+
+	it("does not trigger orchestrator-delegate when running jobs checker returns true", () => {
+		let hasRunningJobs = true;
+		const manager = createOrchestratorManager(() => hasRunningJobs);
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 10; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+
+		hasRunningJobs = false;
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([rule]);
+	});
+
+	it("tracks only task jobs in running jobs checker", () => {
+		const manager = createOrchestratorManager(() => false);
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([rule]);
+	});
+
+	it("allows setting running jobs checker after construction", () => {
+		const manager = createOrchestratorManager();
+		const rule = createOrchestratorDelegateRule();
+		manager.addRule(rule);
+
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([rule]);
+
+		manager.setRunningJobsChecker(() => true);
+		manager.clearToolCallHistory();
+
+		for (let i = 0; i < 9; i++) {
+			expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+		}
+		expect(manager.checkDelta('_i":"Reading file', createToolContext("read"))).toEqual([]);
+	});
+});

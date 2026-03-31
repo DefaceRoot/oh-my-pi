@@ -480,7 +480,7 @@ export function buildProviderTabs(extensions: Extension[]): ProviderTab[] {
 		id: "all",
 		label: "ALL",
 		enabled: true,
-		count: extensions.length,
+		count: extensions.filter(ext => ext.source.provider !== "native").length,
 	});
 
 	// Provider tabs (skip native)
@@ -523,7 +523,7 @@ export function buildProviderTabs(extensions: Extension[]): ProviderTab[] {
  */
 export function filterByProvider(extensions: Extension[], providerId: string): Extension[] {
 	if (providerId === "all") {
-		return extensions;
+		return extensions.filter(ext => ext.source.provider !== "native");
 	}
 	return extensions.filter(ext => ext.source.provider === providerId);
 }

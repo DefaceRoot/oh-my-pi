@@ -776,6 +776,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const startupRole = resolveRoleName(sessionManager.getLastModelChangeRole());
 	const configuredRole = resolveRoleName(options.role ?? startupRole);
+	const resolveTtsrRuntimeRole = () =>
+		resolveRoleName(sessionManager.getLastModelChangeRole()) ?? configuredRole ?? "default";
 	const sessionAdvancedConfig =
 		options.advancedConfig === undefined ? rolesConfig.getAdvancedForRole(configuredRole) : options.advancedConfig;
 	if (sessionAdvancedConfig !== undefined && sessionAdvancedConfig !== null) {
@@ -896,7 +898,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"discoverTtsrRules",
 		async () => {
 			const ttsrSettings = settings.getGroup("ttsr");
-			const ttsrManager = new TtsrManager(ttsrSettings);
+			const ttsrManager = new TtsrManager(ttsrSettings, undefined, resolveTtsrRuntimeRole);
 			const rulesResult =
 				options.rules !== undefined
 					? { items: options.rules, warnings: undefined }
@@ -989,6 +991,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				},
 			})
 		: undefined;
+
+	// Set up running jobs checker for orchestrator-delegate rule gating
+	if (ttsrManager && asyncJobManager) {
+		ttsrManager.setRunningJobsChecker(() => asyncJobManager.getRunningJobs().some(job => job.type === "task"));
+	}
 
 	const pendingActionStore = new PendingActionStore();
 	const toolSession: ToolSession = {
@@ -1448,7 +1455,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const effectivePersonality = taskDepth > 0 ? undefined : personality;
 
 		// MCP server instructions removed — tool descriptions in available tools are sufficient
-		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
+		const appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		// Compute effective skills for this mode: explicit config wins, then subagent config, then core-role config.
 		const effectiveSkills = await (async () => {
 			if (options.skillConfig) return skills; // explicit config already applied at session creation
@@ -1791,16 +1798,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				primaryModelKey,
 			),
 		resolvePrimaryThinkingLevel: () => {
-			const config = taskDepth > 0
-				? rolesConfig.getAdvancedForSubagent(configuredRole)
-				: rolesConfig.getAdvancedForRole(configuredRole);
+			const config =
+				taskDepth > 0
+					? rolesConfig.getAdvancedForSubagent(configuredRole)
+					: rolesConfig.getAdvancedForRole(configuredRole);
 			// Honour the same precedence as session startup: primaryThinkingLevel ?? thinkingLevel.
 			return resolveAdvancedThinkingLevel(config);
 		},
 		resolveFallbackThinkingLevel: () => {
-			const config = taskDepth > 0
-				? rolesConfig.getAdvancedForSubagent(configuredRole)
-				: rolesConfig.getAdvancedForRole(configuredRole);
+			const config =
+				taskDepth > 0
+					? rolesConfig.getAdvancedForSubagent(configuredRole)
+					: rolesConfig.getAdvancedForRole(configuredRole);
 			return parseThinkingLevel(config?.fallbackThinkingLevel ?? undefined);
 		},
 	});

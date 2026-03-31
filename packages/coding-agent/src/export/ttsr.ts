@@ -48,6 +48,13 @@ interface InjectionRecord {
 	lastInjectedAt: number;
 }
 
+const ORCHESTRATOR_DELEGATE_RULE_NAME = "orchestrator-delegate";
+const ORCHESTRATOR_DELEGATE_MIN_CONSECUTIVE_TOOLS = 10;
+
+type ToolCallRecord = { toolName: string; timestamp: number };
+type RunningJobsChecker = () => boolean;
+type RuntimeRoleResolver = () => string | undefined;
+
 const DEFAULT_SETTINGS: Required<TtsrSettings> = {
 	enabled: true,
 	contextMode: "discard",
@@ -68,10 +75,39 @@ export class TtsrManager {
 	readonly #rules = new Map<string, TtsrEntry>();
 	readonly #injectionRecords = new Map<string, InjectionRecord>();
 	readonly #buffers = new Map<string, string>();
+	readonly #recentToolCalls: ToolCallRecord[] = [];
+	#runningJobsChecker?: RunningJobsChecker;
+	#runtimeRoleResolver?: RuntimeRoleResolver;
 	#messageCount = 0;
 
-	constructor(settings?: TtsrSettings) {
+	constructor(
+		settings?: TtsrSettings,
+		runningJobsChecker?: RunningJobsChecker,
+		runtimeRoleResolver?: RuntimeRoleResolver,
+	) {
 		this.#settings = { ...DEFAULT_SETTINGS, ...settings };
+		this.#runningJobsChecker = runningJobsChecker;
+		this.#runtimeRoleResolver = runtimeRoleResolver;
+	}
+
+	/** Set the running jobs checker (can be called after construction). */
+	setRunningJobsChecker(checker: RunningJobsChecker | undefined): void {
+		this.#runningJobsChecker = checker;
+	}
+
+	/** Get the running jobs checker. */
+	getRunningJobsChecker(): RunningJobsChecker | undefined {
+		return this.#runningJobsChecker;
+	}
+
+	/** Clear recent tool call history. */
+	clearToolCallHistory(): void {
+		this.#recentToolCalls.length = 0;
+	}
+
+	/** Get recent tool calls for debugging. */
+	getRecentToolCalls(): readonly ToolCallRecord[] {
+		return this.#recentToolCalls;
 	}
 
 	/** Check if a rule can be triggered based on repeat settings. */
@@ -334,6 +370,11 @@ export class TtsrManager {
 	 * assistant prose, thinking text, and unrelated tool argument streams.
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
+		// Track tool calls for orchestrator-delegate gating
+		if (context.source === "tool" && context.toolName) {
+			this.#recordToolCall(context.toolName);
+		}
+
 		const bufferKey = this.#bufferKey(context);
 		const nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
 		this.#buffers.set(bufferKey, nextBuffer);
@@ -341,6 +382,10 @@ export class TtsrManager {
 		const matches: Rule[] = [];
 		for (const [name, entry] of this.#rules) {
 			if (!this.#canTrigger(name)) {
+				continue;
+			}
+			// Special gating for orchestrator-delegate rule
+			if (name === ORCHESTRATOR_DELEGATE_RULE_NAME && !this.#shouldAllowOrchestratorDelegateTrigger()) {
 				continue;
 			}
 			if (!this.#matchesScope(entry, context)) {
@@ -364,6 +409,49 @@ export class TtsrManager {
 		}
 
 		return matches;
+	}
+
+	/** Record a tool call for tracking recent tool usage. */
+	#recordToolCall(toolName: string): void {
+		this.#recentToolCalls.push({ toolName, timestamp: Date.now() });
+		// Keep only the last N tool calls
+		while (this.#recentToolCalls.length > ORCHESTRATOR_DELEGATE_MIN_CONSECUTIVE_TOOLS) {
+			this.#recentToolCalls.shift();
+		}
+	}
+
+	/**
+	 * Check if the orchestrator-delegate rule should be allowed to trigger.
+	 * Requires:
+	 * 1. Current runtime role is orchestrator
+	 * 2. No running background task jobs
+	 * 3. At least 10 recent consecutive non-task tool calls
+	 * 4. No task tool used in the last 10 calls
+	 */
+	#shouldAllowOrchestratorDelegateTrigger(): boolean {
+		const runtimeRole = this.#runtimeRoleResolver?.();
+		const normalizedRuntimeRole = typeof runtimeRole === "string" ? runtimeRole.trim().toLowerCase() : undefined;
+		if (normalizedRuntimeRole !== "orchestrator") {
+			return false;
+		}
+
+		// Check if there are running background task jobs
+		if (this.#runningJobsChecker?.()) {
+			return false;
+		}
+
+		// Check if we have enough recent tool calls
+		if (this.#recentToolCalls.length < ORCHESTRATOR_DELEGATE_MIN_CONSECUTIVE_TOOLS) {
+			return false;
+		}
+
+		// Check if any of the recent tool calls were task tool
+		const hasTaskInRecentCalls = this.#recentToolCalls.some(record => record.toolName === "task");
+		if (hasTaskInRecentCalls) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/** Mark rules as injected (won't trigger again until conditions allow). */
@@ -399,17 +487,24 @@ export class TtsrManager {
 
 	/** Restore injected state from a list of rule names. */
 	restoreInjected(ruleNames: string[]): void {
-		for (const name of ruleNames) {
-			this.#injectionRecords.set(name, { lastInjectedAt: 0 });
+		const restoredRuleNames = new Set<string>();
+		for (const rawName of ruleNames) {
+			const ruleName = rawName.trim();
+			if (ruleName.length === 0 || !this.#rules.has(ruleName)) {
+				continue;
+			}
+			this.#injectionRecords.set(ruleName, { lastInjectedAt: 0 });
+			restoredRuleNames.add(ruleName);
 		}
-		if (ruleNames.length > 0) {
-			logger.debug("TTSR injected state restored", { ruleNames });
+		if (restoredRuleNames.size > 0) {
+			logger.debug("TTSR injected state restored", { ruleNames: Array.from(restoredRuleNames) });
 		}
 	}
 
-	/** Reset stream buffers (called on new turn). */
+	/** Reset stream buffers and tool call history (called on new turn). */
 	resetBuffer(): void {
 		this.#buffers.clear();
+		// Keep tool call history across turns for orchestrator-delegate gating
 	}
 
 	/** Check if any TTSR rules are registered. */
