@@ -7,6 +7,7 @@ import { ModelRegistry } from "../src/config/model-registry";
 import { PresetsConfig } from "../src/config/presets-config";
 import { RolesConfig } from "../src/config/roles-config";
 import { Settings } from "../src/config/settings";
+import type { Skill } from "../src/extensibility/skills";
 import { AgentConfigModal } from "../src/modes/components/agent-config";
 import { initTheme } from "../src/modes/theme/theme";
 import { AuthStorage } from "../src/session/auth-storage";
@@ -82,6 +83,8 @@ function createModal(
 		modelRoles?: Partial<Record<string, string>>;
 		values?: Record<string, unknown>;
 		presetsConfig?: PresetsConfig;
+		discoveredSkills?: Skill[];
+		onDismiss?: () => void;
 	} = {},
 ): AgentConfigModal {
 	const subagentDefaultTools = options.subagentDefaultTools ?? {};
@@ -102,14 +105,37 @@ function createModal(
 		knownTools,
 		subagentDefaultTools,
 		knownMcpServers: [],
-		discoveredSkills: [],
-		onDismiss: () => {},
+		discoveredSkills: options.discoveredSkills ?? [],
+		onDismiss: options.onDismiss ?? (() => {}),
 		onRequestRender: () => {},
 	} as never);
 }
 
+function createDiscoveredSkill(name: string, description: string): Skill {
+	return {
+		name,
+		description,
+		filePath: `/skills/${name}/SKILL.md`,
+		baseDir: `/skills/${name}`,
+		source: "test",
+		mode: "auto",
+		content: `${name} content`,
+	};
+}
+
 function focusModelTab(modal: AgentConfigModal): void {
 	modal.handleInput("\t");
+}
+
+function openSkillsTab(modal: AgentConfigModal): void {
+	modal.handleInput("\t");
+	for (let i = 0; i < 5; i++) {
+		if (renderText(modal).includes("[A]=auto")) {
+			return;
+		}
+		modal.handleInput("\x1b[C");
+	}
+	throw new Error(`Skills tab not found in modal:\n${renderText(modal)}`);
 }
 
 function openToolsTab(modal: AgentConfigModal): void {
@@ -133,6 +159,105 @@ function openAdvancedTab(modal: AgentConfigModal): void {
 	}
 	throw new Error(`Advanced tab not found in modal:\n${renderText(modal)}`);
 }
+
+describe("AgentConfigModal search integration", () => {
+	test("keeps model search shortcuts inside the search field", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-model-search-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		const onDismiss = vi.fn();
+		try {
+			await fs.writeFile(
+				rolesPath,
+				`roles:
+  default:
+    tools:
+      - ast_grep
+    mcp:
+      - augment
+    skills: all
+subagents:
+  _default:
+    mcp:
+      - augment
+`,
+				"utf8",
+			);
+			const rolesConfig = new RolesConfig(rolesPath);
+			const modal = createModal(rolesConfig, { onDismiss });
+
+			focusModelTab(modal);
+			modal.handleInput("/");
+			modal.handleInput("t");
+
+			const editing = renderText(modal);
+			expect(editing).toContain("Search (editing)");
+			expect(editing).toContain("▶ Fallback (editing)");
+			expect(editing).not.toContain("▶ Primary (editing)");
+			expect(editing).toContain("> t");
+
+			modal.handleInput("\x1b");
+
+			const cleared = renderText(modal);
+			expect(onDismiss).not.toHaveBeenCalled();
+			expect(cleared).toContain("Search (/ to edit)");
+			expect(cleared).toContain("anthropic/claude-haiku");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps skill search shortcuts inside the search field", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agent-config-modal-skill-search-"));
+		const rolesPath = path.join(tempDir, "roles.yml");
+		const onDismiss = vi.fn();
+		try {
+			await fs.writeFile(
+				rolesPath,
+				`roles:
+  default:
+    tools:
+      - ast_grep
+    mcp:
+      - augment
+    skills: none
+subagents:
+  _default:
+    mcp:
+      - augment
+`,
+				"utf8",
+			);
+			const rolesConfig = new RolesConfig(rolesPath);
+			const modal = createModal(rolesConfig, {
+				onDismiss,
+				discoveredSkills: [
+					createDiscoveredSkill("Alpha", "First skill"),
+					createDiscoveredSkill("Beta", "Second skill"),
+				],
+			});
+
+			openSkillsTab(modal);
+			modal.handleInput("/");
+			modal.handleInput("j");
+			modal.handleInput(" ");
+
+			const editing = renderText(modal);
+			expect(editing).toContain("Search (editing)");
+			expect(editing).toContain("No matching skills.");
+
+			modal.handleInput("\x1b");
+
+			const cleared = renderText(modal);
+			expect(onDismiss).not.toHaveBeenCalled();
+			expect(cleared).toContain("Search (/ to edit)");
+			expect(cleared).toContain("Alpha");
+			expect(cleared).toContain("Beta");
+			expect(rolesConfig.getSkillConfigForRole("default")).toEqual({ auto: [], frontmatter: [] });
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("AgentConfigModal tools integration", () => {
 	test("persists role tool toggles through the tools tab", async () => {

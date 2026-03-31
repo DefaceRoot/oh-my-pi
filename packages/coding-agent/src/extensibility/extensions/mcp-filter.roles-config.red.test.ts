@@ -19,7 +19,7 @@ const ROLES_YAML = `roles:
       - chrome-devtools
     skills: all
 subagents:
-  ask-explore:
+  restricted-sub:
     mcp: []
   _default:
     mcp:
@@ -99,9 +99,9 @@ describe("Phase 7 RED: mcp-filter roles config source of truth", () => {
 		});
 	});
 
-	it("keeps ask-explore restricted when roles config has empty allowlist", async () => {
+	it("keeps subagent restricted when roles config has empty allowlist", async () => {
 		const handlers = await createRegisteredHandlers();
-		await runBeforeAgentStart(handlers, "name: ask-explore\nYou are operating on a delegated sub-task.");
+		await runBeforeAgentStart(handlers, "name: restricted-sub\nYou are operating on a delegated sub-task.");
 
 		const toolCall = handlers.get("tool_call")?.[0];
 		if (!toolCall) throw new Error("tool_call handler not registered");

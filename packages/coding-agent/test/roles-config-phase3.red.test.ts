@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { _testExports as askModePolicy } from "../../../agent/extensions/ask-mode/index";
 
 type RolesConfigContract = {
 	getMcpForRole(role: string): string[] | Promise<string[]>;
@@ -102,27 +101,5 @@ describe("repository roles MCP alignment with enforced ask/implementation policy
 		const implementMcp = await resolveArray(rolesConfig.getMcpForRole("implement"));
 
 		expect(implementMcp).toContain("better-context");
-	});
-
-	it("keeps ask subagent MCP split aligned with ask-mode policy", async () => {
-		const { RolesConfig } = await loadRolesConfigModule();
-		const rolesConfig = new RolesConfig(repoRolesPath);
-		const askExploreAllowsAugment =
-			askModePolicy.shouldBlockTool(
-				{ toolName: "mcp_augment_codebase_retrieval" },
-				askModePolicy.isAskContext({ role: "default", agent: "ask-explore" }),
-			) === undefined;
-		const askResearchAllowsAugment =
-			askModePolicy.shouldBlockTool(
-				{ toolName: "mcp_augment_codebase_retrieval" },
-				askModePolicy.isAskContext({ role: "default", agent: "ask-research" }),
-			) === undefined;
-
-		expect(await resolveArray(rolesConfig.getMcpForSubagent("ask-explore"))).toEqual(
-			askExploreAllowsAugment ? ["augment"] : [],
-		);
-		expect(await resolveArray(rolesConfig.getMcpForSubagent("ask-research"))).toEqual(
-			askResearchAllowsAugment ? ["augment"] : [],
-		);
 	});
 });

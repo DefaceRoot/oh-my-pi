@@ -1,0 +1,121 @@
+lastChangelogVersion: 13.15.0
+modelRoles: 
+  default: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  ask: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  orchestrator: anthropic/claude-sonnet-4-6
+  plan: apertis/code:claude-opus-4-6
+  commit: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  implement: anthropic/claude-sonnet-4-6
+  explore: apertis/gemini-3-flash-preview
+  lint: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  merge: openai-codex/gpt-5.4:xhigh
+  curator: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  research: openai-codex/gpt-5.4-mini:medium
+  verifier: github-copilot/gpt-5.4:xhigh
+  worktree-setup: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  code-reviewer: openai-codex/gpt-5.4:high
+  plan-verifier: github-copilot/gpt-5.4:xhigh
+  coderabbit: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  frontend: github-copilot/gemini-3.1-pro-preview
+  designer: anthropic/claude-opus-4-6
+  grafana: github-copilot/claude-opus-4.6:high
+  debug: openai-codex/gpt-5.4:xhigh
+  vision: anthropic/claude-3-5-haiku-latest
+  task: openai-codex/gpt-5.4:high
+defaultThinkingLevel: high
+providers: 
+  webSearch: auto
+  image: auto
+statusLine: 
+  preset: default
+  separator: slash
+disabledExtensions: 
+  - extension-module:worktree-policy
+  - extension-module:plan-worktree
+steeringMode: one-at-a-time
+task: 
+  maxRecursionDepth: 3
+  eager: false
+  isolation: 
+    commits: ai
+    merge: branch
+    mode: worktree
+stt: 
+  enabled: false
+  inputDevice: alsa_input.usb-Cisco_System__Inc._Cisco_Webex_Desk_Camera_ATW25101013-03.analog-stereo
+disabledProviders: 
+  - opencode
+  - codex
+  - agents-md
+  - claude
+memories: 
+  enabled: true
+theme: 
+  dark: dark-catppuccin
+agents_view: 
+  columns: 
+    status_width: 8
+    harness_width: 8
+    role_width: 7
+    session_width: 36
+    branch_width: 22
+    age_width: 5
+    ctx_width: 13
+  stall: 
+    threshold_def_seconds: 240
+    threshold_orch_seconds: 900
+  recovery: 
+    auto_recover: false
+    auto_recover_patterns: 
+      - stdin_waiting
+      - agent_asking
+    auto_recover_threshold_seconds: 300
+  notifications: 
+    enabled: true
+    events: 
+      - session_done
+      - session_asking
+      - session_stalled
+      - ctx_warn
+    bell: true
+    desktop: true
+    footer_flash: true
+ask: 
+  timeout: 0
+async: 
+  enabled: true
+lsp: 
+  diagnosticsOnEdit: true
+browser: 
+  headless: false
+  enabled: false
+exa: 
+  enableResearcher: false
+symbolPreset: nerd
+compaction: 
+  strategy: context-full
+  thresholdPercent: 75
+  thresholdTokens: -1
+commands: 
+  enableClaudeUser: false
+  enableClaudeProject: false
+skills: 
+  enableSkillCommands: false
+bashInterceptor: 
+  enabled: true
+contextPromotion: 
+  enabled: false
+serviceTier: none
+checkpoint: 
+  enabled: true
+edit: 
+  mode: hashline
+todo: 
+  eager: true
+startup: 
+  checkUpdate: false
+treeFilterMode: default
+doubleEscapeAction: tree
+display: 
+  showTokenUsage: true
+personality: plain-english

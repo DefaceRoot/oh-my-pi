@@ -69,6 +69,11 @@ export async function getRepoRoot(cwd: string): Promise<string> {
 const PROJFS_UNAVAILABLE_PREFIX = "PROJFS_UNAVAILABLE:";
 const GIT_NO_INDEX_NULL_PATH = process.platform === "win32" ? "NUL" : "/dev/null";
 const OMP_MANAGED_WORKTREE_BRANCH_PREFIX = "omp/worktree/";
+// Suppress repository hooks during agent-managed worktree operations.
+// Git runs post-checkout (and other hooks) during `git worktree add`, which can
+// fail on repos whose hooks depend on tooling not present in the environment (e.g. git-lfs).
+const NULL_HOOKS_PATH = process.platform === "win32" ? "NUL" : "/dev/null";
+
 
 const managedWorktreeBranches = new Map<string, string>();
 
@@ -129,11 +134,11 @@ export async function ensureWorktree(baseCwd: string, id: string): Promise<strin
 	await fs.rm(worktreeDir, { recursive: true, force: true });
 	managedWorktreeBranches.delete(normalizedWorktreeDir);
 	if (headCommit) {
-		await $`git worktree add --detach ${worktreeDir} HEAD`.cwd(repoRoot).quiet();
+		await $`git -c core.hooksPath=${NULL_HOOKS_PATH} worktree add --detach ${worktreeDir} HEAD`.cwd(repoRoot).quiet();
 	} else {
 		const branchName = await createManagedWorktreeBranchName(repoRoot, id);
 		// Unborn repos cannot detach HEAD; use a disposable managed branch instead.
-		await $`git worktree add -b ${branchName} ${worktreeDir}`.cwd(repoRoot).quiet();
+		await $`git -c core.hooksPath=${NULL_HOOKS_PATH} worktree add -b ${branchName} ${worktreeDir}`.cwd(repoRoot).quiet();
 		managedWorktreeBranches.set(normalizedWorktreeDir, branchName);
 	}
 	return worktreeDir;
@@ -968,7 +973,7 @@ export async function commitToBranch(
 		await $`git branch ${branchName} HEAD`.cwd(repoRoot).quiet();
 		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
 		try {
-			await $`git worktree add ${tmpDir} ${branchName}`.cwd(repoRoot).quiet();
+			await $`git -c core.hooksPath=${NULL_HOOKS_PATH} worktree add ${tmpDir} ${branchName}`.cwd(repoRoot).quiet();
 			const patchPath = path.join(os.tmpdir(), `omp-branch-patch-${Snowflake.next()}.patch`);
 			try {
 				await Bun.write(patchPath, rootPatch);
