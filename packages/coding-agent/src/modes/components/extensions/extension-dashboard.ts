@@ -34,6 +34,7 @@ export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
+	#customDirectories: string[] = [];
 
 	onClose?: () => void;
 
@@ -58,7 +59,8 @@ export class ExtensionDashboard extends Container {
 	async #init(): Promise<void> {
 		const sm = this.settings ?? (await Settings.init());
 		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
-		this.#state = await createInitialState(this.cwd, disabledIds);
+		this.#customDirectories = sm ? ((sm.get("skills.customDirectories") as string[]) ?? []) : [];
+		this.#state = await createInitialState(this.cwd, disabledIds, this.#customDirectories);
 
 		// Calculate max visible items based on terminal height
 		// Reserve ~10 lines for header, tabs, help text, borders
@@ -190,7 +192,7 @@ export class ExtensionDashboard extends Container {
 
 		const sm = this.settings ?? Settings.instance;
 		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
-		this.#state = await refreshState(this.#state, this.cwd, disabledIds);
+		this.#state = await refreshState(this.#state, this.cwd, disabledIds, this.#customDirectories);
 
 		// Find the same tab in the new (re-sorted) list
 		if (currentTabId) {

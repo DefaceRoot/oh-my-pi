@@ -5,7 +5,7 @@ import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillConfig } from "../config/roles-config";
 import type { SkillsSettings } from "../config/settings";
-import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
+import { type Skill as CapabilitySkill, isProviderEnabled, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
 import { expandTilde } from "../tools/path-utils";
 
@@ -100,9 +100,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		return { skills: [], warnings: [] };
 	}
 
-	const anyBuiltInSkillSourceEnabled =
-		enableCodexUser || enableClaudeUser || enableClaudeProject || enablePiUser || enablePiProject;
-	// Helper to check if a source is enabled
 	function isSourceEnabled(source: SourceMeta): boolean {
 		const { provider, level } = source;
 		if (provider === "codex" && level === "user") return enableCodexUser;
@@ -110,8 +107,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (provider === "claude" && level === "project") return enableClaudeProject;
 		if (provider === "native" && level === "user") return enablePiUser;
 		if (provider === "native" && level === "project") return enablePiProject;
-		// For other providers (agents, claude-plugins, etc.), treat them as built-in skill sources.
-		return anyBuiltInSkillSourceEnabled;
+		// For other providers (agents, etc.) delegate to the capability provider state.
+		return isProviderEnabled(provider);
 	}
 
 	// Use capability API to load all skills

@@ -2,8 +2,9 @@
  * State manager for the Extension Control Center.
  * Handles data loading, tree building, filtering, and toggle persistence.
  */
+import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import type { ContextFile } from "../../../capability/context-file";
 import type { ExtensionModule } from "../../../capability/extension-module";
 import type { Hook } from "../../../capability/hook";
@@ -14,6 +15,8 @@ import type { Skill } from "../../../capability/skill";
 import type { SlashCommand } from "../../../capability/slash-command";
 import type { CustomTool } from "../../../capability/tool";
 import type { SourceMeta } from "../../../capability/types";
+import { scanSkillsFromDir } from "../../../discovery/helpers";
+import { expandTilde } from "../../../tools/path-utils";
 import {
 	disableProvider,
 	enableProvider,
@@ -43,7 +46,7 @@ export interface ExtensionSettingsManager {
 /**
  * Load all extensions from all capabilities.
  */
-export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): Promise<Extension[]> {
+export async function loadAllExtensions(cwd?: string, disabledIds?: string[], customDirectories?: string[]): Promise<Extension[]> {
 	const extensions: Extension[] = [];
 	const disabledExtensions = new Set<string>(disabledIds ?? []);
 
@@ -106,6 +109,22 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 			getDescription: s => s.frontmatter?.description,
 			getTrigger: s => s.frontmatter?.globs?.join(", "),
 		});
+		if (customDirectories && customDirectories.length > 0) {
+			const ctx = { cwd: cwd ?? getProjectDir(), home: os.homedir(), repoRoot: null };
+			for (const dir of customDirectories) {
+				const expandedDir = expandTilde(dir);
+				try {
+					const result = await scanSkillsFromDir(ctx, { dir: expandedDir, providerId: "custom", level: "user", requireDescription: true });
+					const customItems = result.items.map(s => ({ ...s, _source: { ...s._source, providerName: "Custom" } }));
+					addItems(customItems, "skill", {
+						getDescription: s => s.frontmatter?.description,
+						getTrigger: s => s.frontmatter?.globs?.join(", "),
+					});
+				} catch (error) {
+					logger.warn("Failed to load custom skill directory", { dir: expandedDir, error: String(error) });
+				}
+			}
+		}
 	} catch (error) {
 		logger.warn("Failed to load skills capability", { error: String(error) });
 	}
@@ -512,8 +531,8 @@ export function filterByProvider(extensions: Extension[], providerId: string): E
 /**
  * Create initial dashboard state.
  */
-export async function createInitialState(cwd?: string, disabledIds?: string[]): Promise<DashboardState> {
-	const extensions = await loadAllExtensions(cwd, disabledIds);
+export async function createInitialState(cwd?: string, disabledIds?: string[], customDirectories?: string[]): Promise<DashboardState> {
+	const extensions = await loadAllExtensions(cwd, disabledIds, customDirectories);
 	const tabs = buildProviderTabs(extensions);
 	const tabFiltered = extensions; // "all" tab by default
 	const searchFiltered = tabFiltered;
@@ -551,8 +570,9 @@ export async function refreshState(
 	state: DashboardState,
 	cwd?: string,
 	disabledIds?: string[],
+	customDirectories?: string[],
 ): Promise<DashboardState> {
-	const extensions = await loadAllExtensions(cwd, disabledIds);
+	const extensions = await loadAllExtensions(cwd, disabledIds, customDirectories);
 	const tabs = buildProviderTabs(extensions);
 
 	// Get current provider from tabs
