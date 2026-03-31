@@ -163,7 +163,7 @@ subagents:
     mcp:
       - augment
       - better-context
-  ask-explore:
+  restricted-sub:
     mcp: []
   _default:
     mcp:
@@ -174,7 +174,7 @@ subagents:
 		const rolesConfig = new RolesConfig(rolesPath);
 
 		expect(await resolveArray(rolesConfig.getMcpForRole("explore"))).toEqual(["augment", "better-context"]);
-		expect(await resolveArray(rolesConfig.getMcpForRole("ask-explore"))).toEqual([]);
+		expect(await resolveArray(rolesConfig.getMcpForRole("restricted-sub"))).toEqual([]);
 		expect(await resolveArray(rolesConfig.getMcpForRole("unknown-role"))).toEqual(["augment"]);
 	});
 });

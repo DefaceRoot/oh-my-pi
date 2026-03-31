@@ -252,12 +252,6 @@ export const DEFAULT_ROLES_CONFIG: RolesConfigData = {
 		research: {
 			mcp: ["augment", "better-context", "ref"],
 		},
-		"ask-explore": {
-			mcp: [],
-		},
-		"ask-research": {
-			mcp: ["augment"],
-		},
 		_default: {
 			mcp: ["augment"],
 		},
