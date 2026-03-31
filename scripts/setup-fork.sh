@@ -237,13 +237,100 @@ configure_mcp() {
         log_ok "MCP configuration created from template"
     else
         log_warn "No MCP configuration found"
-    fi
+	fi
+}
+
+# ============================================================================
+# Skills Installation
+# ============================================================================
+
+install_skills() {
+	log_step "Installing skills..."
+
+	local skills_dir="$AGENT_SOURCE/skills"
+	local -a source_dirs=(
+		"$HOME/.codex/superpowers/skills"
+		"$HOME/.codex/impeccable/.codex/skills"
+	)
+	local copied_count=0
+	local skipped_count=0
+	local replaced_count=0
+	declare -A installed_this_run
+
+	if [[ ! -d "$skills_dir" ]]; then
+		log_warn "Skills directory not found at $skills_dir"
+		return 0
+	fi
+
+	# Replace any broken symlinks with real directories from source repos
+	while IFS= read -r link; do
+		[[ -z "$link" ]] && continue
+		local link_name
+		link_name=$(basename "$link")
+
+		if [[ ! -e "$link" ]]; then
+			local found=0
+			for src_dir in "${source_dirs[@]}"; do
+				if [[ -d "$src_dir/$link_name" && -f "$src_dir/$link_name/SKILL.md" ]]; then
+					rm "$link"
+					cp -r "$src_dir/$link_name" "$skills_dir/$link_name"
+					log_ok "Replaced broken symlink with real copy: $link_name"
+					((replaced_count++))
+					found=1
+					break
+				fi
+			done
+			if [[ $found -eq 0 ]]; then
+				log_warn "Broken symlink with no source found: $link_name"
+			fi
+		fi
+	done < <(find "$skills_dir" -maxdepth 1 -type l 2>/dev/null)
+
+	# Copy any skills from source repos that are not yet installed
+	for src_dir in "${source_dirs[@]}"; do
+		if [[ ! -d "$src_dir" ]]; then
+			log_info "Source directory not found: $src_dir (skipping)"
+			continue
+		fi
+
+		while IFS= read -r skill_dir; do
+			[[ -z "$skill_dir" ]] && continue
+			local skill_name
+			skill_name=$(basename "$skill_dir")
+			local target="$skills_dir/$skill_name"
+
+			if [[ -d "$target" ]]; then
+				# Only count as skipped if it existed before this install run
+				if [[ -z "${installed_this_run[$skill_name]+_}" ]]; then
+					((skipped_count++))
+				fi
+			else
+				cp -r "$skill_dir" "$target"
+				log_ok "Installed skill: $skill_name"
+				((copied_count++))
+				installed_this_run[$skill_name]=1
+			fi
+		done < <(find "$src_dir" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r d; do
+			[[ -f "$d/SKILL.md" ]] && echo "$d"
+		done)
+	done
+
+	if [[ $replaced_count -gt 0 ]]; then
+		log_ok "Replaced $replaced_count broken symlink(s) with real copies"
+	fi
+	if [[ $copied_count -gt 0 ]]; then
+		log_ok "Installed $copied_count new skill(s)"
+	fi
+	if [[ $skipped_count -gt 0 ]]; then
+		log_info "Skipped $skipped_count already-installed skill(s)"
+	fi
+	if [[ $copied_count -eq 0 && $replaced_count -eq 0 && $skipped_count -eq 0 ]]; then
+		log_ok "All skills already installed"
+	fi
 }
 
 # ============================================================================
 # Shell Configuration
-# ============================================================================
-
 update_shell_config() {
     log_step "Checking shell configuration..."
 
@@ -525,10 +612,11 @@ main() {
     ensure_bun
     install_dependencies
     build_native_addon
-    setup_agent_symlink
-    setup_launcher_symlink
-    configure_mcp
-    update_shell_config
+	setup_agent_symlink
+	setup_launcher_symlink
+	configure_mcp
+	install_skills
+	update_shell_config
 
     # Verify and test
     if verify_installation && test_features; then
