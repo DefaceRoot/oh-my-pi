@@ -36,15 +36,14 @@ roles:
     tools: 
       - read
       - task
-      - await
       - cancel_job
       - todo_write
       - ask
       - checkpoint
       - fetch
-      - bash
       - notebook
       - rewind
+      - await
     mcp: 
       - augment
     skills: 
@@ -711,13 +710,6 @@ subagents:
       compactionStrategy: context-full
       temperature: 0.2
       compactionThresholdPercent: 60
-  ask-explore: 
-    mcp: 
-      []
-  ask-research: 
-    mcp: 
-      - augment
-      - ref
   _default: 
     mcp: 
       - augment
@@ -779,7 +771,7 @@ subagents:
       primaryThinkingLevel: xhigh
       fallbackThinkingLevel: xhigh
       maxRecursionDepth: 3
-      compactionStrategy: handoff
+      compactionStrategy: context-full
       temperature: 1.2
       memoriesEnabled: true
       compactionThresholdPercent: 60

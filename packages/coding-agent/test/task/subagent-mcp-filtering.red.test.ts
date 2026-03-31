@@ -37,7 +37,7 @@ mock.module("@oh-my-pi/pi-coding-agent/task/discovery", () => ({
 		agents: [
 			{ name: "designer", description: "designer", source: "bundled", model: "default", systemPrompt: "" },
 			{ name: "grafana", description: "grafana", source: "bundled", model: "default", systemPrompt: "" },
-			{ name: "ask-explore", description: "ask-explore", source: "bundled", model: "default", systemPrompt: "" },
+			{ name: "vision", description: "vision", source: "bundled", model: "default", systemPrompt: "" },
 		],
 		projectAgentsDir: null,
 	}),
@@ -149,11 +149,11 @@ describe("subagent MCP filtering", () => {
 		expect(managerInstructionNames(capturedCalls[0]?.mcpManager)).toEqual(["augment", "grafana"]);
 	});
 
-	test("passes no MCP tools to ask-explore subagent", async () => {
+	test("passes no MCP tools to vision subagent", async () => {
 		const tool = await TaskTool.create(createSession());
-		await tool.execute("call-ask-explore", {
-			agent: "ask-explore",
-			tasks: [{ id: "AskExploreTask", description: "ask-explore", assignment: "noop" }],
+		await tool.execute("call-vision", {
+			agent: "vision",
+			tasks: [{ id: "VisionTask", description: "vision", assignment: "noop" }],
 		});
 
 		expect(capturedCalls).toHaveLength(1);

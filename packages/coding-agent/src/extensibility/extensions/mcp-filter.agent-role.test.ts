@@ -67,9 +67,10 @@ describe("mcp-filter agent role detection", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("blocks MCP tools for ask-explore subagent prompts", async () => {
+	it("blocks MCP tools for vision subagent prompts (mcp: [] in roles.yml)", async () => {
 		const handlers = createRegisteredHandlers();
-		await runBeforeAgentStart(handlers, await renderSubagentPrompt("ask-explore"));
+		// vision has mcp: [] in roles.yml; pass the name directly since it has no agent file
+		await runBeforeAgentStart(handlers, "name: vision\nYou are a visual inspection agent.");
 
 		const toolCall = handlers.get("tool_call")?.[0];
 		if (!toolCall) throw new Error("tool_call handler not registered");

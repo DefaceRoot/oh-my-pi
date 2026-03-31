@@ -324,6 +324,23 @@ export class AgentConfigModal implements Component {
 		return this.#advancedPanel;
 	}
 
+	get #activeContentHasSearchFocus(): boolean {
+		const activeTabIndex = this.#tabBar.getActiveIndex();
+		if (activeTabIndex === 0) {
+			return this.#modelTabPanel.isFilterMode();
+		}
+		if (activeTabIndex === 2) {
+			return this.#skillPanel.isFilterMode();
+		}
+		return false;
+	}
+
+	#forwardActiveContentPanelInput(data: string): void {
+		this.#activeContentPanel.handleInput?.(data);
+		this.#syncPresetState();
+		this.#onRequestRender();
+	}
+
 	// ── Private helpers ───────────────────────────────────────────────────────
 
 	#isSubagentRole(role: ModelRole): boolean {
@@ -1110,6 +1127,12 @@ export class AgentConfigModal implements Component {
 			return;
 		}
 
+		// Inline search owns the full keystream until it exits filter mode.
+		if (this.#activePanel === "right" && this.#activeContentHasSearchFocus) {
+			this.#forwardActiveContentPanelInput(data);
+			return;
+		}
+
 		// Escape closes the modal before any panel-specific handling.
 		if (matchesAppInterrupt(data)) {
 			this.#dismiss();
@@ -1143,9 +1166,7 @@ export class AgentConfigModal implements Component {
 				this.#onRequestRender();
 				return;
 			}
-			this.#activeContentPanel.handleInput?.(data);
-			this.#syncPresetState();
-			this.#onRequestRender();
+			this.#forwardActiveContentPanelInput(data);
 		}
 	}
 }

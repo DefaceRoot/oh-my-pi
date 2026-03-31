@@ -1,6 +1,27 @@
 lastChangelogVersion: 13.15.0
 modelRoles: 
-  default: openai/gpt-4
+  default: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  ask: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  orchestrator: anthropic/claude-sonnet-4-6
+  plan: apertis/code:claude-opus-4-6
+  commit: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  implement: anthropic/claude-sonnet-4-6
+  explore: apertis/gemini-3-flash-preview
+  lint: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  merge: openai-codex/gpt-5.4:xhigh
+  curator: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  research: openai-codex/gpt-5.4-mini:medium
+  verifier: github-copilot/gpt-5.4:xhigh
+  worktree-setup: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  code-reviewer: openai-codex/gpt-5.4:high
+  plan-verifier: github-copilot/gpt-5.4:xhigh
+  coderabbit: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+  frontend: github-copilot/gemini-3.1-pro-preview
+  designer: anthropic/claude-opus-4-6
+  grafana: github-copilot/claude-opus-4.6:high
+  debug: openai-codex/gpt-5.4:xhigh
+  vision: anthropic/claude-3-5-haiku-latest
+  task: openai-codex/gpt-5.4:high
 defaultThinkingLevel: high
 providers: 
   webSearch: auto

@@ -1,9 +1,9 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, Input, matchesKey, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getThinkingLevelMetadata } from "../../../thinking";
+import { fuzzyFilter } from "../../../utils/fuzzy";
 import { theme } from "../../theme/theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
-import { fuzzyFilter } from "../../../utils/fuzzy";
 
 const MAX_VISIBLE = 12;
 
@@ -99,6 +99,10 @@ export class ModelPanel implements Component {
 		// Stateless render; nothing to flush.
 	}
 
+	isFilterMode(): boolean {
+		return this.#filterMode;
+	}
+
 	render(width: number): string[] {
 		const isPrimary = this.#activeTarget === "primary";
 		const primaryLabel = isPrimary ? `${theme.fg("success", "▶")} Primary (editing)` : theme.fg("dim", "  Primary");
@@ -176,10 +180,15 @@ export class ModelPanel implements Component {
 				lines.push(truncateToWidth(theme.fg("dim", "  ▼ more"), width));
 			}
 		}
-		lines.push("", truncateToWidth(theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle  l:cycle thinking  /:search  esc:close"), width));
+		lines.push(
+			"",
+			truncateToWidth(
+				theme.fg("dim", "  ↑/↓:navigate  space:select  t:toggle  l:cycle thinking  /:search  esc:close"),
+				width,
+			),
+		);
 		return lines;
 	}
-
 
 	#handleFilterInput(data: string): void {
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
@@ -205,7 +214,9 @@ export class ModelPanel implements Component {
 
 	#refreshFilteredKeys(): void {
 		const query = this.#searchInput.getValue().trim();
-		this.#filteredModelKeys = query ? fuzzyFilter(this.#availableModelKeys, query, key => key) : this.#availableModelKeys;
+		this.#filteredModelKeys = query
+			? fuzzyFilter(this.#availableModelKeys, query, key => key)
+			: this.#availableModelKeys;
 	}
 
 	handleInput(data: string): void {
@@ -258,7 +269,6 @@ export class ModelPanel implements Component {
 		}
 	}
 
-
 	get #optionCount(): number {
 		if (this.#activeTarget === "primary") {
 			// No "clear" entry for primary — every model is a valid explicit choice.
@@ -268,7 +278,6 @@ export class ModelPanel implements Component {
 		return this.#filteredModelKeys.length + 1;
 	}
 
-
 	#optionKeyAt(index: number): string | null {
 		if (this.#activeTarget === "primary") {
 			return this.#filteredModelKeys[index] ?? null;
@@ -277,7 +286,6 @@ export class ModelPanel implements Component {
 		if (index <= 0) return null;
 		return this.#filteredModelKeys[index - 1] ?? null;
 	}
-
 
 	#getOptionLabel(index: number, optionKey: string | null): string {
 		if (this.#activeTarget === "fallback" && index === 0) {
@@ -295,7 +303,6 @@ export class ModelPanel implements Component {
 		// Fallback: offset by 1 to account for the null entry at index 0.
 		return modelIndex >= 0 ? modelIndex + 1 : 0;
 	}
-
 
 	#renderStateTag(index: number, optionKey: string | null): string {
 		if (this.#activeTarget === "primary") {
