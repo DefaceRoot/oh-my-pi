@@ -985,15 +985,14 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		return {
 			isOAuthToken: false,
 			apiKey: null,
-			authToken: apiKey,
 			baseURL: baseUrl,
 			maxRetries: 5,
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
-	}
 
+	}
 	const betaFeatures = [...extraBetas];
 	if (interleavedThinking) {
 		betaFeatures.push("interleaved-thinking-2025-05-14");
@@ -1332,6 +1331,13 @@ function buildParams(
 				params.output_config = { effort };
 			}
 		}
+	}
+
+	// Anthropic does not allow temperature or top_k when thinking is active.
+	// Strip both — the API only accepts these fields with their default (no-op) values when thinking is enabled.
+	if (params.thinking) {
+		delete params.temperature;
+		delete params.top_k;
 	}
 
 	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken);

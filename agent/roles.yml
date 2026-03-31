@@ -6,110 +6,108 @@ roles:
       - edit
       - find
       - grep
+      - bash
       - python
       - ssh
       - web_search
       - fetch
       - lsp
-      - ast_grep
-      - ast_edit
       - task
       - await
       - todo_write
       - ask
-      - browser
+      - checkpoint
+      - rewind
       - resolve
-      - bash
-      - notebook
     mcp: 
       - augment
       - ref
     skills: 
       auto: 
-        - agent-browser
-        - dispatching-parallel-agents
+        []
       frontmatter: 
-        - brainstorming
         - toon-delegation
-    fallback: openai-codex/gpt-5.4
+    fallback: anthropic/claude-sonnet-4-6
     advanced: 
-      thinkingLevel: medium
       primaryThinkingLevel: high
-      fallbackThinkingLevel: high
       temperature: 1
+      fallbackThinkingLevel: high
   orchestrator: 
     tools: 
       - read
-      - bash
       - task
       - await
       - cancel_job
       - todo_write
       - ask
-      - rewind
-      - notebook
       - checkpoint
+      - fetch
+      - bash
+      - notebook
+      - rewind
     mcp: 
       - augment
-      - ref
     skills: 
       auto: 
-        - toon-delegation
+        - autoresearch
         - dispatching-parallel-agents
+        - toon-delegation
       frontmatter: 
         - oh-my-pi-customization
-        - autoresearch
-    fallback: openai-codex/gpt-5.4-mini
+        - system-prompts
+    fallback: github-copilot/claude-opus-4.6
     advanced: 
       primaryThinkingLevel: high
-      fallbackThinkingLevel: xhigh
-      maxRecursionDepth: 5
-      compactionStrategy: handoff
+      fallbackThinkingLevel: high
+      maxRecursionDepth: 10
+      temperature: 0.5
       memoriesEnabled: true
-      compactionThresholdPercent: 60
+      compactionThresholdPercent: 50
   plan: 
     tools: 
       - read
       - write
       - edit
+      - find
+      - grep
       - bash
-      - ast_grep
+      - fetch
       - task
       - cancel_job
       - await
       - todo_write
       - ask
+      - checkpoint
+      - rewind
       - resolve
       - exit_plan_mode
-      - checkpoint
-      - find
-      - rewind
       - notebook
+      - render_mermaid
     mcp: 
       - augment
       - ref
     skills: 
       auto: 
         - writing-plans
-        - toon-delegation
         - dispatching-parallel-agents
       frontmatter: 
-        - web-design-guidelines
+        - toon-delegation
         - system-prompts
-        - simplify
-        - semantic-compression
         - oh-my-pi-customization
         - monorepo-management
+        - fastapi-templates
         - error-handling-patterns
+        - e2e-testing-patterns
         - auth-implementation-patterns
-    fallback: anthropic/claude-sonnet-4-6
+        - web-design-guidelines
+    fallback: github-copilot/claude-opus-4.6
     advanced: 
       primaryThinkingLevel: high
-      fallbackThinkingLevel: xhigh
-      maxRecursionDepth: 4
-      compactionStrategy: handoff
+      fallbackThinkingLevel: high
+      maxRecursionDepth: 3
+      temperature: 1
       memoriesEnabled: true
-      compactionThresholdPercent: 55
+      compactionThresholdPercent: 85
   ask: 
     tools: 
       - read
@@ -120,6 +118,9 @@ roles:
       - lsp
       - task
       - submit_result
+      - todo_write
+      - inspect_image
+      - ask
     mcp: 
       - augment
       - ref
@@ -127,13 +128,12 @@ roles:
       auto: 
         []
       frontmatter: 
-        - toon-delegation
-    fallback: kilo/xiaomi/mimo-v2-pro:free
+        - dispatching-parallel-agents
+    fallback: kimi-code/kimi-k2-turbo-preview
     advanced: 
-      primaryThinkingLevel: medium
-      fallbackThinkingLevel: medium
-      memoriesEnabled: true
-      compactionThresholdPercent: 50
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: high
+      temperature: 0.1
   explore: 
     tools: 
       - read
@@ -618,17 +618,37 @@ subagents:
       - ref
     skills: 
       auto: 
-        - web-design-guidelines
         - ui-ux-pro-max
       frontmatter: 
-        - toon-delegation
-        - simplify
-        - frontend-design
+        - auth-implementation-patterns
+        - autoresearch
         - dispatching-parallel-agents
-    fallback: openai-codex/gpt-5.4
+        - e2e-testing-patterns
+        - error-handling-patterns
+        - fastapi-templates
+        - frontend-design
+        - vercel-react-best-practices
+        - web-design-guidelines
+    tools: 
+      inherit: designer
+      add: 
+        - inspect_image
+      remove: 
+        - web_search
+        - rewind
+        - checkpoint
+        - browser
+        - ast_grep
+        - ask
+    fallback: apertis/code:claude-opus-4-6
     advanced: 
-      fallbackThinkingLevel: minimal
-      primaryThinkingLevel: high
+      thinkingLevel: medium
+      primaryThinkingLevel: medium
+      fallbackThinkingLevel: medium
+      maxRecursionDepth: 3
+      temperature: 1
+      memoriesEnabled: true
+      compactionThresholdPercent: 55
   grafana: 
     mcp: 
       - augment
@@ -637,13 +657,60 @@ subagents:
   research: 
     mcp: 
       - augment
-      - better-context
       - ref
+    skills: 
+      auto: 
+        - autoresearch
+      frontmatter: 
+        []
+    tools: 
+      - read
+      - fetch
+      - web_search
+      - mcp_augment_codebase_retrieval
+      - mcp_better_context_listresources
+      - mcp_better_context_ask
+      - mcp_better_context_addresource
+      - mcp_better_context_sync
+      - submit_result
+      - checkpoint
+      - notebook
+      - python
+      - rewind
+      - todo_write
+    fallback: apertis/code:claude-sonnet-4-6
+    advanced: 
+      thinkingLevel: high
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: high
+      maxRecursionDepth: 3
+      temperature: 0.5
+      compactionThresholdPercent: 60
   explore: 
     mcp: 
       - augment
-      - better-context
-      - ref
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - monorepo-management
+    tools: 
+      - read
+      - grep
+      - find
+      - bash
+      - mcp_augment_codebase_retrieval
+      - submit_result
+      - ast_grep
+      - fetch
+    fallback: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo
+    advanced: 
+      thinkingLevel: low
+      primaryThinkingLevel: low
+      fallbackThinkingLevel: low
+      compactionStrategy: context-full
+      temperature: 0.2
+      compactionThresholdPercent: 60
   ask-explore: 
     mcp: 
       []
@@ -662,28 +729,31 @@ subagents:
     skills: 
       auto: 
         - toon-delegation
+        - dispatching-parallel-agents
       frontmatter: 
         - vercel-react-best-practices
-        - simplify
+        - system-prompts
         - semantic-compression
+        - monorepo-management
+        - oh-my-pi-customization
         - fastapi-templates
         - error-handling-patterns
-        - dispatching-parallel-agents
         - auth-implementation-patterns
     tools: 
       inherit: implement
       remove: 
-        - browser
-        - cancel_job
         - ask
+        - browser
         - checkpoint
         - rewind
-    fallback: zai/glm-5.1
+        - web_search
+    fallback: anthropic/claude-sonnet-4-6
     advanced: 
       primaryThinkingLevel: high
       fallbackThinkingLevel: high
-      maxRecursionDepth: 4
-      memoriesEnabled: false
+      maxRecursionDepth: 5
+      temperature: 0.5
+      compactionThresholdPercent: 55
   debug: 
     mcp: 
       - augment
@@ -691,74 +761,239 @@ subagents:
       - chrome-devtools
     skills: 
       auto: 
-        []
+        - autoresearch
+        - dispatching-parallel-agents
+        - toon-delegation
       frontmatter: 
         - code-review-foundations
-        - dispatching-parallel-agents
         - e2e-testing-patterns
-        - error-handling-patterns
+        - simplify
     tools: 
       inherit: debug
-      add: 
-        - notebook
       remove: 
-        - web_search
-        - rewind
-        - cancel_job
-        - browser
         - ask
+        - browser
+    fallback: github-copilot/gpt-5.4
     advanced: 
       thinkingLevel: xhigh
       primaryThinkingLevel: xhigh
+      fallbackThinkingLevel: xhigh
       maxRecursionDepth: 3
-      compactionStrategy: context-full
-      compactionThresholdPercent: 65
-  verifier: 
+      compactionStrategy: handoff
+      temperature: 1.2
+      memoriesEnabled: true
+      compactionThresholdPercent: 60
+  commit: 
     mcp: 
       - augment
-      - ref
-      - chrome-devtools
-    tools: 
-      - read
-      - grep
-      - find
-      - bash
-      - lsp
-      - submit_result
-      - python
-      - todo_write
-      - fetch
-      - ast_grep
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - simplify
+    fallback: zai/glm-5.1
     advanced: 
-      primaryThinkingLevel: high
+      thinkingLevel: medium
+      primaryThinkingLevel: medium
+      fallbackThinkingLevel: medium
+      temperature: 0.1
+      compactionThresholdPercent: 85
+  lint: 
+    mcp: 
+      - augment
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - monorepo-management
+    tools: 
+      - bash
+      - read
+      - find
+      - submit_result
+      - lsp
+      - ast_grep
+    fallback: apertis/gemini-3-flash-preview
+    advanced: 
+      thinkingLevel: low
+      primaryThinkingLevel: low
+      fallbackThinkingLevel: low
+      compactionStrategy: context-full
+      temperature: 1
       compactionThresholdPercent: 80
-  plan-verifier: 
+  merge: 
     mcp: 
       - augment
       - ref
     skills: 
       auto: 
-        - writing-plans
-        - simplify
+        - e2e-testing-patterns
+      frontmatter: 
+        - autoresearch
+        - error-handling-patterns
+        - monorepo-management
+        - semantic-compression
+        - toon-delegation
+    tools: 
+      - bash
+      - read
+      - submit_result
+      - ast_grep
+      - ast_edit
+      - checkpoint
+      - edit
+      - find
+      - grep
+      - lsp
+      - python
+      - rewind
+      - task
+      - todo_write
+      - web_search
+      - write
+    fallback: github-copilot/gpt-5.4
+    advanced: 
+      thinkingLevel: xhigh
+      primaryThinkingLevel: xhigh
+      fallbackThinkingLevel: xhigh
+      maxRecursionDepth: 4
+      compactionStrategy: handoff
+      temperature: 0.4
+      compactionThresholdPercent: 70
+  curator: 
+    mcp: 
+      - augment
+    skills: 
+      auto: 
+        []
       frontmatter: 
         - system-prompts
-        - dispatching-parallel-agents
+    tools: 
+      - read
+      - submit_result
+      - bash
+    fallback: zai/glm-5.1
+    advanced: 
+      thinkingLevel: low
+      primaryThinkingLevel: low
+      fallbackThinkingLevel: low
+      compactionThresholdPercent: 60
+  verifier: 
+    mcp: 
+      - augment
+      - ref
+    skills: 
+      auto: 
+        - validate-implementation-plan
+      frontmatter: 
+        - system-prompts
+        - simplify
+        - web-design-guidelines
+        - fastapi-templates
+        - error-handling-patterns
         - code-review-foundations
         - auth-implementation-patterns
     tools: 
       - read
       - grep
       - find
-      - write
       - bash
-      - submit_result
-      - ast_grep
-      - fetch
-      - checkpoint
       - lsp
-      - rewind
+      - submit_result
+      - web_search
       - todo_write
+      - task
+      - rewind
+      - notebook
+      - python
+      - checkpoint
+      - ast_grep
+      - await
+    fallback: apertis/gpt-5.4
     advanced: 
-      primaryThinkingLevel: xhigh
-      memoriesEnabled: true
-      compactionThresholdPercent: 75
+      thinkingLevel: high
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: high
+      compactionStrategy: handoff
+      compactionThresholdPercent: 65
+  code-reviewer: 
+    mcp: 
+      - augment
+      - ref
+    skills: 
+      auto: 
+        - code-review-foundations
+        - simplify
+      frontmatter: 
+        - auth-implementation-patterns
+        - e2e-testing-patterns
+        - error-handling-patterns
+        - fastapi-templates
+        - monorepo-management
+        - web-design-guidelines
+    tools: 
+      - read
+      - grep
+      - find
+      - bash
+      - lsp
+      - ast_grep
+      - submit_result
+      - fetch
+      - todo_write
+      - web_search
+    fallback: apertis/gpt-5.4
+    advanced: 
+      thinkingLevel: high
+      primaryThinkingLevel: high
+      fallbackThinkingLevel: high
+      compactionStrategy: handoff
+      temperature: 0.5
+      compactionThresholdPercent: 65
+  coderabbit: 
+    mcp: 
+      - augment
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - simplify
+    tools: 
+      - bash
+      - read
+      - submit_result
+      - todo_write
+      - lsp
+      - grep
+    fallback: zai/glm-5.1
+    advanced: 
+      thinkingLevel: low
+      primaryThinkingLevel: low
+      fallbackThinkingLevel: low
+      temperature: 0.5
+      compactionThresholdPercent: 90
+  vision: 
+    mcp: 
+      []
+    skills: 
+      auto: 
+        - ui-ux-pro-max
+        - frontend-design
+      frontmatter: 
+        []
+    tools: 
+      inherit: vision
+      add: 
+        - inspect_image
+  worktree-setup: 
+    mcp: 
+      - augment
+    skills: 
+      auto: 
+        []
+      frontmatter: 
+        - monorepo-management
+    fallback: openai-codex/gpt-5.4-mini
+    advanced: 
+      primaryThinkingLevel: low
+      fallbackThinkingLevel: low

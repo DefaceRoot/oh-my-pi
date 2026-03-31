@@ -83,17 +83,11 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
-const ORCHESTRATOR_PARENT_BLOCKED_SPAWNS = new Set(["lint", "code-reviewer"]);
-
 function normalizeRuntimeRole(role: string | undefined): string | undefined {
 	const normalized = role?.trim().toLowerCase();
 	return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
-function isOrchestratorParentSession(session: ToolSession): boolean {
-	if (!session.hasUI) return false;
-	return normalizeRuntimeRole(session.getRuntimeRole?.()) === "orchestrator";
-}
 function getMcpServerName(tool: unknown): string | undefined {
 	if (!tool || typeof tool !== "object") return undefined;
 	const candidate = tool as { mcpServerName?: string };
@@ -463,17 +457,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		})();
 	}
 
-	#isBlockedByOrchestratorBoundary(agentName: string): boolean {
-		return ORCHESTRATOR_PARENT_BLOCKED_SPAWNS.has(agentName) && isOrchestratorParentSession(this.session);
-	}
-
-	#orchestratorBoundaryMessage(agentName: string): string {
-		return (
-			`Cannot spawn '${agentName}' from orchestrator parent sessions. ` +
-			"Delegate an 'implement' or 'debug' worker first; lint and code-reviewer must run inside that worker's quality loop before handoff."
-		);
-	}
-
 	/**
 	 * Create a TaskTool instance with async agent discovery.
 	 */
@@ -520,15 +503,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return this.#executeSync(_toolCallId, params, signal, onUpdate, ctx);
 		}
 
-		const boundaryAgent = taskAgentSelections.find(selection =>
-			this.#isBlockedByOrchestratorBoundary(selection.agent!.name),
-		)?.agent;
-		if (boundaryAgent) {
-			return {
-				content: [{ type: "text", text: this.#orchestratorBoundaryMessage(boundaryAgent.name) }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
-			};
-		}
 
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
@@ -1086,12 +1060,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							text: `Cannot spawn ${this.#blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
 						},
 					],
-					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
-				};
-			}
-			if (this.#isBlockedByOrchestratorBoundary(agent.name)) {
-				return {
-					content: [{ type: "text", text: this.#orchestratorBoundaryMessage(agent.name) }],
 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}

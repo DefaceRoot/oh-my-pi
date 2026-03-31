@@ -108,36 +108,6 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 		lastRunSubprocessAgent = null;
 	});
 
-	for (const restrictedAgent of ["lint", "code-reviewer"] as const) {
-		test(`blocks orchestrator parent from spawning ${restrictedAgent}`, async () => {
-			const result = await executeWithAgent(restrictedAgent);
-			const text = collectText(result);
-			expect(text).toContain(`Cannot spawn '${restrictedAgent}' from orchestrator parent sessions`);
-			expect(text).toContain("Delegate an 'implement' or 'debug' worker first");
-			expect(runSubprocessAgents).toHaveLength(0);
-		});
-	}
-
-	test("blocks orchestrator boundary when runtime role casing varies", async () => {
-		const result = await executeWithAgent("lint", { getRuntimeRole: () => "  ORCHESTRATOR  " });
-		const text = collectText(result);
-		expect(text).toContain("Cannot spawn 'lint' from orchestrator parent sessions");
-		expect(runSubprocessAgents).toHaveLength(0);
-	});
-
-	test("blocks forbidden orchestrator spawns before async scheduling", async () => {
-		const asyncSettings = Settings.isolated({
-			"task.isolation.mode": "none",
-			"task.maxConcurrency": 4,
-			"task.disabledAgents": [],
-			"async.enabled": true,
-		});
-		const result = await executeWithAgent("lint", { settings: asyncSettings });
-		const text = collectText(result);
-		expect(text).toContain("Cannot spawn 'lint' from orchestrator parent sessions");
-		expect(text).not.toContain("Async execution is enabled but no async job manager is available.");
-		expect(runSubprocessAgents).toHaveLength(0);
-	});
 
 	test("allows orchestrator parent to delegate commit handoff", async () => {
 		const result = await executeWithAgent("commit");
@@ -155,8 +125,10 @@ describe("orchestrator implementation-boundary spawn policy", () => {
 			await executeWithAgent("debug"),
 			await executeWithAgent("verifier"),
 			await executeWithAgent("coderabbit"),
+			await executeWithAgent("lint"),
+			await executeWithAgent("code-reviewer"),
 		];
-		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "debug", "verifier", "coderabbit"]);
+		expect(runSubprocessAgents).toEqual(["explore", "research", "implement", "debug", "verifier", "coderabbit", "lint", "code-reviewer"]);
 		for (const result of results) {
 			const text = collectText(result);
 			expect(text).not.toContain("orchestrator parent sessions");
