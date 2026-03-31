@@ -821,7 +821,7 @@ subagents:
       primaryThinkingLevel: xhigh
       fallbackThinkingLevel: xhigh
       maxRecursionDepth: 3
-      compactionStrategy: handoff
+      compactionStrategy: context-full
       memoriesEnabled: true
       compactionThresholdPercent: 60
   commit: 
