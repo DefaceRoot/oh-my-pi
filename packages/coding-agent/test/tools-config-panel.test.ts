@@ -1,5 +1,4 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
-import type { ToolsInheritConfig } from "../src/config/roles-config";
 import {
 	ToolsConfigPanel,
 	type ToolsConfigPanelCallbacks,
@@ -23,10 +22,8 @@ function createPanel(
 	const onClose = vi.fn();
 	const panel = new ToolsConfigPanel({
 		allTools: ["read", "bash", "fetch"],
-		isSubagent: false,
 		directTools: ["read"],
 		resolvedTools: ["read"],
-		inheritedTools: [],
 		mcpEnabledTools: [],
 		mcpTools: [],
 		disabledTools: [],
@@ -66,10 +63,8 @@ describe("ToolsConfigPanel", () => {
 		panel.handleInput("j");
 		panel.update({
 			allTools: ["read", "fetch"],
-			isSubagent: false,
 			directTools: ["fetch"],
 			resolvedTools: ["fetch"],
-			inheritedTools: [],
 			mcpEnabledTools: [],
 			mcpTools: [],
 			disabledTools: [],
@@ -80,122 +75,34 @@ describe("ToolsConfigPanel", () => {
 		expect(onConfigChange).toHaveBeenCalledWith({ tools: [] });
 	});
 
-	test("config-less subagent returns to no config after inherited tool is restored", () => {
+	test("toggles MCP tool into blocked state and back", () => {
 		const { panel, onConfigChange } = createPanel({
-			isSubagent: true,
-			directTools: undefined,
-			inheritBase: "worker",
-			inheritedTools: ["read"],
-			resolvedTools: ["read"],
-			allTools: ["read", "bash"],
+			allTools: ["read", "mcp_grafana_list"],
+			mcpTools: ["mcp_grafana_list"],
+			mcpEnabledTools: ["mcp_grafana_list"],
+			directTools: ["read"],
+			resolvedTools: ["read", "mcp_grafana_list"],
+			disabledTools: [],
 		});
 
-		expect(renderText(panel)).toContain("Tools: 1 effective (inherit: worker)");
-		expect(renderText(panel)).toContain("[~] read");
-
+		panel.handleInput("j");
 		panel.handleInput(" ");
-		expect(onConfigChange).toHaveBeenNthCalledWith(1, {
-			inheritConfig: { inherit: "worker", remove: ["read"] },
-		});
-		expect(renderText(panel)).toContain("Tools: 0 effective");
-		expect(renderText(panel)).toContain("[-] read");
+
+		expect(onConfigChange).toHaveBeenCalledWith({ disabledTools: ["mcp_grafana_list"] });
+		expect(renderText(panel)).toContain("[-] mcp_grafana_list");
 
 		panel.update({
-			allTools: ["read", "bash"],
-			isSubagent: true,
-			inheritConfig: { inherit: "worker", remove: ["read"] },
-			inheritedTools: ["read"],
-			resolvedTools: [],
-			mcpEnabledTools: [],
-			mcpTools: [],
-			disabledTools: [],
-			inheritBase: "worker",
+			allTools: ["read", "mcp_grafana_list"],
+			directTools: ["read"],
+			resolvedTools: ["read"],
+			mcpEnabledTools: ["mcp_grafana_list"],
+			mcpTools: ["mcp_grafana_list"],
+			disabledTools: ["mcp_grafana_list"],
 		});
+
 		panel.handleInput(" ");
-		expect(onConfigChange).toHaveBeenNthCalledWith(2, { clearInheritConfig: true });
-		expect(renderText(panel)).toContain("Tools: 1 effective (inherit: worker)");
-		expect(renderText(panel)).toContain("[~] read");
-	});
 
-	test("distinguishes config-less subagents from explicit empty configs", () => {
-		const missingConfig = createPanel({
-			isSubagent: true,
-			directTools: undefined,
-			inheritBase: "worker",
-			inheritedTools: [],
-			resolvedTools: [],
-			allTools: ["fetch"],
-		});
-		missingConfig.panel.handleInput(" ");
-		missingConfig.panel.update({
-			allTools: ["fetch"],
-			isSubagent: true,
-			inheritConfig: { inherit: "worker", add: ["fetch"] },
-			inheritedTools: [],
-			resolvedTools: ["fetch"],
-			mcpEnabledTools: [],
-			mcpTools: [],
-			disabledTools: [],
-			inheritBase: "worker",
-		});
-		missingConfig.panel.handleInput(" ");
-		expect(missingConfig.onConfigChange).toHaveBeenNthCalledWith(1, {
-			inheritConfig: { inherit: "worker", add: ["fetch"] },
-		});
-		expect(missingConfig.onConfigChange).toHaveBeenNthCalledWith(2, { clearInheritConfig: true });
-
-		const explicitEmpty = createPanel({
-			isSubagent: true,
-			directTools: undefined,
-			inheritConfig: {} as ToolsInheritConfig,
-			inheritedTools: [],
-			resolvedTools: [],
-			allTools: ["fetch"],
-		});
-		explicitEmpty.panel.handleInput(" ");
-		explicitEmpty.panel.update({
-			allTools: ["fetch"],
-			isSubagent: true,
-			inheritConfig: { add: ["fetch"] },
-			inheritedTools: [],
-			resolvedTools: ["fetch"],
-			mcpEnabledTools: [],
-			mcpTools: [],
-			disabledTools: [],
-		});
-		explicitEmpty.panel.handleInput(" ");
-		expect(explicitEmpty.onConfigChange).toHaveBeenNthCalledWith(1, {
-			inheritConfig: { add: ["fetch"] },
-		});
-		expect(explicitEmpty.onConfigChange).toHaveBeenNthCalledWith(2, { inheritConfig: {} });
-	});
-
-	test("drops redundant persisted overrides without lying about the effective set", () => {
-		const redundantRemove = createPanel({
-			isSubagent: true,
-			directTools: undefined,
-			inheritConfig: { remove: ["fetch"] },
-			inheritedTools: [],
-			resolvedTools: [],
-			allTools: ["fetch"],
-		});
-		redundantRemove.panel.handleInput(" ");
-		expect(redundantRemove.onConfigChange).toHaveBeenCalledWith({ inheritConfig: {} });
-		expect(renderText(redundantRemove.panel)).toContain("Tools: 0 effective");
-		expect(renderText(redundantRemove.panel)).toContain("[ ] fetch");
-
-		const redundantAdd = createPanel({
-			isSubagent: true,
-			directTools: undefined,
-			inheritConfig: { add: ["fetch"] },
-			inheritedTools: ["fetch"],
-			resolvedTools: ["fetch"],
-			allTools: ["fetch"],
-		});
-		redundantAdd.panel.handleInput(" ");
-		expect(redundantAdd.onConfigChange).toHaveBeenCalledWith({ inheritConfig: {} });
-		expect(renderText(redundantAdd.panel)).toContain("Tools: 1 effective");
-		expect(renderText(redundantAdd.panel)).toContain("[~] fetch");
+		expect(onConfigChange).toHaveBeenCalledWith({ disabledTools: [] });
 	});
 
 	test("calls onClose for interrupt input", () => {
