@@ -772,7 +772,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			: undefined;
 	};
 
-	const hasExplicitRole = options.role !== undefined;
+	const hasExplicitRole = options.role !== undefined && resolveRoleName(options.role) !== "default";
 
 	const startupRole = resolveRoleName(sessionManager.getLastModelChangeRole());
 	const configuredRole = resolveRoleName(options.role ?? startupRole);
@@ -1448,7 +1448,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 		});
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
-		const currentRole = configuredRole;
+		// When no explicit role was provided at session creation, derive the current role from
+		// live session state so that mode switches (Alt+A/Ctrl+A) are reflected in rebuilt prompts.
+		// Subagent sessions always pass an explicit options.role, so configuredRole stays authoritative there.
+		const currentRole = hasExplicitRole
+			? configuredRole
+			: resolveRoleName(sessionManager.getLastModelChangeRole());
 		const currentMode = normalizePromptRole(currentRole);
 		const personality = settings.get("personality");
 		// Subagents return results to a parent agent, not a user — skip communication formatting.
