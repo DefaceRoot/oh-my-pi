@@ -331,19 +331,15 @@ subagents:
 				modal.handleInput("j");
 			}
 			openToolsTab(modal);
-			expect(renderText(modal)).toContain("inherit: implement");
+			expect(renderText(modal)).toContain("Tools: 1 effective");
+			expect(renderText(modal)).not.toContain("inherit:");
 
 			modal.handleInput(" ");
-			expect(rolesConfig.getFullConfig().subagents.implement?.tools).toEqual({
-				inherit: "implement",
-				remove: ["ast_grep"],
-			});
+			expect(rolesConfig.getToolsForSubagent("implement")).toEqual([]);
 			expect(renderText(modal)).toContain("Tools: 0 effective");
 
 			modal.handleInput(" ");
-			expect(rolesConfig.getFullConfig().subagents.implement?.tools).toBeUndefined();
-			expect(rolesConfig.getToolsForSubagent("implement")).toBeNull();
-			expect(renderText(modal)).toContain("Tools: 1 effective (inherit: implement)");
+			expect(rolesConfig.getToolsForSubagent("implement")).toEqual(["ast_grep"]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -443,8 +439,8 @@ subagents:
 			expect(rolesConfig.getFullConfig().subagents.explore?.tools).toEqual(["grep"]);
 
 			modal.handleInput(" ");
-			expect(rolesConfig.getFullConfig().subagents.explore?.tools).toBeUndefined();
-			expect(rolesConfig.getToolsForSubagent("explore")).toBeNull();
+			expect(rolesConfig.getFullConfig().subagents.explore?.tools).toEqual(["grep", "read"]);
+			expect(rolesConfig.getToolsForSubagent("explore")).toEqual(["grep", "read"]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

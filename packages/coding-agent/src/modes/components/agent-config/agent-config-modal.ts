@@ -22,7 +22,7 @@ import type {
 	PresetsChangedEvent,
 	PresetsConfig,
 } from "../../../config/presets-config";
-import type { AdvancedConfig, RolesConfig, ToolsInheritConfig } from "../../../config/roles-config";
+import type { AdvancedConfig, RolesConfig } from "../../../config/roles-config";
 import type { Settings } from "../../../config/settings";
 import type { Skill } from "../../../extensibility/skills";
 import { resolveSubagentRole } from "../../../task/model-role";
@@ -57,16 +57,11 @@ type ActivePanel = "left" | "right";
 
 type ToolsPanelState = {
 	allTools: string[];
-	isSubagent: boolean;
-	inheritConfig?: ToolsInheritConfig;
 	directTools?: string[];
 	resolvedTools: string[];
-	inheritedTools: string[];
 	disabledTools: string[];
 	mcpEnabledTools: string[];
 	mcpTools: string[];
-	inheritBase?: string;
-	hasPersistedInheritConfig?: boolean;
 };
 
 export interface AgentConfigModalOptions {
@@ -136,7 +131,6 @@ export class AgentConfigModal implements Component {
 	#dismissed = false;
 	#presetSelector: PresetSelector | undefined;
 
-	readonly #configlessDirectSubagentTools = new Map<ModelRole, string[]>();
 	readonly #border: DynamicBorder;
 	readonly #agentListPanel: AgentListPanel;
 	readonly #tabBar: TabBar;
@@ -416,9 +410,7 @@ export class AgentConfigModal implements Component {
 			...Object.values(snapshot.roles).flatMap(roleConfig => roleConfig.tools),
 			...Object.values(snapshot.subagents).flatMap(subagentConfig => {
 				const tools = subagentConfig.tools;
-				if (tools === undefined) return [];
-				if (Array.isArray(tools)) return tools;
-				return [...(tools.add ?? []), ...(tools.remove ?? [])];
+				return tools ?? [];
 			}),
 		]);
 	}
@@ -774,37 +766,13 @@ export class AgentConfigModal implements Component {
 			return;
 		}
 
-		if (!this.#isSubagentRole(this.#activeRole)) {
-			if ("tools" in change) {
+		if ("tools" in change) {
+			if (this.#isSubagentRole(this.#activeRole)) {
+				this.#rolesConfig.setToolsForSubagent(this.#activeRole, change.tools);
+			} else {
 				this.#rolesConfig.setToolsForRole(this.#activeRole, change.tools);
 				this.#onRoleConfigChanged?.(this.#activeRole, "tools");
-				this.#syncPresetState();
-				this.#onRequestRender();
 			}
-			return;
-		}
-
-		if ("tools" in change) {
-			const configlessDirectBaseline = this.#getConfiglessDirectSubagentBaseline(this.#activeRole);
-			if (configlessDirectBaseline !== null && this.#sameToolSet(change.tools, configlessDirectBaseline)) {
-				this.#clearSubagentToolsConfig(this.#activeRole);
-			} else {
-				this.#persistDirectSubagentTools(this.#activeRole, change.tools);
-			}
-			this.#syncPresetState();
-			this.#onRequestRender();
-			return;
-		}
-
-		if ("clearInheritConfig" in change) {
-			this.#clearSubagentToolsConfig(this.#activeRole);
-			this.#syncPresetState();
-			this.#onRequestRender();
-			return;
-		}
-
-		if ("inheritConfig" in change) {
-			this.#rolesConfig.setToolsForSubagent(this.#activeRole, change.inheritConfig);
 			this.#syncPresetState();
 			this.#onRequestRender();
 		}
@@ -820,74 +788,6 @@ export class AgentConfigModal implements Component {
 		if (left.length !== right.length) return false;
 		const leftSet = new Set(left);
 		return right.every(tool => leftSet.has(tool));
-	}
-
-	#getConfiglessDirectSubagentBaseline(role: ModelRole): string[] | null {
-		const persistedTools = this.#rolesConfig.getFullConfig().subagents[role]?.tools;
-		if (persistedTools !== undefined) {
-			return this.#configlessDirectSubagentTools.get(role) ?? null;
-		}
-
-		const runtimeDefaultTools = this.#subagentDefaultTools[role];
-		if (runtimeDefaultTools === undefined) {
-			this.#configlessDirectSubagentTools.delete(role);
-			return null;
-		}
-
-		const inheritBase = this.#resolveDefaultInheritBase(role);
-		const inheritedTools = this.#resolveInheritedTools(inheritBase);
-		if (this.#sameToolSet(runtimeDefaultTools, inheritedTools)) {
-			this.#configlessDirectSubagentTools.delete(role);
-			return null;
-		}
-
-		const baseline = [...runtimeDefaultTools];
-		this.#configlessDirectSubagentTools.set(role, baseline);
-		return baseline;
-	}
-
-	#isDirectSubagentToolsConfig(role: ModelRole): boolean {
-		const persistedTools = this.#rolesConfig.getFullConfig().subagents[role]?.tools;
-		return Array.isArray(persistedTools) || this.#getConfiglessDirectSubagentBaseline(role) !== null;
-	}
-
-	#persistDirectSubagentTools(role: ModelRole, tools: string[]): void {
-		const fullConfig = this.#rolesConfig.getFullConfig();
-		const currentConfig = fullConfig.subagents[role] ?? { mcp: this.#rolesConfig.getMcpForSubagent(role) };
-		this.#rolesConfig.mergeConfig({
-			subagents: {
-				[role]: {
-					...currentConfig,
-					tools: [...tools],
-				},
-			},
-		});
-	}
-
-	#clearSubagentToolsConfig(role: ModelRole): void {
-		const fullConfig = this.#rolesConfig.getFullConfig();
-		const currentConfig = fullConfig.subagents[role];
-		if (!currentConfig || currentConfig.tools === undefined) return;
-
-		const nextConfig = { ...currentConfig };
-		delete nextConfig.tools;
-		this.#rolesConfig.mergeConfig({ subagents: { [role]: nextConfig } });
-	}
-
-	#resolveDefaultInheritBase(role: ModelRole): string {
-		const fullConfig = this.#rolesConfig.getFullConfig();
-		return fullConfig.roles[role] !== undefined ? role : "default";
-	}
-
-	#resolveInheritedTools(inheritFrom: string): string[] {
-		const fullConfig = this.#rolesConfig.getFullConfig();
-		if (fullConfig.roles[inheritFrom] !== undefined) {
-			return this.#rolesConfig.getToolsForRole(inheritFrom);
-		}
-		if (fullConfig.subagents[inheritFrom] !== undefined) {
-			return this.#rolesConfig.getToolsForSubagent(inheritFrom) ?? this.#rolesConfig.getToolsForRole("default");
-		}
-		return this.#rolesConfig.getToolsForRole("default");
 	}
 
 	#getMcpServerNameForToolName(toolName: string): string | undefined {
@@ -917,82 +817,23 @@ export class AgentConfigModal implements Component {
 
 	#getToolsPanelState(role: ModelRole): ToolsPanelState {
 		const mcpTools = this.#getAllMcpToolNames();
-		if (!this.#isSubagentRole(role)) {
-			const directTools = this.#rolesConfig.getToolsForRole(role);
-			const disabledTools = this.#rolesConfig.getDisabledToolsForRole(role);
-			const enabledServers = this.#rolesConfig.getMcpForRole(role);
-			return {
-				allTools: this.#knownTools,
-				isSubagent: false,
-				directTools,
-				resolvedTools: this.#resolveEffectiveTools(directTools, enabledServers, disabledTools),
-				inheritedTools: [],
-				disabledTools,
-				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
-				mcpTools,
-			};
-		}
+		const enabledServers = this.#isSubagentRole(role)
+			? this.#rolesConfig.getMcpForSubagent(role)
+			: this.#rolesConfig.getMcpForRole(role);
+		const disabledTools = this.#isSubagentRole(role)
+			? this.#rolesConfig.getDisabledToolsForSubagent(role)
+			: this.#rolesConfig.getDisabledToolsForRole(role);
+		const directTools = this.#isSubagentRole(role)
+			? (this.#rolesConfig.getToolsForSubagent(role) ?? this.#subagentDefaultTools[role] ?? [])
+			: this.#rolesConfig.getToolsForRole(role);
 
-		const fullConfig = this.#rolesConfig.getFullConfig();
-		const persistedTools = fullConfig.subagents[role]?.tools;
-		const enabledServers = this.#rolesConfig.getMcpForSubagent(role);
-		const disabledTools = this.#rolesConfig.getDisabledToolsForSubagent(role);
-		if (Array.isArray(persistedTools)) {
-			return {
-				allTools: this.#knownTools,
-				isSubagent: false,
-				directTools: persistedTools,
-				resolvedTools: this.#resolveEffectiveTools(persistedTools, enabledServers, disabledTools),
-				inheritedTools: [],
-				disabledTools,
-				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
-				mcpTools,
-			};
-		}
-
-		const configlessDirectBaseline = this.#getConfiglessDirectSubagentBaseline(role);
-		if (configlessDirectBaseline !== null) {
-			return {
-				allTools: this.#knownTools,
-				isSubagent: false,
-				directTools: configlessDirectBaseline,
-				resolvedTools: this.#resolveEffectiveTools(configlessDirectBaseline, enabledServers, disabledTools),
-				inheritedTools: [],
-				disabledTools,
-				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
-				mcpTools,
-			};
-		}
-
-		const defaultInheritBase = this.#resolveDefaultInheritBase(role);
-		if (persistedTools === undefined) {
-			const inheritedTools = this.#resolveInheritedTools(defaultInheritBase);
-			return {
-				allTools: this.#knownTools,
-				isSubagent: true,
-				resolvedTools: this.#resolveEffectiveTools(inheritedTools, enabledServers, disabledTools),
-				inheritedTools,
-				disabledTools,
-				mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
-				mcpTools,
-				inheritBase: defaultInheritBase,
-			};
-		}
-
-		const inheritBase = persistedTools.inherit ?? defaultInheritBase;
-		const inheritedTools = this.#resolveInheritedTools(inheritBase);
-		const resolvedTools = this.#rolesConfig.getToolsForSubagent(role) ?? inheritedTools;
 		return {
 			allTools: this.#knownTools,
-			isSubagent: true,
-			inheritConfig: persistedTools,
-			resolvedTools: this.#resolveEffectiveTools(resolvedTools, enabledServers, disabledTools),
-			inheritedTools,
+			directTools,
+			resolvedTools: this.#resolveEffectiveTools(directTools, enabledServers, disabledTools),
 			disabledTools,
 			mcpEnabledTools: this.#resolveEnabledMcpToolNames(enabledServers, disabledTools),
 			mcpTools,
-			inheritBase,
-			hasPersistedInheritConfig: true,
 		};
 	}
 
@@ -1100,9 +941,7 @@ export class AgentConfigModal implements Component {
 			} else if (activeTabIdx === 2) {
 				parts.push(" ↑/↓:navigate  space:cycle");
 			} else if (activeTabIdx === 3) {
-				parts.push(
-					` ↑/↓:navigate  space:${this.#isDirectSubagentToolsConfig(this.#activeRole) ? "toggle" : this.#isSubagentRole(this.#activeRole) ? "cycle" : "toggle"}`,
-				);
+				parts.push(" ↑/↓:navigate  space:toggle");
 			} else if (activeTabIdx === 4) {
 				parts.push(" ↑/↓:navigate  space:cycle  enter:edit  r:reset");
 			}
