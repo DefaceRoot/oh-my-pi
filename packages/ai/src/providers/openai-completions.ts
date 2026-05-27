@@ -57,7 +57,13 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
-import { type HealedToolCall, modelMayLeakKimiToolCalls, ToolCallHealer } from "../utils/tool-call-healing";
+import {
+	type HealedToolCall,
+	modelMayLeakKimiToolCalls,
+	modelMayLeakXmlToolCalls,
+	ToolCallHealer,
+	XmlToolCallHealer,
+} from "../utils/tool-call-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -646,6 +652,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			};
 
 			const kimiHealer = modelMayLeakKimiToolCalls(model.provider, model.id) ? new ToolCallHealer() : undefined;
+			const xmlHealer =
+				!kimiHealer && modelMayLeakXmlToolCalls(model.provider, model.id) ? new XmlToolCallHealer() : undefined;
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
@@ -670,9 +678,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				currentBlock = undefined;
 				healedToolCallEmitted = true;
 			};
-			const flushHealedToolCalls = (): void => {
-				if (!kimiHealer) return;
-				const calls = kimiHealer.drainCompleted();
+			const flushHealedToolCalls = (healer: ToolCallHealer | XmlToolCallHealer | undefined): void => {
+				if (!healer) return;
+				const calls = healer.drainCompleted();
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
@@ -737,7 +745,18 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							} else {
 								const clean = kimiHealer.feed(normalizedDeltaText);
 								if (clean.length > 0) appendTextDelta(clean);
-								flushHealedToolCalls();
+								flushHealedToolCalls(kimiHealer);
+							}
+						} else if (xmlHealer) {
+							const hasStructuredToolCalls =
+								Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+							if (hasStructuredToolCalls) {
+								const clean = xmlHealer.consumeWithoutCalls(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+							} else {
+								const clean = xmlHealer.feed(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+								flushHealedToolCalls(xmlHealer);
 							}
 						} else {
 							appendTextDelta(normalizedDeltaText);
@@ -842,14 +861,19 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			if (kimiHealer) {
 				const trailing = kimiHealer.flushPending();
 				if (trailing.length > 0) appendTextDelta(trailing);
-				flushHealedToolCalls();
-				if (healedToolCallEmitted && output.stopReason === "stop") {
-					// Hosts that leak Kimi tool tokens often still report
-					// `finish_reason: stop` for the surrounding turn. Promote
-					// only that natural-completion finish — leave `error`,
-					// `length`, `aborted`, etc. untouched.
-					output.stopReason = "toolUse";
-				}
+				flushHealedToolCalls(kimiHealer);
+			}
+			if (xmlHealer) {
+				const trailing = xmlHealer.flushPending();
+				if (trailing.length > 0) appendTextDelta(trailing);
+				flushHealedToolCalls(xmlHealer);
+			}
+			if (healedToolCallEmitted && output.stopReason === "stop") {
+				// Hosts that leak tool-call markup often still report
+				// `finish_reason: stop` for the surrounding turn. Promote
+				// only that natural-completion finish — leave `error`,
+				// `length`, `aborted`, etc. untouched.
+				output.stopReason = "toolUse";
 			}
 
 			finishCurrentBlock(currentBlock);

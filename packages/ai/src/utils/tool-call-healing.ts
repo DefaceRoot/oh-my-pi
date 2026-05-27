@@ -30,6 +30,36 @@ const TOKENS = [TOK_SECTION_BEGIN, TOK_SECTION_END, TOK_CALL_BEGIN, TOK_CALL_END
 /** Maximum buffered partial-token length before we give up holding back. */
 const MAX_PARTIAL_HOLD = 64;
 
+const TAG_CLAUDE_INTERNAL_OPEN = "<claude_internal>";
+const TAG_CLAUDE_INTERNAL_CLOSE = "</claude_internal>";
+const TAG_FUNCTION_CALLS_OPEN = "<function_calls>";
+const TAG_FUNCTION_CALLS_CLOSE = "</function_calls>";
+const TAG_TOOL_CALL_OPEN = "<tool_call>";
+const TAG_TOOL_CALL_CLOSE = "</tool_call>";
+const TAG_TOOL_NAME_OPEN = "<tool_name>";
+const TAG_TOOL_NAME_CLOSE = "</tool_name>";
+const TAG_TOOL_PARAMETERS_OPEN = "<tool_parameters>";
+const TAG_TOOL_PARAMETERS_CLOSE = "</tool_parameters>";
+const TAG_INVOKE_CLOSE = "</invoke>";
+const TAG_PARAMETER_OPEN = "<parameter";
+const TAG_PARAMETER_CLOSE = "</parameter>";
+
+const XML_HEAL_OPEN_PREFIXES = [
+	TAG_CLAUDE_INTERNAL_OPEN,
+	TAG_FUNCTION_CALLS_OPEN,
+	TAG_TOOL_CALL_OPEN,
+	"<invoke",
+] as const;
+
+type XmlEnvelopeStatus = "complete" | "incomplete" | "no_match";
+
+interface XmlEnvelopeParse {
+	readonly status: XmlEnvelopeStatus;
+	readonly consumed: number;
+	readonly calls: readonly HealedToolCall[];
+	readonly dropOnFlush: boolean;
+}
+
 export interface HealedToolCall {
 	readonly id: string;
 	readonly name: string;
@@ -250,6 +280,383 @@ export class ToolCallHealer {
 	}
 }
 
+export class XmlToolCallHealer {
+	#buffer = "";
+	#offset = 0;
+	#activeEnvelope: "claude_internal" | "function_calls" | "invoke" | "tool_call" | undefined;
+	readonly #completed: HealedToolCall[] = [];
+
+	feed(text: string): string {
+		if (text.length === 0) return "";
+		this.#compact();
+		this.#buffer += text;
+		return this.#consume();
+	}
+
+	consumeWithoutCalls(text: string): string {
+		const clean = this.feed(text);
+		if (this.#completed.length > 0) this.#completed.length = 0;
+		return clean;
+	}
+
+	drainCompleted(): HealedToolCall[] {
+		if (this.#completed.length === 0) return [];
+		return this.#completed.splice(0, this.#completed.length);
+	}
+
+	flushPending(): string {
+		const tail = this.#remaining();
+		if (this.#activeEnvelope === undefined) {
+			this.#buffer = "";
+			this.#offset = 0;
+			return tail;
+		}
+		const shouldPreserveActiveTail = shouldPreserveIncompleteEnvelopeTail(this.#activeEnvelope, tail);
+		this.#buffer = "";
+		this.#offset = 0;
+		this.#activeEnvelope = undefined;
+		return shouldPreserveActiveTail ? tail : "";
+	}
+
+	#remaining(): string {
+		return this.#offset === 0 ? this.#buffer : this.#buffer.slice(this.#offset);
+	}
+
+	#compact(): void {
+		if (this.#offset === 0) return;
+		this.#buffer = this.#buffer.slice(this.#offset);
+		this.#offset = 0;
+	}
+
+	#consume(): string {
+		let clean = "";
+		while (this.#offset < this.#buffer.length) {
+			if (!this.#activeEnvelope) {
+				const openIndex = this.#findNextOpen();
+				if (openIndex < 0) {
+					const tail = this.#remaining();
+					const holdLength = getTrailingPartialXmlOpenLength(tail);
+					const flushLength = tail.length - holdLength;
+					if (flushLength > 0) {
+						clean += tail.slice(0, flushLength);
+						this.#offset += flushLength;
+					}
+					break;
+				}
+
+				if (openIndex > this.#offset) {
+					clean += this.#buffer.slice(this.#offset, openIndex);
+					this.#offset = openIndex;
+				}
+
+				const beginStatus = this.#beginEnvelope();
+				if (beginStatus === "incomplete") break;
+				if (beginStatus === "no_match") {
+					clean += this.#buffer[this.#offset]!;
+					this.#offset += 1;
+				}
+				continue;
+			}
+
+			const parsed = this.#parseActiveEnvelope();
+			if (parsed.status === "incomplete") break;
+			if (parsed.status === "no_match") {
+				this.#activeEnvelope = undefined;
+				clean += this.#buffer[this.#offset]!;
+				this.#offset += 1;
+				continue;
+			}
+			for (const call of parsed.calls) this.#completed.push(call);
+			this.#offset += parsed.consumed;
+			this.#activeEnvelope = undefined;
+		}
+		return clean;
+	}
+
+	#findNextOpen(): number {
+		const candidates = [
+			this.#buffer.indexOf(TAG_CLAUDE_INTERNAL_OPEN, this.#offset),
+			this.#buffer.indexOf(TAG_FUNCTION_CALLS_OPEN, this.#offset),
+			this.#buffer.indexOf(TAG_TOOL_CALL_OPEN, this.#offset),
+			this.#buffer.indexOf("<invoke", this.#offset),
+		];
+		let min = -1;
+		for (const candidate of candidates) {
+			if (candidate < 0) continue;
+			if (min < 0 || candidate < min) min = candidate;
+		}
+		return min;
+	}
+
+	#beginEnvelope(): XmlEnvelopeStatus {
+		if (this.#buffer.startsWith(TAG_CLAUDE_INTERNAL_OPEN, this.#offset)) {
+			this.#activeEnvelope = "claude_internal";
+			return "complete";
+		}
+		if (this.#buffer.startsWith(TAG_FUNCTION_CALLS_OPEN, this.#offset)) {
+			this.#activeEnvelope = "function_calls";
+			return "complete";
+		}
+		if (this.#buffer.startsWith(TAG_TOOL_CALL_OPEN, this.#offset)) {
+			this.#activeEnvelope = "tool_call";
+			return "complete";
+		}
+		if (!this.#buffer.startsWith("<invoke", this.#offset)) return "no_match";
+		const boundaryIndex = this.#offset + "<invoke".length;
+		const boundary = this.#buffer[boundaryIndex];
+		if (boundary !== undefined && !isInvokeTagBoundary(boundary)) return "no_match";
+		this.#activeEnvelope = "invoke";
+		return "complete";
+	}
+
+	#parseActiveEnvelope(): XmlEnvelopeParse {
+		if (!this.#activeEnvelope) return { status: "no_match", consumed: 0, calls: [], dropOnFlush: false };
+		switch (this.#activeEnvelope) {
+			case "claude_internal":
+				return this.#parseStaticEnvelope(
+					TAG_CLAUDE_INTERNAL_OPEN,
+					TAG_CLAUDE_INTERNAL_CLOSE,
+					parseClaudeInternalEnvelope,
+				);
+			case "function_calls":
+				return this.#parseStaticEnvelope(
+					TAG_FUNCTION_CALLS_OPEN,
+					TAG_FUNCTION_CALLS_CLOSE,
+					parseFunctionCallsEnvelope,
+				);
+			case "tool_call":
+				return this.#parseStaticEnvelope(TAG_TOOL_CALL_OPEN, TAG_TOOL_CALL_CLOSE, parseToolCallEnvelope);
+			case "invoke":
+				return this.#parseInvokeEnvelope();
+		}
+	}
+
+	#parseStaticEnvelope(
+		openTag: string,
+		closeTag: string,
+		parse: (envelope: string) => readonly HealedToolCall[],
+	): XmlEnvelopeParse {
+		if (!this.#buffer.startsWith(openTag, this.#offset)) {
+			return { status: "no_match", consumed: 0, calls: [], dropOnFlush: false };
+		}
+		const closeIndex = this.#buffer.indexOf(closeTag, this.#offset + openTag.length);
+		if (closeIndex < 0) return { status: "incomplete", consumed: 0, calls: [], dropOnFlush: true };
+		const consumed = closeIndex + closeTag.length - this.#offset;
+		const envelope = this.#buffer.slice(this.#offset, this.#offset + consumed);
+		return {
+			status: "complete",
+			consumed,
+			calls: parse(envelope),
+			dropOnFlush: true,
+		};
+	}
+
+	#parseInvokeEnvelope(): XmlEnvelopeParse {
+		if (!this.#buffer.startsWith("<invoke", this.#offset)) {
+			return { status: "no_match", consumed: 0, calls: [], dropOnFlush: false };
+		}
+		const openTagEnd = this.#buffer.indexOf(">", this.#offset + "<invoke".length);
+		if (openTagEnd < 0) return { status: "incomplete", consumed: 0, calls: [], dropOnFlush: true };
+		const closeIndex = this.#buffer.indexOf(TAG_INVOKE_CLOSE, openTagEnd + 1);
+		if (closeIndex < 0) return { status: "incomplete", consumed: 0, calls: [], dropOnFlush: true };
+		const consumed = closeIndex + TAG_INVOKE_CLOSE.length - this.#offset;
+		const envelope = this.#buffer.slice(this.#offset, this.#offset + consumed);
+		const call = parseSingleInvoke(envelope);
+		return {
+			status: "complete",
+			consumed,
+			calls: call ? [call] : [],
+			dropOnFlush: true,
+		};
+	}
+}
+
+function parseClaudeInternalEnvelope(envelope: string): readonly HealedToolCall[] {
+	const inner = extractTagBody(envelope, TAG_CLAUDE_INTERNAL_OPEN, TAG_CLAUDE_INTERNAL_CLOSE);
+	if (inner === undefined) return [];
+	return parseInvokeCalls(inner);
+}
+
+function parseFunctionCallsEnvelope(envelope: string): readonly HealedToolCall[] {
+	const inner = extractTagBody(envelope, TAG_FUNCTION_CALLS_OPEN, TAG_FUNCTION_CALLS_CLOSE);
+	if (inner === undefined) return [];
+	return parseInvokeCalls(inner);
+}
+
+function parseToolCallEnvelope(envelope: string): readonly HealedToolCall[] {
+	const inner = extractTagBody(envelope, TAG_TOOL_CALL_OPEN, TAG_TOOL_CALL_CLOSE);
+	if (inner === undefined) return [];
+
+	const toolNameRaw = findFirstTagBody(inner, TAG_TOOL_NAME_OPEN, TAG_TOOL_NAME_CLOSE);
+	if (toolNameRaw === undefined) return [];
+	const toolName = normalizeFunctionName(decodeXmlEntities(toolNameRaw).trim());
+	if (toolName.length === 0) return [];
+
+	const parametersRaw = findFirstTagBody(inner, TAG_TOOL_PARAMETERS_OPEN, TAG_TOOL_PARAMETERS_CLOSE) ?? "";
+	return [
+		{
+			id: generateHealedToolCallId(),
+			name: toolName,
+			arguments: parseToolParameters(parametersRaw),
+		},
+	];
+}
+
+function parseInvokeCalls(xml: string): HealedToolCall[] {
+	const calls: HealedToolCall[] = [];
+	let cursor = 0;
+	while (cursor < xml.length) {
+		const start = xml.indexOf("<invoke", cursor);
+		if (start < 0) break;
+		const boundary = xml[start + "<invoke".length];
+		if (boundary !== undefined && !isInvokeTagBoundary(boundary)) {
+			cursor = start + 1;
+			continue;
+		}
+		const openTagEnd = xml.indexOf(">", start + "<invoke".length);
+		if (openTagEnd < 0) break;
+		const closeIndex = xml.indexOf(TAG_INVOKE_CLOSE, openTagEnd + 1);
+		if (closeIndex < 0) break;
+		const envelope = xml.slice(start, closeIndex + TAG_INVOKE_CLOSE.length);
+		const call = parseSingleInvoke(envelope);
+		if (call) calls.push(call);
+		cursor = closeIndex + TAG_INVOKE_CLOSE.length;
+	}
+	return calls;
+}
+
+function parseSingleInvoke(envelope: string): HealedToolCall | undefined {
+	const openTagEnd = envelope.indexOf(">", "<invoke".length);
+	if (openTagEnd < 0 || !envelope.endsWith(TAG_INVOKE_CLOSE)) return undefined;
+	const openTag = envelope.slice(0, openTagEnd + 1);
+	const rawName = extractAttribute(openTag, "name");
+	if (rawName === undefined) return undefined;
+	const toolName = normalizeFunctionName(decodeXmlEntities(rawName).trim());
+	if (toolName.length === 0) return undefined;
+
+	const body = envelope.slice(openTagEnd + 1, envelope.length - TAG_INVOKE_CLOSE.length);
+	const args = parseParameterObject(body);
+	return {
+		id: generateHealedToolCallId(),
+		name: toolName,
+		arguments: JSON.stringify(args),
+	};
+}
+
+function parseToolParameters(rawParameters: string): string {
+	const trimmed = rawParameters.trim();
+	if (trimmed.length === 0) return "{}";
+	const decoded = decodeXmlEntities(trimmed);
+	try {
+		return JSON.stringify(parseJsonWithRepair<unknown>(decoded));
+	} catch {
+		return JSON.stringify(parseParameterObject(trimmed));
+	}
+}
+
+function parseParameterObject(xml: string): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+	let cursor = 0;
+	while (cursor < xml.length) {
+		const openIndex = xml.indexOf(TAG_PARAMETER_OPEN, cursor);
+		if (openIndex < 0) break;
+		const openTagEnd = xml.indexOf(">", openIndex + TAG_PARAMETER_OPEN.length);
+		if (openTagEnd < 0) break;
+		const closeIndex = xml.indexOf(TAG_PARAMETER_CLOSE, openTagEnd + 1);
+		if (closeIndex < 0) break;
+		const openTag = xml.slice(openIndex, openTagEnd + 1);
+		const name = extractAttribute(openTag, "name");
+		if (name !== undefined) {
+			const normalizedName = decodeXmlEntities(name).trim();
+			if (normalizedName.length > 0) {
+				const valueRaw = xml.slice(openTagEnd + 1, closeIndex);
+				const value = decodeXmlEntities(valueRaw);
+				args[normalizedName] = parseParameterValue(value);
+			}
+		}
+		cursor = closeIndex + TAG_PARAMETER_CLOSE.length;
+	}
+	return args;
+}
+
+function parseParameterValue(rawValue: string): unknown {
+	try {
+		return parseJsonWithRepair<unknown>(rawValue);
+	} catch {
+		return rawValue;
+	}
+}
+
+function extractTagBody(xml: string, openTag: string, closeTag: string): string | undefined {
+	if (!xml.startsWith(openTag) || !xml.endsWith(closeTag)) return undefined;
+	return xml.slice(openTag.length, xml.length - closeTag.length);
+}
+
+function findFirstTagBody(xml: string, openTag: string, closeTag: string): string | undefined {
+	const openIndex = xml.indexOf(openTag);
+	if (openIndex < 0) return undefined;
+	const valueStart = openIndex + openTag.length;
+	const closeIndex = xml.indexOf(closeTag, valueStart);
+	if (closeIndex < 0) return undefined;
+	return xml.slice(valueStart, closeIndex);
+}
+
+function extractAttribute(openTag: string, attributeName: string): string | undefined {
+	const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = new RegExp(`${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(openTag);
+	if (!match) return undefined;
+	return match[1] ?? match[2];
+}
+
+function decodeXmlEntities(text: string): string {
+	return text.replace(/&quot;|&apos;|&lt;|&gt;|&amp;/g, token => {
+		switch (token) {
+			case "&quot;":
+				return '"';
+			case "&apos;":
+				return "'";
+			case "&lt;":
+				return "<";
+			case "&gt;":
+				return ">";
+			case "&amp;":
+				return "&";
+			default:
+				return token;
+		}
+	});
+}
+
+function isInvokeTagBoundary(ch: string): boolean {
+	return ch === ">" || ch === "/" || ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+}
+
+function getTrailingPartialXmlOpenLength(text: string): number {
+	if (text.length === 0) return 0;
+	const maxPrefixLength = Math.min(
+		MAX_PARTIAL_HOLD,
+		text.length,
+		Math.max(...XML_HEAL_OPEN_PREFIXES.map(prefix => prefix.length)),
+	);
+	for (let length = maxPrefixLength; length > 0; length--) {
+		const suffix = text.slice(text.length - length);
+		for (const prefix of XML_HEAL_OPEN_PREFIXES) {
+			if (!prefix.startsWith(suffix)) continue;
+			if (suffix.length < prefix.length) return suffix.length;
+			if (prefix === "<invoke" && suffix === prefix) return suffix.length;
+		}
+	}
+	return 0;
+}
+
+function shouldPreserveIncompleteEnvelopeTail(
+	envelope: "claude_internal" | "function_calls" | "invoke" | "tool_call",
+	fragment: string,
+): boolean {
+	if (envelope !== "invoke") return false;
+	if (fragment.includes(TAG_PARAMETER_OPEN) || fragment.includes(TAG_INVOKE_CLOSE)) return false;
+	return true;
+}
 /**
  * Cheap test for whether a given model is known to leak Kimi-K2 chat-template
  * tool-call tokens into visible text. Used to gate the per-stream healer so
@@ -260,6 +667,17 @@ export function modelMayLeakKimiToolCalls(provider: string, modelId: string): bo
 	return /kimi[-/_.]?k2/i.test(modelId);
 }
 
+export function modelMayLeakXmlToolCalls(provider: string, modelId: string): boolean {
+	if (provider === "cerebras" && isPrefixedModelFamily(modelId, "zai-glm")) return true;
+	if (isPrefixedModelFamily(modelId, "z-ai/glm")) return true;
+	if (isPrefixedModelFamily(modelId, "zai/glm")) return true;
+	if (isPrefixedModelFamily(modelId, "zai.glm")) return true;
+	return false;
+}
+
+function isPrefixedModelFamily(modelId: string, family: string): boolean {
+	return modelId === family || modelId.startsWith(`${family}-`);
+}
 function normalizeFunctionName(rawId: string): string {
 	const stripped = rawId.startsWith("functions.") ? rawId.slice("functions.".length) : rawId;
 	const colon = stripped.indexOf(":");

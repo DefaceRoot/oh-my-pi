@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible Z.ai/GLM streams that leaked XML tool-call markup as assistant text by reconstructing the tool calls before agent execution.
+
 ## [15.4.3] - 2026-05-26
 
 ### Fixed
