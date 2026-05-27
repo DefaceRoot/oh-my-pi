@@ -149,4 +149,53 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			authStorage.close();
 		}
 	});
+
+	test("new sessions persist the configured default model instead of the previous session model", async () => {
+		const previousModel = getBundledModel("anthropic", "claude-sonnet-4-6");
+		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!previousModel || !defaultModel) {
+			throw new Error("Expected bundled anthropic models");
+		}
+
+		const authStorage = await AuthStorage.create(path.join(tempDir, "new-session-auth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "new-session-models.yml"));
+		const settings = Settings.isolated();
+		settings.setModelRole("default", `${defaultModel.provider}/${defaultModel.id}`);
+
+		try {
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				authStorage,
+				modelRegistry,
+				settings,
+				model: previousModel,
+				sessionManager: SessionManager.inMemory(),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+
+			try {
+				expect(session.model?.id).toBe(previousModel.id);
+
+				await session.newSession();
+
+				expect(session.model?.provider).toBe(defaultModel.provider);
+				expect(session.model?.id).toBe(defaultModel.id);
+				expect(session.sessionManager.buildSessionContext().models.default).toBe(
+					`${defaultModel.provider}/${defaultModel.id}`,
+				);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			authStorage.close();
+		}
+	});
 });

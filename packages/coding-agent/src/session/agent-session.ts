@@ -4758,6 +4758,27 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
+		const defaultRoleSpec = resolveModelRoleValue(
+			this.settings.getModelRole("default"),
+			this.#modelRegistry.getAvailable(),
+			{
+				settings: this.settings,
+				matchPreferences: { usageOrder: this.settings.getStorage()?.getModelUsageOrder() },
+				modelRegistry: this.#modelRegistry,
+			},
+		);
+		if (defaultRoleSpec.model) {
+			this.#setModelWithProviderSessionReset(defaultRoleSpec.model);
+			if (defaultRoleSpec.explicitThinkingLevel) {
+				this.setThinkingLevel(
+					resolveThinkingLevelForModel(defaultRoleSpec.model, defaultRoleSpec.thinkingLevel) ??
+						defaultRoleSpec.thinkingLevel,
+				);
+			}
+		}
+		if (this.model) {
+			this.sessionManager.appendModelChange(`${this.model.provider}/${this.model.id}`);
+		}
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 		this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
 		if (nextDiscoverySessionToolNames) {
