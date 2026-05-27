@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed rust-analyzer LSP startup when an inherited `RUSTUP_TOOLCHAIN` points at a toolchain without the rust-analyzer component.
+
 ## [15.4.3] - 2026-05-26
 
 ### Fixed

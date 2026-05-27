@@ -374,6 +374,57 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("resolves rust-analyzer through the project rustup toolchain", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rust-toolchain-");
+		const previousToolchain = Bun.env.RUSTUP_TOOLCHAIN;
+		try {
+			await Bun.write(path.join(tempDir.path(), "rust-toolchain.toml"), '[toolchain]\nchannel = "nightly"\n');
+			await Bun.write(
+				path.join(tempDir.path(), "Cargo.toml"),
+				'[package]\nname = "demo"\nversion = "0.0.0"\nedition = "2024"\n',
+			);
+			const rustup =
+				process.platform === "win32" ? "C:\\Users\\test\\.cargo\\bin\\rustup.exe" : "/home/test/.cargo/bin/rustup";
+			const resolvedRustAnalyzer =
+				process.platform === "win32"
+					? "C:\\Users\\test\\.rustup\\toolchains\\nightly\\bin\\rust-analyzer.exe"
+					: "/home/test/.rustup/toolchains/nightly/bin/rust-analyzer";
+			Bun.env.RUSTUP_TOOLCHAIN = "stable";
+
+			vi.spyOn(piUtils, "$which").mockImplementation(command => {
+				if (command === "rustup") return rustup;
+				if (command === "rust-analyzer") return "/home/test/.cargo/bin/rust-analyzer";
+				return null;
+			});
+			const spawnResult = {
+				exitCode: 0,
+				stdout: Buffer.from(`${resolvedRustAnalyzer}\n`),
+				stderr: Buffer.from(""),
+				success: true,
+				resourceUsage: {} as Bun.ResourceUsage,
+				pid: 1,
+			} satisfies Bun.ReadableSyncSubprocess;
+			const spawnSpy = vi.spyOn(Bun, "spawnSync").mockReturnValue(spawnResult);
+
+			const config = loadConfig(tempDir.path());
+
+			expect(config.servers["rust-analyzer"]?.resolvedCommand).toBe(resolvedRustAnalyzer);
+			expect(spawnSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					cmd: [rustup, "which", "rust-analyzer"],
+					cwd: tempDir.path(),
+					env: expect.not.objectContaining({ RUSTUP_TOOLCHAIN: "stable" }),
+				}),
+			);
+		} finally {
+			if (previousToolchain === undefined) {
+				delete Bun.env.RUSTUP_TOOLCHAIN;
+			} else {
+				Bun.env.RUSTUP_TOOLCHAIN = previousToolchain;
+			}
+			tempDir.removeSync();
+		}
+	});
 	it("detects Windows local .exe LSP shims in node_modules/.bin", async () => {
 		if (process.platform !== "win32") {
 			return;

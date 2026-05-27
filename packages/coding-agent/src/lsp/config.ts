@@ -21,7 +21,8 @@ export interface LspConfig {
 // =============================================================================
 
 const PID_TOKEN = "$PID";
-
+const RUST_ANALYZER_COMMAND = "rust-analyzer";
+const RUSTUP_TOOLCHAIN_ENV = "RUSTUP_TOOLCHAIN";
 interface RawServerConfig extends Partial<ServerConfig> {
 	extensionToLanguage?: unknown;
 	initializationOptions?: unknown;
@@ -238,15 +239,45 @@ function resolveLocalCommand(basePath: string): string | null {
 	return null;
 }
 
+function resolveRustAnalyzerCommand(cwd: string): string | null {
+	const rustup = $which("rustup");
+	if (!rustup) return null;
+
+	const env = { ...Bun.env };
+	delete env[RUSTUP_TOOLCHAIN_ENV];
+
+	try {
+		const result = Bun.spawnSync({
+			cmd: [rustup, "which", RUST_ANALYZER_COMMAND],
+			cwd,
+			env,
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		if (result.exitCode !== 0) return null;
+
+		const resolved = new TextDecoder().decode(result.stdout).trim();
+		return resolved.length > 0 ? resolved : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Resolve a command to an executable path.
  * Checks project-local bin directories first, then falls back to $PATH.
+ * For rust-analyzer, prefers rustup's project toolchain binary over the rustup proxy.
  *
  * @param command - The command name (e.g., "typescript-language-server")
  * @param cwd - Working directory to search from
  * @returns Absolute path to the executable, or null if not found
  */
 export function resolveCommand(command: string, cwd: string): string | null {
+	if (command === RUST_ANALYZER_COMMAND) {
+		const resolvedRustAnalyzer = resolveRustAnalyzerCommand(cwd);
+		if (resolvedRustAnalyzer) return resolvedRustAnalyzer;
+	}
 	// Check local bin directories based on project markers
 	for (const { markers, binDir } of LOCAL_BIN_PATHS) {
 		if (hasRootMarkers(cwd, markers)) {
