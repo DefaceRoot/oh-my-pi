@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { Effort, getBundledModel } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -147,6 +147,28 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			getApiKeySpy.mockRestore();
 			authStorage.close();
+		}
+	});
+
+	test("selects extension-provided settings default after providers register", async () => {
+		const settings = Settings.isolated({ defaultThinkingLevel: "off" });
+		settings.setModelRole("default", "runtime-provider/runtime-reasoning-model:high");
+
+		const { session } = await createAgentSession({
+			...buildSessionOptions("unused"),
+			modelPattern: undefined,
+			settings,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-reasoning-model");
+			expect(session.thinkingLevel).toBe(Effort.High);
+			expect(session.sessionManager.buildSessionContext().models.default).toBe(
+				"runtime-provider/runtime-reasoning-model",
+			);
+		} finally {
+			await session.dispose();
 		}
 	});
 

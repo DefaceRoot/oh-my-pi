@@ -1009,20 +1009,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settings.get("defaultThinkingLevel");
 	}
-	if (model) {
-		const resolvedModel = model;
-		thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
-		);
-		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
-		// with the rest of session setup (extension/skill load, tool registry,
-		// system prompt build). Without this, the first `fetch(...)` pays the
-		// full handshake serially — 100–300 ms transcontinental for
-		// api.anthropic.com from a residential IP. Every mode benefits
-		// (interactive, print, rpc, acp).
-		preconnectModelHost(model.baseUrl);
-	}
-
 	let skills: Skill[];
 	let skillWarnings: SkillWarning[];
 	if (options.skills !== undefined) {
@@ -1419,13 +1405,38 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		let fallbackCandidates: Model[] | undefined;
+		if (!hasExplicitModel && !model) {
+			// Re-resolve the configured default after extension factories register
+			// providers/models. Startup resolves once before extension loading so
+			// extension-provided defaults (for example Cliproxy aliases) are not
+			// visible until this point.
+			fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
+			const refreshedDefaultRoleSpec = resolveModelRoleValue(settings.getModelRole("default"), fallbackCandidates, {
+				settings,
+				matchPreferences: modelMatchPreferences,
+				modelRegistry,
+			});
+			if (refreshedDefaultRoleSpec.model) {
+				model = refreshedDefaultRoleSpec.model;
+				modelFallbackMessage = undefined;
+				if (
+					options.thinkingLevel === undefined &&
+					!hasThinkingEntry &&
+					refreshedDefaultRoleSpec.explicitThinkingLevel
+				) {
+					thinkingLevel = refreshedDefaultRoleSpec.thinkingLevel;
+				}
+			}
+		}
+
 		// Fall back to first available model with a valid API key, honoring the
 		// path-scoped `enabledModels` allow-list when configured. Skip when the
 		// user explicitly requested a model via --model that wasn't found.
 		if (!model && !options.modelPattern) {
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
-			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
+			fallbackCandidates ??= await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
 			for (const candidate of fallbackCandidates) {
 				if (await hasModelApiKey(candidate)) {
 					model = candidate;
@@ -1443,6 +1454,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
 						: "No models available. Use /login or set an API key environment variable. Then use /model to select a model.";
 			}
+		}
+
+		if (model) {
+			const resolvedModel = model;
+			thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+				resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
+			);
+			// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
+			// with the rest of session setup (extension/skill load, tool registry,
+			// system prompt build). Without this, the first `fetch(...)` pays the
+			// full handshake serially — 100–300 ms transcontinental for
+			// api.anthropic.com from a residential IP. Every mode benefits
+			// (interactive, print, rpc, acp).
+			preconnectModelHost(model.baseUrl);
 		}
 
 		// Discover custom commands (TypeScript slash commands)
