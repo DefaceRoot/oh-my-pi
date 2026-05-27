@@ -653,7 +653,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			const kimiHealer = modelMayLeakKimiToolCalls(model.provider, model.id) ? new ToolCallHealer() : undefined;
 			const xmlHealer =
-				!kimiHealer && modelMayLeakXmlToolCalls(model.provider, model.id) ? new XmlToolCallHealer() : undefined;
+				!kimiHealer && modelMayLeakXmlToolCalls(model.provider, model.id)
+					? new XmlToolCallHealer({ toolNames: new Set(context.tools?.map(tool => tool.name) ?? []) })
+					: undefined;
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);

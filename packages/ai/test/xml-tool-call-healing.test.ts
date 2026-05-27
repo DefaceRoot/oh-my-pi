@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { AssistantMessage, Context, Model, ToolCall } from "../src/types";
+import type { AssistantMessage, Context, Model, Tool, ToolCall } from "../src/types";
 import { modelMayLeakXmlToolCalls } from "../src/utils/tool-call-healing";
 
 const originalFetch = global.fetch;
@@ -49,14 +49,48 @@ function mockFetch(events: ReadonlyArray<SseChunk | "[DONE]">): typeof fetch {
 	return Object.assign(fn, { preconnect: originalFetch.preconnect });
 }
 
-function baseContext(): Context {
+function baseContext(tools?: Tool[]): Context {
 	return {
 		messages: [{ role: "user", content: "run pwd", timestamp: Date.now() }],
+		...(tools ? { tools } : {}),
 	};
+}
+
+function bareXmlTools(): Tool[] {
+	return [
+		{
+			name: "find",
+			description: "Find files",
+			parameters: {
+				type: "object",
+				properties: {
+					path: { type: "string" },
+					pattern: { type: "string" },
+				},
+				required: ["path", "pattern"],
+			},
+		},
+		{
+			name: "read",
+			description: "Read files",
+			parameters: {
+				type: "object",
+				properties: {
+					limit: { type: "number" },
+					paths: { type: "array", items: { type: "string" } },
+				},
+				required: ["limit", "paths"],
+			},
+		},
+	];
 }
 
 function xmlLeakModel(): Model<"openai-completions"> {
 	return getBundledModel("cerebras", "zai-glm-4.6");
+}
+
+function deepSeekLeakModel(): Model<"openai-completions"> {
+	return getBundledModel("opencode-go", "deepseek-v4-flash");
 }
 
 function chunk(model: string, delta: SseChoiceDelta, finish: SseChunk["choices"][0]["finish_reason"] = null): SseChunk {
@@ -88,6 +122,9 @@ describe("OpenAI-completions XML/Claude-style tool-call healing", () => {
 		expect(modelMayLeakXmlToolCalls("cerebras", "llama-4")).toBe(false);
 		expect(modelMayLeakXmlToolCalls("other", "some-glm-model")).toBe(false);
 		expect(modelMayLeakXmlToolCalls("other", "foo-z-ai-glm-bar")).toBe(false);
+
+		expect(modelMayLeakXmlToolCalls("opencode-go", "deepseek-v4-flash")).toBe(true);
+		expect(modelMayLeakXmlToolCalls("anything", "deepseek-v4-pro")).toBe(true);
 	});
 	it("strips <claude_internal><function_calls> envelopes from visible text and synthesizes a tool call", async () => {
 		const leaked =
@@ -141,6 +178,91 @@ describe("OpenAI-completions XML/Claude-style tool-call healing", () => {
 		expect(toolCalls).toHaveLength(1);
 		expect(toolCalls[0].name).toBe("bash");
 		expect(toolCalls[0].arguments).toEqual({ command: "pwd" });
+	});
+
+	it("heals DeepSeek V4 bare tool-name XML envelopes from one chunk", async () => {
+		const deepSeekModel = deepSeekLeakModel();
+		const leaked = "<find>\n<path>x</path>\n<pattern>*</pattern>\n</find>";
+
+		global.fetch = mockFetch([
+			chunk(deepSeekModel.id, { content: leaked }),
+			chunk(deepSeekModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(deepSeekModel, baseContext(bareXmlTools()), {
+			apiKey: "test-key",
+		}).result();
+		const text = resultText(result);
+		const toolCalls = resultToolCalls(result);
+
+		expect(text).toBe("");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].name).toBe("find");
+		expect(toolCalls[0].arguments).toEqual({ path: "x", pattern: "*" });
+	});
+
+	it("heals DeepSeek V4 bare tool-name XML envelopes split across chunks", async () => {
+		const deepSeekModel = deepSeekLeakModel();
+
+		global.fetch = mockFetch([
+			chunk(deepSeekModel.id, { content: "<find>\n<pa" }),
+			chunk(deepSeekModel.id, { content: "th>x</path>\n<pattern>*</pattern>\n</fi" }),
+			chunk(deepSeekModel.id, { content: "nd>" }),
+			chunk(deepSeekModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(deepSeekModel, baseContext(bareXmlTools()), {
+			apiKey: "test-key",
+		}).result();
+		const text = resultText(result);
+		const toolCalls = resultToolCalls(result);
+
+		expect(text).toBe("");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].name).toBe("find");
+		expect(toolCalls[0].arguments).toEqual({ path: "x", pattern: "*" });
+	});
+
+	it("coerces DeepSeek V4 bare XML numeric and structured parameters", async () => {
+		const deepSeekModel = deepSeekLeakModel();
+		const leaked = '<read>\n<limit>40</limit>\n<paths>["a.ts","b.ts"]</paths>\n</read>';
+
+		global.fetch = mockFetch([
+			chunk(deepSeekModel.id, { content: leaked }),
+			chunk(deepSeekModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(deepSeekModel, baseContext(bareXmlTools()), {
+			apiKey: "test-key",
+		}).result();
+		const text = resultText(result);
+		const toolCalls = resultToolCalls(result);
+
+		expect(text).toBe("");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].name).toBe("read");
+		expect(toolCalls[0].arguments).toEqual({ limit: 40, paths: ["a.ts", "b.ts"] });
+	});
+
+	it("passes unmatched DeepSeek V4 bare XML tags through unchanged", async () => {
+		const deepSeekModel = deepSeekLeakModel();
+		const prose = "Keep this literal XML: <random>\n<path>x</path>\n</random>";
+
+		global.fetch = mockFetch([
+			chunk(deepSeekModel.id, { content: prose }),
+			chunk(deepSeekModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(deepSeekModel, baseContext(bareXmlTools()), {
+			apiKey: "test-key",
+		}).result();
+
+		expect(resultText(result)).toBe(prose);
+		expect(resultToolCalls(result)).toHaveLength(0);
 	});
 
 	it("heals <tool_call><tool_name> envelopes into one tool call", async () => {
