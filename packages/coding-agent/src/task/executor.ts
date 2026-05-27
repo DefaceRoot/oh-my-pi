@@ -225,8 +225,11 @@ function previewOffendingData(value: unknown, maxLength = 500): string {
 function tryParseJsonOutput(text: string): unknown | undefined {
 	const trimmed = text.trim();
 	if (!trimmed) return undefined;
+	const fencedMatch = /^```(?:[ \t]*json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(trimmed);
+	const jsonText = fencedMatch ? fencedMatch[1]?.trim() : trimmed;
+	if (!jsonText) return undefined;
 	try {
-		return JSON.parse(trimmed);
+		return JSON.parse(jsonText);
 	} catch {
 		return undefined;
 	}

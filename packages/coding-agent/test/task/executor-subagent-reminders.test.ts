@@ -411,6 +411,41 @@ describe("runSubprocess yield reminders", () => {
 		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
 		expect(createAgentSessionSpy.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
 	});
+
+	it("recovers a single fenced JSON response for structured no-yield completion", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			if (promptIndex < 4) return;
+			const assistant = createAssistantStopMessage(
+				'```json\n{ "summary": "completed", "paths": ["packages/coding-agent/src/task/executor.ts"] }\n```',
+			);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-fenced-json-fallback",
+			outputSchema: {
+				type: "object",
+				properties: {
+					summary: { type: "string" },
+					paths: { type: "array", items: { type: "string" } },
+				},
+				required: ["summary", "paths"],
+			},
+		});
+
+		expect(prompts).toHaveLength(4);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain('"summary": "completed"');
+		expect(result.output).toContain('"paths": [');
+		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+	});
+
 	it("fails after 3 reminders when yield is never called for a structured task", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {

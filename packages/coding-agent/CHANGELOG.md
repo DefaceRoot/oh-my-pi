@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed rust-analyzer LSP startup when an inherited `RUSTUP_TOOLCHAIN` points at a toolchain without the rust-analyzer component.
+- Fixed structured subagent completion recovery when a model returns the final JSON response as a single fenced/plain assistant message instead of routing it through the `yield` tool.
 
 ## [15.4.3] - 2026-05-26
 
