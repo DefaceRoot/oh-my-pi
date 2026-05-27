@@ -1176,6 +1176,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"compaction.proactiveEnabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Proactive Compaction",
+			description:
+				"Compact mid-loop at the next safe turn boundary once the threshold is reached, instead of waiting for the agent to stop.",
+		},
+	},
+
 	"compaction.remoteEnabled": {
 		type: "boolean",
 		default: true,
@@ -2899,6 +2910,7 @@ export interface CompactionSettings {
 	reserveTokens: number;
 	keepRecentTokens: number;
 	handoffSaveToDisk: boolean;
+	proactiveEnabled: boolean;
 	autoContinue: boolean;
 	remoteEnabled: boolean;
 	remoteEndpoint: string | undefined;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added proactive compaction setting to let automatic context compaction run mid-loop at safe turn boundaries once the configured threshold is reached.
+
 ### Fixed
 
 - Fixed rust-analyzer LSP startup when an inherited `RUSTUP_TOOLCHAIN` points at a toolchain without the rust-analyzer component.

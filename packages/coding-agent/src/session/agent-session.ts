@@ -1490,6 +1490,10 @@ export class AgentSession {
 			await this.#applyRewind(report);
 		}
 
+		if (event.type === "turn_end") {
+			this.#maybeStartProactiveCompaction(event.message);
+		}
+
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
 		if (event.type === "message_update" && this.#ttsrManager?.hasRules()) {
 			const assistantEvent = event.assistantMessageEvent;
@@ -5612,6 +5616,50 @@ export class AgentSession {
 		}
 	}
 
+	#maybeStartProactiveCompaction(message: AgentMessage): void {
+		if (message.role !== "assistant") return;
+
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (
+			!compactionSettings.proactiveEnabled ||
+			!compactionSettings.enabled ||
+			compactionSettings.strategy === "off"
+		) {
+			return;
+		}
+		if (
+			this.isCompacting ||
+			this.#streamingEditAbortTriggered ||
+			this.#skipPostTurnMaintenanceAssistantTimestamp !== undefined
+		) {
+			return;
+		}
+
+		const assistant = message as AssistantMessage;
+		if (assistant.stopReason === "aborted" || assistant.stopReason === "error") return;
+		if (!assistant.content.some(content => content.type === "toolCall")) return;
+
+		const contextWindow = this.model?.contextWindow ?? 0;
+		const contextTokens = calculateContextTokens(assistant.usage);
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		this.abortRetry();
+		this.#promptGeneration++;
+		this.#scheduledHiddenNextTurnGeneration = undefined;
+		const postPromptDrain = this.#cancelPostPromptTasks();
+		const generation = this.#promptGeneration;
+		this.#skipPostTurnMaintenanceAssistantTimestamp = assistant.timestamp;
+		this.agent.abort();
+		this.#schedulePostPromptTask(
+			async signal => {
+				await postPromptDrain;
+				if (signal.aborted) return;
+				await this.#runAutoCompaction("threshold", false, true);
+			},
+			{ generation },
+		);
+	}
+
 	/**
 	 * Check if context maintenance or promotion is needed and run it.
 	 * Called after agent_end and before prompt submission.
@@ -5624,6 +5672,7 @@ export class AgentSession {
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
+
 	async #checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
