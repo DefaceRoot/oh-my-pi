@@ -196,6 +196,54 @@ describe("AgentSession proactive compaction", () => {
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("waits for active execution to finish before threshold compaction", async () => {
+		await createSession({
+			"compaction.proactiveEnabled": true,
+			"compaction.autoContinue": true,
+		});
+
+		const abortSpy = vi.spyOn(session.agent, "abort");
+		vi.spyOn(session.agent, "prompt").mockResolvedValue();
+		const { promise: activeExecution, resolve: finishExecution } = Promise.withResolvers<void>();
+		const trackedExecution = session.trackEvalExecution(activeExecution, new AbortController());
+
+		let turnEndHandled = false;
+		session.subscribe(event => {
+			if (event.type === "turn_end") turnEndHandled = true;
+		});
+
+		const assistantMsg = createHighUsageToolCallMessage();
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "turn_end", message: assistantMsg, toolResults: [] });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await waitForAsyncHandler(() => turnEndHandled, "Deferred proactive turn_end handler did not flush");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		try {
+			expect(abortSpy).not.toHaveBeenCalled();
+			expect(getRuntimeSignals()).not.toContain("compaction:start:threshold");
+		} finally {
+			finishExecution();
+			await trackedExecution;
+		}
+
+		await waitForAsyncHandler(
+			() => getRuntimeSignals().includes("compaction:end:ok"),
+			"Deferred proactive compaction timed out",
+		);
+		await Promise.resolve();
+		vi.advanceTimersByTime(200);
+		await session.waitForIdle();
+
+		const runtimeSignals = getRuntimeSignals();
+		expect(runtimeSignals).toContain("compaction:start:threshold");
+		expect(runtimeSignals).toContain("compaction:end:ok");
+		expect(abortSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not proactively compact at turn_end when disabled by default", async () => {
 		await createSession({});
 

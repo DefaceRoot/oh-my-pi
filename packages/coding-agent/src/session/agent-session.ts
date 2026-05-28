@@ -787,6 +787,7 @@ export class AgentSession {
 	// Handoff state
 	#handoffAbortController: AbortController | undefined = undefined;
 	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined = undefined;
+	#deferredProactiveCompactionAssistant: AssistantMessage | undefined = undefined;
 
 	// Retry state
 	#retryAbortController: AbortController | undefined = undefined;
@@ -1480,6 +1481,7 @@ export class AgentSession {
 			} else {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
+			this.#runDeferredProactiveCompactionIfReady();
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
 			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
@@ -1770,7 +1772,9 @@ export class AgentSession {
 			}
 
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
-				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+				if (this.#deferredProactiveCompactionAssistant?.timestamp !== msg.timestamp) {
+					this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+				}
 				this.#lastSuccessfulYieldToolCallId = undefined;
 				return;
 			}
@@ -2863,6 +2867,10 @@ export class AgentSession {
 		} finally {
 			this.#allowAcpAgentInitiatedTurns = previousAllowAcpAgentInitiatedTurns;
 		}
+	}
+
+	resumeDeferredProactiveCompaction(): void {
+		this.#runDeferredProactiveCompactionIfReady();
 	}
 
 	/** Most recent assistant message in agent state. */
@@ -5616,6 +5624,27 @@ export class AgentSession {
 		}
 	}
 
+	#asyncJobOwnerFilter(): { ownerId: string } | undefined {
+		return this.#agentId ? { ownerId: this.#agentId } : undefined;
+	}
+
+	#hasActiveCommandProcess(): boolean {
+		if (this.isBashRunning || this.isEvalRunning || this.agent.state.pendingToolCalls.size > 0) {
+			return true;
+		}
+		return (AsyncJobManager.instance()?.getRunningJobs(this.#asyncJobOwnerFilter()).length ?? 0) > 0;
+	}
+
+	#runDeferredProactiveCompactionIfReady(): void {
+		const assistant = this.#deferredProactiveCompactionAssistant;
+		if (!assistant || this.#hasActiveCommandProcess()) return;
+		this.#deferredProactiveCompactionAssistant = undefined;
+		if (this.#skipPostTurnMaintenanceAssistantTimestamp === assistant.timestamp) {
+			this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+		}
+		this.#maybeStartProactiveCompaction(assistant);
+	}
+
 	#maybeStartProactiveCompaction(message: AgentMessage): void {
 		if (message.role !== "assistant") return;
 
@@ -5642,6 +5671,11 @@ export class AgentSession {
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const contextTokens = calculateContextTokens(assistant.usage);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+		if (this.#hasActiveCommandProcess()) {
+			this.#deferredProactiveCompactionAssistant = assistant;
+			this.#skipPostTurnMaintenanceAssistantTimestamp = assistant.timestamp;
+			return;
+		}
 
 		this.abortRetry();
 		this.#promptGeneration++;
@@ -7366,6 +7400,7 @@ export class AgentSession {
 			return result;
 		} finally {
 			this.#bashAbortControllers.delete(abortController);
+			this.#runDeferredProactiveCompactionIfReady();
 		}
 	}
 
@@ -7510,10 +7545,12 @@ export class AgentSession {
 			() => {
 				this.#evalAbortControllers.delete(abortController);
 				this.#activeEvalExecutions.delete(execution);
+				this.#runDeferredProactiveCompactionIfReady();
 			},
 			() => {
 				this.#evalAbortControllers.delete(abortController);
 				this.#activeEvalExecutions.delete(execution);
+				this.#runDeferredProactiveCompactionIfReady();
 			},
 		);
 		return execution;

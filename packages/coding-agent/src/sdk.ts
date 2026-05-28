@@ -1126,6 +1126,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							job,
 							durationMs,
 						});
+						session.resumeDeferredProactiveCompaction();
 					},
 				})
 			: undefined;
