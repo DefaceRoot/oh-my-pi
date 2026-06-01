@@ -6124,6 +6124,48 @@ export class AgentSession {
 		}
 	}
 
+	async #runAutoHandoffWithRetry(
+		customInstructions: string,
+		autoCompactionSignal: AbortSignal,
+	): Promise<HandoffResult | undefined> {
+		const retrySettings = this.settings.getGroup("retry");
+		let attempt = 0;
+		while (true) {
+			try {
+				return await this.handoff(customInstructions, {
+					autoTriggered: true,
+					signal: autoCompactionSignal,
+				});
+			} catch (error) {
+				if (autoCompactionSignal.aborted) {
+					throw error;
+				}
+
+				const message = error instanceof Error ? error.message : String(error);
+				const retryAfterMs = this.#parseRetryAfterMsFromError(message);
+				const shouldRetry =
+					retrySettings.enabled &&
+					attempt < retrySettings.maxRetries &&
+					(retryAfterMs !== undefined || this.#isTransientErrorMessage(message) || isUsageLimitError(message));
+				if (!shouldRetry) {
+					throw error;
+				}
+
+				const baseDelayMs = retrySettings.baseDelayMs * 2 ** attempt;
+				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
+				attempt++;
+				logger.warn("Auto-handoff failed, retrying", {
+					attempt,
+					maxRetries: retrySettings.maxRetries,
+					delayMs,
+					retryAfterMs,
+					error: message,
+				});
+				await scheduler.wait(delayMs, { signal: autoCompactionSignal });
+			}
+		}
+	}
+
 	#asyncJobOwnerFilter(): { ownerId: string } | undefined {
 		return this.#agentId ? { ownerId: this.#agentId } : undefined;
 	}
@@ -7092,10 +7134,7 @@ export class AgentSession {
 		try {
 			if (compactionSettings.strategy === "handoff" && reason !== "overflow") {
 				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
-				const handoffResult = await this.handoff(handoffFocus, {
-					autoTriggered: true,
-					signal: this.#autoCompactionAbortController.signal,
-				});
+				const handoffResult = await this.#runAutoHandoffWithRetry(handoffFocus, autoCompactionSignal);
 				if (!handoffResult) {
 					const aborted = autoCompactionSignal.aborted;
 					if (aborted) {

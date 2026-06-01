@@ -545,6 +545,60 @@ describe("AgentSession handoff", () => {
 		resolveHandoff("handoff");
 	});
 
+	it("retries transient auto-handoff stream failures", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("retry.baseDelayMs", 1);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockRejectedValueOnce(
+				new Error("Handoff generation failed: stream error: stream ID 399; INTERNAL_ERROR; received from peer"),
+			)
+			.mockResolvedValue("## Goal\nContinue from here");
+		const { promise: handoffDone, resolve: resolveHandoffDone } = Promise.withResolvers<void>();
+		const unsubscribe = session.subscribe(event => {
+			if (event.type === "auto_compaction_end") resolveHandoffDone();
+		});
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+
+		await handoffDone;
+		unsubscribe();
+
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(2);
+		const endEvents = events.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", action: "handoff", aborted: false });
+		expect(endEvents[0]).not.toMatchObject({ errorMessage: expect.any(String) });
+		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
 	it("falls back to context-full when handoff strategy returns no document", async () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("compaction.thresholdPercent", 1);

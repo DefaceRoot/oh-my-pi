@@ -10,6 +10,7 @@
 
 - Fixed rust-analyzer LSP startup when an inherited `RUSTUP_TOOLCHAIN` points at a toolchain without the rust-analyzer component.
 - Fixed structured subagent completion recovery when a model returns the final JSON response as a single fenced/plain assistant message instead of routing it through the `yield` tool.
+- Fixed auto-handoff treating transient handoff-generation stream resets as terminal auto-compaction failures; automatic handoffs now retry the recoverable stream error before surfacing a warning.
 ## [15.7.5] - 2026-06-01
 ### Fixed
 
