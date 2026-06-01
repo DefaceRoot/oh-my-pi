@@ -1,21 +1,24 @@
 import * as path from "node:path";
+import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AstReplaceChange, type AstReplaceFileChange, astEdit } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
-import { resolveToolSearchScope } from "./path-utils";
+import { isInternalUrlPath, resolveToolSearchScope } from "./path-utils";
 import {
 	appendParseErrorsBulletList,
 	capParseErrors,
@@ -162,6 +165,29 @@ export interface AstEditToolDetails {
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
 	readonly name = "ast_edit";
+	readonly approval = (args: unknown) => {
+		const paths = Array.isArray((args as Partial<z.infer<typeof astEditSchema>>).paths)
+			? ((args as Partial<z.infer<typeof astEditSchema>>).paths as string[])
+			: [];
+		return paths.length > 0 && paths.every(path => isInternalUrlPath(path)) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<z.infer<typeof astEditSchema>>;
+		const lines: string[] = [];
+		const ops = Array.isArray(params.ops) ? params.ops : [];
+		const firstOp = ops[0];
+		if (firstOp) {
+			lines.push(`Pattern: ${truncateForPrompt(firstOp.pat)}`);
+			lines.push(`Replacement: ${truncateForPrompt(firstOp.out)}`);
+			if (ops.length > 1) {
+				lines.push(`+${ops.length - 1} more op${ops.length === 2 ? "" : "s"}`);
+			}
+		}
+		if (Array.isArray(params.paths) && params.paths.length > 0) {
+			lines.push(`Paths: ${truncateForPrompt(params.paths.join(", "))}`);
+		}
+		return lines;
+	};
 	readonly label = "AST Edit";
 	readonly summary = "Perform AST-aware code edits (structural refactoring)";
 	readonly description: string;
@@ -204,6 +230,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				rawPaths: params.paths,
 				cwd: this.session.cwd,
 				internalUrlAction: "rewrite",
+				settings: this.session.settings,
+				signal,
+				localProtocolOptions: this.session.localProtocolOptions,
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
@@ -257,14 +286,15 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
-			const hashContexts = new Map<string, { fileHash: string }>();
+			const hashContexts = new Map<string, { tag: string }>();
 			if (useHashLines) {
+				const snapshotStore = getFileSnapshotStore(this.session);
 				for (const relativePath of fileList) {
 					const absolutePath = path.resolve(this.session.cwd, relativePath);
 					try {
-						const fullText = await Bun.file(absolutePath).text();
-						const fileHash = computeFileHash(fullText);
-						hashContexts.set(relativePath, { fileHash });
+						const fullText = normalizeToLF(await Bun.file(absolutePath).text());
+						const tag = snapshotStore.record(absolutePath, fullText);
+						hashContexts.set(relativePath, { tag });
 					} catch {
 						// Best-effort: if a file disappears between ast-edit and rendering, emit plain line output.
 					}
@@ -302,7 +332,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const rendered = renderChangesForFile(relativePath);
 					const count = fileReplacementCounts.get(relativePath) ?? 0;
 					const hashContext = hashContexts.get(relativePath);
-					const hashSuffix = hashContext ? `#${hashContext.fileHash}` : "";
+					const hashSuffix = hashContext ? `#${hashContext.tag}` : "";
 					return {
 						headerSuffix: `${hashSuffix} (${formatCount("replacement", count)})`,
 						modelLines: rendered.model,
@@ -322,7 +352,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					}
 					const hashContext = hashContexts.get(relativePath);
 					if (hashContext) {
-						outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+						outputLines.push(formatHashlineHeader(relativePath, hashContext.tag));
 					}
 					outputLines.push(...rendered.model);
 					displayLines.push(...rendered.display);

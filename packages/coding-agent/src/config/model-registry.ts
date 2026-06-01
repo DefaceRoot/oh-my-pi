@@ -43,6 +43,12 @@ import {
 	type ModelEquivalenceConfig,
 } from "./model-equivalence";
 import {
+	getBracketStrippedModelIdCandidates,
+	getLongestModelLikeIdSegment,
+	getModelLikeIdSegments,
+	stripBracketedModelIdAffixes,
+} from "./model-id-affixes";
+import {
 	type ModelOverride,
 	type ModelsConfig,
 	ModelsConfigSchema,
@@ -192,7 +198,7 @@ function validateProviderConfiguration(
 		}
 	}
 
-	if (mode === "models-config" && config.discovery && !config.api) {
+	if (mode === "models-config" && config.discovery && !config.api && config.discovery.type !== "proxy") {
 		throw new Error(`Provider ${providerName}: "api" is required when discovery is enabled at provider level.`);
 	}
 
@@ -291,6 +297,12 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	return model;
 }
 
+const AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS = new Set<string>(
+	PROVIDER_DESCRIPTORS.filter(descriptor => descriptor.dynamicModelsAuthoritative).map(
+		descriptor => descriptor.providerId,
+	),
+);
+
 function isAuthoritativeProjectCatalogModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
@@ -321,6 +333,11 @@ interface DiscoveryProviderConfig {
 	compat?: Model<Api>["compat"];
 	discovery: ProviderDiscovery;
 	optional?: boolean;
+}
+
+interface BuiltInDiscoveryResult {
+	models: Model<Api>[];
+	authoritativeProviders: Set<string>;
 }
 
 export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
@@ -639,20 +656,53 @@ function shouldReplaceCustomReference(existing: Model<Api> | undefined, candidat
 	return existing.provider !== "openai" && candidate.provider === "openai";
 }
 
+function normalizeCustomReferenceKey(value: string): string {
+	return value.trim().toLowerCase();
+}
+
 function buildCustomReferenceMap(): Map<string, Model<Api>> {
 	const references = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
 			const candidate = model as Model<Api>;
-			if (shouldReplaceCustomReference(references.get(candidate.id), candidate)) {
-				references.set(candidate.id, candidate);
+			const key = normalizeCustomReferenceKey(candidate.id);
+			if (shouldReplaceCustomReference(references.get(key), candidate)) {
+				references.set(key, candidate);
 			}
 		}
 	}
 	return references;
 }
 
+function buildCustomReferenceSuffixAliasMap(exactReferences: ReadonlyMap<string, Model<Api>>): Map<string, Model<Api>> {
+	const aliases = new Map<string, Model<Api>>();
+	for (const reference of exactReferences.values()) {
+		const slashIndex = reference.id.lastIndexOf("/");
+		if (slashIndex === -1) {
+			continue;
+		}
+		const suffix = reference.id.slice(slashIndex + 1);
+		const alias = getLongestModelLikeIdSegment(suffix);
+		if (!alias) {
+			continue;
+		}
+		if (shouldReplaceCustomReference(aliases.get(alias), reference)) {
+			aliases.set(alias, reference);
+		}
+	}
+	return aliases;
+}
+
 const customReferenceMap = buildCustomReferenceMap();
+const customReferenceSuffixAliasMap = buildCustomReferenceSuffixAliasMap(customReferenceMap);
+
+const CUSTOM_REFERENCE_TRAILING_MARKER_PATTERN =
+	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4|search)$/i;
+
+function stripCustomReferenceTrailingMarker(candidate: string): string | undefined {
+	const match = CUSTOM_REFERENCE_TRAILING_MARKER_PATTERN.exec(candidate);
+	return match ? candidate.slice(0, match.index) : undefined;
+}
 
 function getCustomReferenceCandidateIds(modelId: string): string[] {
 	const candidates = new Set<string>();
@@ -662,15 +712,37 @@ function getCustomReferenceCandidateIds(modelId: string): string[] {
 		if (!candidate || candidates.has(candidate)) continue;
 		candidates.add(candidate);
 
+		for (const stripped of getBracketStrippedModelIdCandidates(candidate)) {
+			queue.push(stripped);
+		}
+		for (const segment of getModelLikeIdSegments(candidate)) {
+			queue.push(segment);
+		}
+
 		for (const suffix of [":cloud", "-cloud"] as const) {
 			if (candidate.toLowerCase().endsWith(suffix)) {
 				queue.push(candidate.slice(0, -suffix.length));
 			}
 		}
 
+		const slashIndex = candidate.lastIndexOf("/");
+		if (slashIndex !== -1) {
+			queue.push(candidate.slice(slashIndex + 1));
+		}
+
 		const colonToDash = candidate.replace(/:/g, "-");
 		if (colonToDash !== candidate) {
 			queue.push(colonToDash);
+		}
+
+		const lowercased = candidate.toLowerCase();
+		if (lowercased !== candidate) {
+			queue.push(lowercased);
+		}
+
+		const strippedMarker = stripCustomReferenceTrailingMarker(candidate);
+		if (strippedMarker) {
+			queue.push(strippedMarker);
 		}
 	}
 	return [...candidates];
@@ -678,7 +750,8 @@ function getCustomReferenceCandidateIds(modelId: string): string[] {
 
 function resolveCustomModelReference(modelId: string): Model<Api> | undefined {
 	for (const candidate of getCustomReferenceCandidateIds(modelId)) {
-		const reference = customReferenceMap.get(candidate);
+		const key = normalizeCustomReferenceKey(candidate);
+		const reference = customReferenceMap.get(key) ?? customReferenceSuffixAliasMap.get(key);
 		if (reference) return reference;
 	}
 	return undefined;
@@ -778,6 +851,12 @@ export class ModelRegistry {
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
+	 *
+	 * Sync constructor — eagerly loads bundled + cached models so tests and
+	 * synchronous callers see a fully-populated registry immediately. Production
+	 * boot paths SHOULD prefer {@link ModelRegistry.create} so the YAML/JSONC
+	 * migration step lands off the event loop's hot path before the first
+	 * `tryLoad()` runs.
 	 */
 	constructor(
 		readonly authStorage: AuthStorage,
@@ -793,7 +872,7 @@ export class ModelRegistry {
 			}
 			return undefined;
 		});
-		// Load models synchronously in constructor
+		// Load models synchronously in constructor.
 		this.#loadModels();
 	}
 
@@ -900,9 +979,25 @@ export class ModelRegistry {
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
 		let builtInModels = this.#applyHardcodedModelPolicies(this.#loadBuiltInModels(overrides));
-		const cachedStandardModels = this.#applyHardcodedModelPolicies(this.#loadCachedStandardProviderModels());
+		const cachedStandardResult = this.#loadCachedStandardProviderModels();
+		const cachedStandardModels = this.#applyHardcodedModelPolicies(cachedStandardResult.models);
 		const cachedDiscoveries = this.#applyHardcodedModelPolicies(this.#loadCachedDiscoverableModels());
-		const cachedAuthoritativeProviders = providersWithAuthoritativeProjectCatalog(cachedStandardModels);
+		// Only drop bundled fallback models when the cached project-catalog row is
+		// itself fresh AND authoritative. A stale or non-authoritative snapshot
+		// (e.g. after ADC discovery failure rewrote the row with authoritative=0)
+		// must not strip bundled Vertex Gemini entries — that would leave only the
+		// stale project-scoped rows in API-key-only environments.
+		const cachedAuthoritativeProviders = new Set<string>();
+		for (const provider of providersWithAuthoritativeProjectCatalog(cachedStandardModels)) {
+			if (cachedStandardResult.authoritativeFreshProviders.has(provider)) {
+				cachedAuthoritativeProviders.add(provider);
+			}
+		}
+		for (const provider of cachedStandardResult.authoritativeFreshProviders) {
+			if (AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS.has(provider)) {
+				cachedAuthoritativeProviders.add(provider);
+			}
+		}
 		if (cachedAuthoritativeProviders.size > 0) {
 			builtInModels = dropProviderModels(builtInModels, cachedAuthoritativeProviders);
 		}
@@ -1008,9 +1103,10 @@ export class ModelRegistry {
 		return merged;
 	}
 
-	#loadCachedStandardProviderModels(): Model<Api>[] {
+	#loadCachedStandardProviderModels(): { models: Model<Api>[]; authoritativeFreshProviders: Set<string> } {
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		const cachedModels: Model<Api>[] = [];
+		const authoritativeFreshProviders = new Set<string>();
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) {
 				continue;
@@ -1018,6 +1114,9 @@ export class ModelRegistry {
 			const cache = readModelCache<Api>(descriptor.providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 			if (!cache) {
 				continue;
+			}
+			if (cache.fresh && cache.authoritative) {
+				authoritativeFreshProviders.add(descriptor.providerId);
 			}
 			const models = cache.models.map(model =>
 				model.provider === descriptor.providerId ? model : { ...model, provider: descriptor.providerId },
@@ -1031,7 +1130,7 @@ export class ModelRegistry {
 				: withTransport;
 			cachedModels.push(...this.#applyProviderModelOverrides(descriptor.providerId, withCompat));
 		}
-		return cachedModels;
+		return { models: cachedModels, authoritativeFreshProviders };
 	}
 
 	#loadCachedDiscoverableModels(): Model<Api>[] {
@@ -1178,13 +1277,17 @@ export class ModelRegistry {
 				keylessProviders.add(providerName);
 			}
 
-			if (providerConfig.discovery && providerConfig.api) {
+			if (providerConfig.discovery && (providerConfig.api || providerConfig.discovery.type === "proxy")) {
+				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				discoverableProviders.push({
 					provider: providerName,
-					api: providerConfig.api as Api,
+					// Proxy discovery derives per-model api from /v1/models's
+					// supported_endpoint_types; the provider-level api is only a
+					// fallback for entries that don't advertise one.
+					api: (providerConfig.api ?? "openai-completions") as Api,
 					baseUrl: providerConfig.baseUrl,
 					headers: providerConfig.headers,
-					compat: providerConfig.compat,
+					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 					discovery: providerConfig.discovery,
 					optional: false,
 				});
@@ -1238,12 +1341,12 @@ export class ModelRegistry {
 				: Promise.all(
 						selectedDiscoverableProviders.map(provider => this.#discoverProviderModels(provider, strategy)),
 					).then(results => results.flat());
-		const [configuredDiscovered, builtInDiscovered] = await Promise.all([
+		const [configuredDiscovered, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
 			this.#discoverBuiltInProviderModels(strategy, providerFilter),
 		]);
-		const discovered = [...configuredDiscovered, ...builtInDiscovered];
-		if (discovered.length === 0) {
+		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
+		if (discovered.length === 0 && builtInDiscovery.authoritativeProviders.size === 0) {
 			return;
 		}
 		const discoveredModels = this.#applyHardcodedModelPolicies(
@@ -1256,6 +1359,9 @@ export class ModelRegistry {
 			),
 		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
+		for (const provider of builtInDiscovery.authoritativeProviders) {
+			authoritativeProviders.add(provider);
+		}
 		const baseModels =
 			authoritativeProviders.size > 0 ? dropProviderModels(this.#models, authoritativeProviders) : this.#models;
 		const resolved = this.#mergeResolvedModels(baseModels, discoveredModels);
@@ -1351,6 +1457,8 @@ export class ModelRegistry {
 			case "lm-studio":
 			case "openai-models-list":
 				return this.#discoverOpenAIModelsList(providerConfig);
+			case "proxy":
+				return this.#discoverProxyModels(providerConfig);
 		}
 	}
 
@@ -1370,7 +1478,7 @@ export class ModelRegistry {
 	async #discoverBuiltInProviderModels(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
-	): Promise<Model<Api>[]> {
+	): Promise<BuiltInDiscoveryResult> {
 		// Skip providers already handled by configured discovery (e.g. user-configured ollama with discovery.type)
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(p => p.provider));
 		const managerOptions = (await this.#collectBuiltInModelManagerOptions()).filter(opts => {
@@ -1380,12 +1488,20 @@ export class ModelRegistry {
 			return providerFilter ? providerFilter.has(opts.providerId) : true;
 		});
 		if (managerOptions.length === 0) {
-			return [];
+			return { models: [], authoritativeProviders: new Set() };
 		}
 		const discoveries = await Promise.all(
 			managerOptions.map(options => this.#discoverWithModelManager(options, strategy)),
 		);
-		return discoveries.flat();
+		const authoritativeProviders = new Set<string>();
+		const models: Model<Api>[] = [];
+		for (const discovery of discoveries) {
+			models.push(...discovery.models);
+			for (const provider of discovery.authoritativeProviders) {
+				authoritativeProviders.add(provider);
+			}
+		}
+		return { models, authoritativeProviders };
 	}
 
 	async #collectBuiltInModelManagerOptions(): Promise<ModelManagerOptions<Api>[]> {
@@ -1467,19 +1583,24 @@ export class ModelRegistry {
 	async #discoverWithModelManager(
 		options: ModelManagerOptions<Api>,
 		strategy: ModelRefreshStrategy,
-	): Promise<Model<Api>[]> {
+	): Promise<BuiltInDiscoveryResult> {
 		try {
 			const manager = createModelManager({ ...options, cacheDbPath: this.#cacheDbPath });
 			const result = await manager.refresh(strategy);
-			return result.models.map(model =>
+			const models = result.models.map(model =>
 				model.provider === options.providerId ? model : { ...model, provider: options.providerId },
 			);
+			const authoritativeProviders = new Set<string>();
+			if (options.dynamicModelsAuthoritative && !result.stale) {
+				authoritativeProviders.add(options.providerId);
+			}
+			return { models, authoritativeProviders };
 		} catch (error) {
 			logger.warn("model discovery failed for provider", {
 				provider: options.providerId,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return [];
+			return { models: [], authoritativeProviders: new Set() };
 		}
 	}
 
@@ -1664,7 +1785,7 @@ export class ModelRegistry {
 
 		const response = await fetch(modelsUrl, {
 			headers,
-			signal: AbortSignal.timeout(250),
+			signal: AbortSignal.timeout(10_000),
 		});
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
@@ -1693,6 +1814,96 @@ export class ModelRegistry {
 						supportsDeveloperRole: false,
 						supportsReasoningEffort: false,
 					},
+				}),
+			);
+		}
+		return this.#applyProviderModelOverrides(providerConfig.provider, discovered);
+	}
+
+	/**
+	 * Discover models from an Anthropic+OpenAI-compatible reseller proxy that
+	 * exposes both `/v1/messages` and `/v1/chat/completions`, advertising each
+	 * model's wire capabilities through `supported_endpoint_types` on
+	 * `GET /v1/models` (new-api / one-api-style proxies).
+	 *
+	 * Routing per model:
+	 *   supported_endpoint_types: ["anthropic", ...] -> api: "anthropic-messages"
+	 *   supported_endpoint_types: ["openai"]         -> api: "openai-completions"
+	 *   missing / neither                            -> provider-level api fallback
+	 *
+	 * Anthropic models share the same baseUrl; the Anthropic SDK strips a
+	 * trailing `/v1` itself before appending `/v1/messages`, so the discovery
+	 * URL (which ends in `/v1`) round-trips correctly.
+	 */
+	async #discoverProxyModels(providerConfig: DiscoveryProviderConfig): Promise<Model<Api>[]> {
+		const baseUrl = this.#normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
+		const modelsUrl = `${baseUrl}/models`;
+
+		const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
+		const apiKey = await this.authStorage.getApiKey(providerConfig.provider);
+		if (apiKey && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== kNoAuth) {
+			headers.Authorization = `Bearer ${apiKey}`;
+		}
+
+		const response = await fetch(modelsUrl, {
+			headers,
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
+		}
+		const payload = (await response.json()) as {
+			data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[] }>;
+		};
+		const items = payload.data ?? [];
+		const discovered: Model<Api>[] = [];
+		for (const item of items) {
+			const id = item.id;
+			if (!id) continue;
+			const endpoints = item.supported_endpoint_types ?? [];
+			const api: Api | undefined = endpoints.includes("anthropic")
+				? "anthropic-messages"
+				: endpoints.includes("openai")
+					? "openai-completions"
+					: providerConfig.api;
+			if (!api) continue;
+			const isAnthropic = api === "anthropic-messages";
+			const reference = resolveCustomModelReference(id);
+			const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
+			const displayName =
+				reference?.name ??
+				(discoveryName && discoveryName !== id ? discoveryName : undefined) ??
+				stripBracketedModelIdAffixes(id) ??
+				id;
+			discovered.push(
+				enrichModelThinking({
+					id,
+					name: displayName,
+					api,
+					provider: providerConfig.provider,
+					baseUrl,
+					reasoning: reference?.reasoning ?? false,
+					thinking: reference?.thinking,
+					input: reference?.input ?? ["text"],
+					// Proxy pricing is provider-specific and usually does not match
+					// upstream bundled catalogs, so keep costs local-unknown even when
+					// we successfully recover the upstream model identity.
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: reference?.contextWindow ?? 128000,
+					maxTokens: reference?.maxTokens ?? 8192,
+					headers,
+					// OpenAI-compat fields are no-ops on anthropic models; the
+					// Anthropic SDK ignores them. Provider-level disableStrictTools
+					// flows in via #applyProviderCompat for the third-party-Anthropic
+					// path. Cross-wire bundled compat is intentionally not copied:
+					// request-shaping fields are provider-wire specific.
+					compat: isAnthropic
+						? undefined
+						: {
+								supportsStore: false,
+								supportsDeveloperRole: false,
+								supportsReasoningEffort: false,
+							},
 				}),
 			);
 		}

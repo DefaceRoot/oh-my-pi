@@ -1,13 +1,8 @@
+import { MismatchError as HashlineMismatchError } from "@oh-my-pi/hashline";
+import hashlineGrammar from "@oh-my-pi/hashline/grammar.lark" with { type: "text" };
+import hashlineDescription from "@oh-my-pi/hashline/prompt.md" with { type: "text" };
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import {
-	executeHashlineSingle,
-	HashlineMismatchError,
-	type HashlineParams,
-	hashlineEditParamsSchema,
-} from "../hashline";
-import hashlineGrammarTemplate from "../hashline/grammar.lark" with { type: "text" };
-import { resolveHashlineGrammarPlaceholders } from "../hashline/hash";
 import {
 	createLspWritethrough,
 	type FileDiagnosticsResult,
@@ -16,26 +11,25 @@ import {
 	writethroughNoop,
 } from "../lsp";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
-import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import type { ToolSession } from "../tools";
+import { truncateForPrompt } from "../tools/approval";
+import { isInternalUrlPath } from "../tools/path-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
+import { executeHashlineSingle, type HashlineParams, hashlineEditParamsSchema } from "./hashline";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
 
+export * from "@oh-my-pi/hashline";
 export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/edit-mode";
 export * from "./apply-patch";
 export * from "./diff";
-export * from "./file-read-cache";
-
-// Resolve hashline grammar placeholders from the TypeScript constants.
-const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
-
-export * from "../hashline";
+export * from "./file-snapshot-store";
+export * from "./hashline";
 export * from "./modes/apply-patch";
 export * from "./modes/patch";
 export * from "./modes/replace";
@@ -266,7 +260,29 @@ async function executeSinglePathEntries(
 	};
 }
 
+function extractApprovalPath(args: unknown): string {
+	const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	const input = typeof record.input === "string" ? record.input : undefined;
+	if (input) {
+		const hashlineMatch = /^(?:¶|§|@)([^\s#]+)/m.exec(input);
+		if (hashlineMatch?.[1]) return hashlineMatch[1];
+
+		const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);
+		if (applyPatchMatch?.[1]) return applyPatchMatch[1].trim();
+	}
+
+	const targetPath = record.path;
+	return typeof targetPath === "string" && targetPath.length > 0 ? targetPath : "(unknown)";
+}
+
 export class EditTool implements AgentTool<TInput> {
+	readonly approval = (args: unknown) => {
+		const targetPath = extractApprovalPath(args);
+		return targetPath !== "(unknown)" && isInternalUrlPath(targetPath) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => [
+		`File: ${truncateForPrompt(extractApprovalPath(args))}`,
+	];
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";
@@ -412,11 +428,10 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { input, path } = params as HashlineParams & { path?: string };
+					const { input } = params as HashlineParams;
 					return executeHashlineSingle({
 						session: tool.session,
 						input,
-						path,
 						signal,
 						batchRequest,
 						writethrough: tool.#writethrough,

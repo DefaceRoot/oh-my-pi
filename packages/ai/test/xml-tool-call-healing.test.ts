@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import type { AssistantMessage, Context, Model, Tool, ToolCall } from "../src/types";
-import { modelMayLeakXmlToolCalls } from "../src/utils/tool-call-healing";
+import { modelMayLeakXmlToolCalls } from "../src/utils/stream-markup-healing";
 
 const originalFetch = global.fetch;
 

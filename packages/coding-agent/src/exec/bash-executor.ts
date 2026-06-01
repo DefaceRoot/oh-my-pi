@@ -4,7 +4,8 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import * as fs from "node:fs/promises";
-import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
+import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
+import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
@@ -15,6 +16,7 @@ export interface BashExecutorOptions {
 	cwd?: string;
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Session key suffix to isolate shell sessions per agent */
 	sessionKey?: string;
@@ -96,9 +98,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		artifactId: options?.artifactId,
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		// Throttle the streaming preview callback to avoid saturating the
-		// event loop when commands produce massive output (e.g. seq 1 50M).
-		chunkThrottleMs: options?.onChunk ? 50 : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
 	});
 
 	// sink.push() is synchronous — buffer management, counters, and onChunk
@@ -196,7 +196,10 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 					},
 				);
 
-		const winner = await Promise.race([
+		const ey = new ExponentialYield();
+		const winner = await ey.race<
+			{ kind: "result"; result: ShellRunResult } | { kind: "timeout" } | { kind: "abort" }
+		>([
 			runPromise.then(result => ({ kind: "result" as const, result })),
 			timeoutDeferred.promise.then(kind => ({ kind })),
 			abortDeferred.promise.then(kind => ({ kind })),

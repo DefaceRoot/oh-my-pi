@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
@@ -8,11 +9,10 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileReadCache } from "../edit/file-read-cache";
+import { getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeFileHash, formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "../hashline/hash";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -66,6 +66,8 @@ import {
 import {
 	expandPath,
 	formatPathRelativeToCwd,
+	type LineRange,
+	parseLineRanges,
 	resolveReadPath,
 	splitInternalUrlSel,
 	splitPathAndSel,
@@ -116,39 +118,48 @@ function prependLineNumbers(text: string, startNum: number): string {
 
 interface HashlineHeaderContext {
 	header: string;
-	fileHash: string;
-	fullText: string;
+	tag: string;
+	fullText?: string;
 }
 
-function buildHashlineHeaderContext(displayPath: string, fullText: string): HashlineHeaderContext {
+function recordFullHashlineContext(
+	session: ToolSession,
+	absolutePath: string | undefined,
+	displayPath: string,
+	fullText: string,
+): HashlineHeaderContext | undefined {
+	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
 	const normalized = normalizeToLF(fullText);
-	const fileHash = computeFileHash(normalized);
+	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
 	return {
-		header: formatHashlineHeader(displayPath, fileHash),
-		fileHash,
+		header: formatHashlineHeader(displayPath, tag),
+		tag,
 		fullText: normalized,
 	};
 }
 
-async function readHashlineHeaderContext(absolutePath: string, cwd: string): Promise<HashlineHeaderContext> {
+async function readHashlineHeaderContext(
+	session: ToolSession,
+	absolutePath: string,
+	cwd: string,
+): Promise<HashlineHeaderContext> {
 	const fullText = await Bun.file(absolutePath).text();
-	return buildHashlineHeaderContext(formatPathRelativeToCwd(absolutePath, cwd), fullText);
+	const context = recordFullHashlineContext(
+		session,
+		absolutePath,
+		formatPathRelativeToCwd(absolutePath, cwd),
+		fullText,
+	);
+	if (!context) throw new ToolError(`Cannot record hashline snapshot for non-absolute path: ${absolutePath}`);
+	return context;
+}
+
+function hashlineHeaderContext(displayPath: string, tag: string): HashlineHeaderContext {
+	return { header: formatHashlineHeader(displayPath, tag), tag };
 }
 
 function prependHashlineHeader(text: string, context: HashlineHeaderContext | undefined): string {
 	return context ? `${context.header}\n${text}` : text;
-}
-
-function recordHashlineSnapshot(
-	session: ToolSession,
-	absolutePath: string | undefined,
-	context: HashlineHeaderContext | undefined,
-): void {
-	if (!context || !absolutePath || !path.isAbsolute(absolutePath)) return;
-	getFileReadCache(session).recordContiguous(absolutePath, 1, context.fullText.split("\n"), {
-		fullText: context.fullText,
-		fileHash: context.fileHash,
-	});
 }
 
 function formatTextWithMode(
@@ -568,15 +579,11 @@ export interface ReadToolDetails {
 type ReadParams = ReadToolInput;
 
 /** Parsed representation of a path-embedded selector. */
-type LineRange = { startLine: number; endLine: number | undefined };
-
 type ParsedSelector =
 	| { kind: "none" }
 	| { kind: "raw" }
 	| { kind: "conflicts" }
 	| { kind: "lines"; ranges: [LineRange, ...LineRange[]]; raw?: boolean };
-
-const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
 
 /** Returns true when the selector requested verbatim/raw output (alone or combined with a range). */
 function isRawSelector(parsed: ParsedSelector): boolean {
@@ -586,67 +593,6 @@ function isRawSelector(parsed: ParsedSelector): boolean {
 /** Returns true when the selector requested multiple line ranges. */
 function isMultiRange(parsed: ParsedSelector): boolean {
 	return parsed.kind === "lines" && parsed.ranges.length > 1;
-}
-
-function parseLineRangeChunk(sel: string): LineRange | null {
-	const lineMatch = LINE_RANGE_RE.exec(sel);
-	if (!lineMatch) return null;
-	const rawStart = Number.parseInt(lineMatch[1]!, 10);
-	if (rawStart < 1) {
-		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
-	}
-	const sep = lineMatch[2];
-	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
-	let rawEnd: number | undefined;
-	if (sep === "+") {
-		if (rhs === undefined || rhs < 1) {
-			throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
-		}
-		rawEnd = rawStart + rhs - 1;
-	} else if (sep === "-") {
-		// `301-` is shorthand for "from 301 onward" — equivalent to bare `301`.
-		if (rhs !== undefined) {
-			if (rhs < rawStart) {
-				throw new ToolError(`Invalid range ${rawStart}-${rhs}: end must be >= start.`);
-			}
-			rawEnd = rhs;
-		}
-	}
-	return { startLine: rawStart, endLine: rawEnd };
-}
-
-/**
- * Parse a comma-separated list of line ranges (e.g. `5-16,960-973`). Returns
- * the ranges in ascending order with overlapping/adjacent ranges merged so
- * downstream consumers can stream the file in a single forward pass per range.
- */
-function parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null {
-	const chunks = sel.split(",");
-	const parsed: LineRange[] = [];
-	for (const chunk of chunks) {
-		const range = parseLineRangeChunk(chunk);
-		if (!range) return null;
-		parsed.push(range);
-	}
-	if (parsed.length === 0) return null;
-	parsed.sort((a, b) => a.startLine - b.startLine);
-
-	const merged: LineRange[] = [parsed[0]];
-	for (let i = 1; i < parsed.length; i++) {
-		const current = parsed[i];
-		const last = merged[merged.length - 1];
-		// Open-ended (endLine undefined) means "to EOF" — any later range is absorbed.
-		if (last.endLine === undefined) continue;
-		// Merge when current starts within (or immediately after) the last range.
-		if (current.startLine <= last.endLine + 1) {
-			if (current.endLine === undefined || current.endLine > last.endLine) {
-				merged[merged.length - 1] = { startLine: last.startLine, endLine: current.endLine };
-			}
-			continue;
-		}
-		merged.push(current);
-	}
-	return merged as [LineRange, ...LineRange[]];
 }
 
 function parseSel(sel: string | undefined): ParsedSelector {
@@ -718,6 +664,7 @@ interface ResolvedSqliteReadPath {
  */
 export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly name = "read";
+	readonly approval = "read" as const;
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	readonly description: string;
@@ -742,6 +689,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			DEFAULT_MAX_LINES: String(DEFAULT_MAX_LINES),
 			IS_HL_MODE: displayMode.hashLines,
 			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
+			INSPECT_IMAGE_ENABLED: this.#inspectImageEnabled,
 		});
 	}
 
@@ -903,9 +851,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 		const hashContext =
 			shouldAddHashLines && options.sourcePath
-				? buildHashlineHeaderContext(formatPathRelativeToCwd(options.sourcePath, this.session.cwd), text)
+				? recordFullHashlineContext(
+						this.session,
+						options.sourcePath,
+						formatPathRelativeToCwd(options.sourcePath, this.session.cwd),
+						text,
+					)
 				: undefined;
-		recordHashlineSnapshot(this.session, options.sourcePath, hashContext);
 		let emittedHashlineHeader = false;
 		const formatText = (content: string, startNum: number): string => {
 			details.displayContent = { text: content, startLine: startNum };
@@ -996,9 +948,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 		const hashContext =
 			shouldAddHashLines && options.sourcePath
-				? buildHashlineHeaderContext(formatPathRelativeToCwd(options.sourcePath, this.session.cwd), text)
+				? recordFullHashlineContext(
+						this.session,
+						options.sourcePath,
+						formatPathRelativeToCwd(options.sourcePath, this.session.cwd),
+						text,
+					)
 				: undefined;
-		recordHashlineSnapshot(this.session, options.sourcePath, hashContext);
 		let emittedHashlineHeader = false;
 
 		const resultBuilder = toolResult(details);
@@ -1076,11 +1032,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = !rawSelector && displayMode.hashLines;
 		const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
-		const hashContext = shouldAddHashLines
-			? await readHashlineHeaderContext(absolutePath, this.session.cwd)
-			: undefined;
-		recordHashlineSnapshot(this.session, absolutePath, hashContext);
-		let emittedHashlineHeader = false;
 		const maxColumns = resolveOutputMaxColumns(this.session.settings);
 
 		const blocks: string[] = [];
@@ -1110,32 +1061,32 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			const collectedLines = streamResult.lines;
+			// Column truncation is display-only; clone before stamping ellipsis so
+			// the original on-disk lines stay intact for display reconstruction.
+			let displayLines: string[] = collectedLines;
 			if (!rawSelector && maxColumns > 0) {
+				let cloned: string[] | undefined;
 				for (let i = 0; i < collectedLines.length; i++) {
 					const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 					if (wasTruncated) {
-						collectedLines[i] = text;
+						if (!cloned) cloned = collectedLines.slice();
+						cloned[i] = text;
 						columnTruncated = maxColumns;
 					}
 				}
+				if (cloned) displayLines = cloned;
 			}
-
-			if (collectedLines.length > 0) {
-				getFileReadCache(this.session).recordContiguous(
-					absolutePath,
-					range.startLine,
-					collectedLines,
-					hashContext ? { fullText: hashContext.fullText, fileHash: hashContext.fileHash } : {},
-				);
-			}
-
-			const blockText = collectedLines.join("\n");
-			const formatted = formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers);
-			blocks.push(hashContext && !emittedHashlineHeader ? prependHashlineHeader(formatted, hashContext) : formatted);
-			if (hashContext) emittedHashlineHeader = true;
+			const blockText = displayLines.join("\n");
+			blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
 		}
 
 		let outputText = blocks.join("\n\n…\n\n");
+		if (shouldAddHashLines && outputText) {
+			const tag = await recordFileSnapshot(this.session, absolutePath);
+			if (tag) {
+				outputText = `${formatHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
+			}
+		}
 		if (notices.length > 0) {
 			outputText = outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n");
 		}
@@ -1405,14 +1356,19 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					? await bridgePromise.catch(() => Bun.file(absolutePath).text())
 					: await Bun.file(absolutePath).text();
 			throwIfAborted(signal);
-			if (countTextLines(code) > MAX_SUMMARY_LINES) return null;
+			const lineCount = countTextLines(code);
+			if (lineCount > MAX_SUMMARY_LINES) return null;
+			if (lineCount < this.session.settings.get("read.summarize.minTotalLines")) return null;
 
-			return summarizeCode({
+			const result = summarizeCode({
 				code,
 				path: absolutePath,
 				minBodyLines: this.session.settings.get("read.summarize.minBodyLines"),
 				minCommentLines: this.session.settings.get("read.summarize.minCommentLines"),
+				unfoldUntilLines: this.session.settings.get("read.summarize.unfoldUntil"),
+				unfoldLimitLines: this.session.settings.get("read.summarize.unfoldLimit"),
 			});
+			return result;
 		} catch {
 			return null;
 		}
@@ -1545,6 +1501,21 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!this.session.settings.get("fetch.enabled")) {
 				throw new ToolError("URL reads are disabled by settings.");
 			}
+			if (parsedUrlTarget.ranges !== undefined) {
+				const cached = await loadReadUrlCacheEntry(
+					this.session,
+					{ path: parsedUrlTarget.path, raw: parsedUrlTarget.raw },
+					signal,
+					{ ensureArtifact: true, preferCached: true },
+				);
+				return this.#buildInMemoryMultiRangeResult(cached.output, parsedUrlTarget.ranges, {
+					details: { ...cached.details },
+					sourceUrl: cached.details.finalUrl,
+					entityLabel: "URL output",
+					raw: parsedUrlTarget.raw,
+					immutable: true,
+				});
+			}
 			if (parsedUrlTarget.offset !== undefined || parsedUrlTarget.limit !== undefined) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
@@ -1559,6 +1530,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					details: { ...cached.details },
 					sourceUrl: cached.details.finalUrl,
 					entityLabel: "URL output",
+					raw: parsedUrlTarget.raw,
 					immutable: true,
 				});
 			}
@@ -1635,7 +1607,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (isMultiRange(parsed)) {
 				throw new ToolError("Multi-range line selectors are not supported for directory listings.");
 			}
-			const dirResult = await this.#readDirectory(absolutePath, selToOffsetLimit(parsed).limit, signal);
+			const { offset, limit } = selToOffsetLimit(parsed);
+			const dirResult = await this.#readDirectory(absolutePath, offset, limit, signal);
 			if (suffixResolution) {
 				dirResult.details ??= {};
 				dirResult.details.suffixResolution = suffixResolution;
@@ -1766,9 +1739,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						renderedSummary.elidedLines,
 					);
 					const summaryHashContext = displayMode.hashLines
-						? await readHashlineHeaderContext(absolutePath, this.session.cwd)
+						? await readHashlineHeaderContext(this.session, absolutePath, this.session.cwd)
 						: undefined;
-					recordHashlineSnapshot(this.session, absolutePath, summaryHashContext);
 					const bodyText = footer ? `${renderedSummary.text}\n\n${footer}` : renderedSummary.text;
 					const modelText = prependHashlineHeader(bodyText, summaryHashContext);
 					details = {
@@ -1883,17 +1855,26 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// view — column truncation surfaces separately via `.limits()`.
 					const rawSelector = isRawSelector(parsed);
 					const maxColumns = resolveOutputMaxColumns(this.session.settings);
+					// Column truncation is display-only. `collectedLines` MUST stay
+					// byte-for-byte with the on-disk content so the snapshot recorded
+					// below can be verified against the live file. Mutating it with
+					// ellipsis-truncated text made every long-line file uneditable on
+					// the next edit attempt.
+					let displayLines: string[] = collectedLines;
 					if (!rawSelector && maxColumns > 0) {
+						let cloned: string[] | undefined;
 						for (let i = 0; i < collectedLines.length; i++) {
 							const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 							if (wasTruncated) {
-								collectedLines[i] = text;
+								if (!cloned) cloned = collectedLines.slice();
+								cloned[i] = text;
 								columnTruncated = maxColumns;
 							}
 						}
+						if (cloned) displayLines = cloned;
 					}
 
-					const selectedContent = collectedLines.join("\n");
+					const selectedContent = displayLines.join("\n");
 					const userLimitedLines = collectedLines.length;
 
 					const totalSelectedLines = totalFileLines - startLine;
@@ -1915,17 +1896,19 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 					const shouldAddHashLines = !rawSelector && displayMode.hashLines;
 					const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
-					const hashContext = shouldAddHashLines
-						? await readHashlineHeaderContext(absolutePath, this.session.cwd)
-						: undefined;
-
-					if (collectedLines.length > 0 && !firstLineExceedsLimit) {
-						getFileReadCache(this.session).recordContiguous(
-							absolutePath,
-							startLineDisplay,
-							collectedLines,
-							hashContext ? { fullText: hashContext.fullText, fileHash: hashContext.fileHash } : {},
-						);
+					let hashContext: HashlineHeaderContext | undefined;
+					if (shouldAddHashLines && collectedLines.length > 0 && !firstLineExceedsLimit) {
+						// The tag is a content hash of the WHOLE file. A whole-file read
+						// already holds every line in memory; a range read re-reads the
+						// file (bounded by SNAPSHOT_MAX_BYTES) so the tag fingerprints the
+						// full file and any anchor validates while the file is unchanged.
+						const isWholeFile = offset === undefined && limit === undefined && !wasTruncated;
+						const tag = isWholeFile
+							? getFileSnapshotStore(this.session).record(absolutePath, normalizeToLF(collectedLines.join("\n")))
+							: await recordFileSnapshot(this.session, absolutePath);
+						if (tag) {
+							hashContext = hashlineHeaderContext(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag);
+						}
 					}
 
 					let capturedDisplayContent: { text: string; startLine: number } | undefined;
@@ -2070,10 +2053,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 
 		const rawText = region.lines.join("\n");
-		const hashContext = shouldAddHashLines
-			? await readHashlineHeaderContext(entry.absolutePath, this.session.cwd)
+		const tag = shouldAddHashLines ? await recordFileSnapshot(this.session, entry.absolutePath) : undefined;
+		const hashContext = tag
+			? hashlineHeaderContext(formatPathRelativeToCwd(entry.absolutePath, this.session.cwd), tag)
 			: undefined;
-		recordHashlineSnapshot(this.session, entry.absolutePath, hashContext);
 		const formattedBody = formatTextWithMode(rawText, region.startLine, shouldAddHashLines, shouldAddLineNumbers);
 		const formattedText = prependHashlineHeader(formattedBody, hashContext);
 
@@ -2158,6 +2141,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			cwd: this.session.cwd,
 			settings: this.session.settings,
 			signal,
+			localProtocolOptions: this.session.localProtocolOptions,
 		});
 		const details: ReadToolDetails = { resolvedPath: resource.sourcePath, contentType: resource.contentType };
 
@@ -2193,6 +2177,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	/** Read directory contents as a formatted listing */
 	async #readDirectory(
 		absolutePath: string,
+		offset: number | undefined,
 		limit: number | undefined,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<ReadToolDetails>> {
@@ -2206,7 +2191,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				maxDepth: READ_DIRECTORY_MAX_DEPTH,
 				perDirLimit: READ_DIRECTORY_CHILD_LIMIT,
 				rootLimit: null,
-				lineCap: limit ?? null,
+				// `lineCap` truncates the rendered tree itself, so apply it only when the caller
+				// did not request an offset — otherwise we'd cap the first N lines before slicing.
+				lineCap: offset === undefined && limit !== undefined ? limit : null,
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -2215,12 +2202,46 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		throwIfAborted(signal);
 
 		const output = tree.totalLines <= 1 ? "(empty directory)" : tree.rendered;
-		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 		const details: ReadToolDetails = {
 			isDirectory: true,
 			resolvedPath: tree.rootPath,
 		};
 
+		// Slice the rendered listing when the caller passed an offset/limit. We do this
+		// instead of passing the selector down to `buildDirectoryTree` because the tree
+		// builder lays out entries hierarchically (per-dir caps, recent-then-elided
+		// summaries); line-based slicing operates on the formatted text and matches what
+		// users expect from `:N-M` on long listings.
+		const wantsSlice = offset !== undefined || limit !== undefined;
+		if (wantsSlice) {
+			const allLines = output.split("\n");
+			const start = offset ? Math.max(0, offset - 1) : 0;
+			if (start >= allLines.length) {
+				const suggestion =
+					allLines.length === 0
+						? "The listing is empty."
+						: `Use :1 to read from the start, or :${allLines.length} to read the last line.`;
+				return toolResult(details)
+					.text(`Line ${start + 1} is beyond end of listing (${allLines.length} lines total). ${suggestion}`)
+					.sourcePath(tree.rootPath)
+					.done();
+			}
+			const end = limit !== undefined ? Math.min(start + limit, allLines.length) : allLines.length;
+			const sliced = allLines.slice(start, end).join("\n");
+			const resultBuilder = toolResult(details).sourcePath(tree.rootPath);
+			let text = sliced;
+			if (end < allLines.length) {
+				const remaining = allLines.length - end;
+				text += `\n\n[${remaining} more lines in listing. Use :${end + 1} to continue]`;
+			}
+			resultBuilder.text(text);
+			if (tree.truncated) {
+				resultBuilder.limits({ resultLimit: 1 });
+			}
+			return resultBuilder.done();
+		}
+
+		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 		const resultBuilder = toolResult(details).text(truncation.content).sourcePath(tree.rootPath);
 		if (tree.truncated) {
 			resultBuilder.limits({ resultLimit: 1 });

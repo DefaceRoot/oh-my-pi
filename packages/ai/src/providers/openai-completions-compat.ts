@@ -51,6 +51,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 
 	const isCerebras = provider === "cerebras" || baseUrl.includes("cerebras.ai");
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+	const isZhipu = provider === "zhipu-coding-plan" || baseUrl.includes("open.bigmodel.cn");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isMoonshotKimi =
@@ -97,6 +98,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		baseUrl.includes("fireworks.ai") ||
 		isAlibaba ||
 		isZai ||
+		isZhipu ||
 		isKilo ||
 		isQwen ||
 		provider === "opencode-zen" ||
@@ -156,6 +158,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 			isMistral ||
 			isGrok ||
 			isZai ||
+			isZhipu ||
 			isCopilotHost ||
 			isZenmuxHost);
 
@@ -194,7 +197,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		// OpenAI's reasoning-API surface.
 		supportsDeveloperRole: isOpenAIHost || isAzureHost,
 		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
-		supportsReasoningEffort: !isGrok && !isZai,
+		supportsReasoningEffort: !isGrok && !isZai && !isZhipu,
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
@@ -205,8 +208,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
+		// Only Kimi's native hosts (Moonshot / Kimi-code, matched by `isMoonshotKimi`)
+		// speak the z.ai binary `thinking: { type }` field. Kimi reached through
+		// OpenAI-compatible proxies — Fireworks' Fire Pass router, OpenCode's gateway,
+		// etc. — drives reasoning via OpenAI-style `reasoning_effort`
+		// (low|medium|high|xhigh|max|none), so those stay on the "openai" path.
 		thinkingFormat:
-			isZai || isMoonshotKimi
+			isZai || isZhipu || isMoonshotKimi
 				? "zai"
 				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
 					? "openrouter"

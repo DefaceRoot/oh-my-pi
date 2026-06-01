@@ -21,6 +21,7 @@ import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
+import type { MnemopiSessionState } from "../mnemopi/state";
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
@@ -185,6 +186,7 @@ export interface ExecutorOptions {
 	 */
 	parentArtifactManager?: ArtifactManager;
 	parentHindsightSessionState?: HindsightSessionState;
+	parentMnemopiSessionState?: MnemopiSessionState;
 	/** Parent agent's eval executor session id. Subagents reuse it so eval state is shared. */
 	parentEvalSessionId?: string;
 	/**
@@ -535,6 +537,11 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 		...snapshot,
 		"async.enabled": false,
 		"bash.autoBackground.enabled": false,
+
+		// Subagents run headless — there is no UI to confirm prompts against, so
+		// the parent task approval is the authorization boundary. Use yolo mode
+		// to preserve unattended subagent execution. User `tools.approval` policies still apply.
+		"tools.approvalMode": "yolo",
 	});
 }
 
@@ -628,6 +635,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
+	}
+	// IRC is always available; the COOP prompt section advertises it, so a restricted
+	// whitelist must still carry `irc` for the subagent to actually use it.
+	if (toolNames && !toolNames.includes("irc")) {
+		toolNames = [...toolNames, "irc"];
 	}
 	if (toolNames?.includes("exec")) {
 		const allowEvalPy = settings.get("eval.py") ?? true;
@@ -1151,6 +1163,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
+			if (model) {
+				progress.resolvedModel = explicitThinkingLevel
+					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
+					: `${model.provider}/${model.id}`;
+			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
@@ -1231,6 +1248,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					spawns: spawnsEnv,
 					taskDepth: childDepth,
 					parentHindsightSessionState: options.parentHindsightSessionState,
+					parentMnemopiSessionState: options.parentMnemopiSessionState,
 					parentTaskPrefix: id,
 					agentId: id,
 					agentDisplayName: agent.name,
@@ -1431,9 +1449,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					);
 					await awaitAbortable(session.waitForIdle());
 				} catch (err) {
-					logger.error("Subagent prompt failed", {
-						error: err instanceof Error ? err.message : String(err),
-					});
+					if (abortSignal.aborted || err instanceof ToolAbortError) {
+						// Benign control-flow exit — user cancel (^C) or compaction aborting
+						// pending operations both surface here as ToolAbortError. The outer
+						// catch and finally already mark the run aborted; logging at ERROR
+						// would spam operator dashboards with non-failures.
+						logger.debug("Subagent prompt aborted", {
+							reason: abortReason ?? "signal",
+						});
+					} else {
+						logger.error("Subagent prompt failed", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					}
 				}
 			}
 
@@ -1609,6 +1637,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		contextTokens: progress.contextTokens,
 		contextWindow: progress.contextWindow,
 		modelOverride,
+		resolvedModel: progress.resolvedModel,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		abortReason: finalAbortReason,

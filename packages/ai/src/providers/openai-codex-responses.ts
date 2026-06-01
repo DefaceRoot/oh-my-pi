@@ -49,11 +49,12 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
@@ -93,6 +94,23 @@ const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
+const CODEX_WEBSOCKET_PING_INTERVAL_MS = 10_000;
+const CODEX_WEBSOCKET_PONG_TIMEOUT_MS = 60_000;
+const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = 4096;
+/**
+ * Maximum quiet period (no inbound frames AND no observed pong) we'll trust a
+ * reused WebSocket for before forcing a fresh handshake. Codex backends and
+ * intermediaries occasionally evict idle sockets server-side without sending a
+ * FIN, leaving the local `readyState` as OPEN while the next `send()` becomes a
+ * write into a half-open buffer. Reusing such a socket parks the next request
+ * at `#nextMessage` until the first-event/idle timeout fires (issue #1450). The
+ * heartbeat below also catches dead sockets, but only after `pongTimeoutMs`
+ * (default 60s) and only while a request is active — this gate closes the door
+ * earlier and even when the gap between requests is purely client-side (tool
+ * execution, user typing, etc.). Set `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS=0`
+ * to disable.
+ */
+const CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = 30_000;
 /**
  * Steady-state liveness ceiling for the Codex WebSocket transport. Distinct from
  * the OMP-wide stream watchdog removed in #1392: a WebSocket can stay TCP-open
@@ -132,9 +150,27 @@ function isCodexStreamProgressEvent(event: unknown): boolean {
 	return typeof type === "string" && CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES.has(type);
 }
 
+type CodexWebSocketTimeoutDetails = {
+	lastEventAt: number;
+	lastEventType?: string;
+	lastProgressAt: number;
+	lastProgressEventType?: string;
+};
+
+function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSocketTimeoutDetails): string {
+	const now = Date.now();
+	const lastEvent = details.lastEventType
+		? `${details.lastEventType} ${Math.max(0, now - details.lastEventAt)}ms ago`
+		: "none";
+	const lastProgress = details.lastProgressEventType
+		? `${details.lastProgressEventType} ${Math.max(0, now - details.lastProgressAt)}ms ago`
+		: "none";
+	return `${reason} (last event: ${lastEvent}; last progress: ${lastProgress})`;
+}
+
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
-type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
+type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string; lastParseLen?: number });
 
 export interface OpenAICodexWebSocketDebugStats {
 	fullContextRequests: number;
@@ -254,6 +290,25 @@ function getCodexWebSocketFirstEventTimeoutMs(): number {
 	);
 }
 
+function getCodexWebSocketPingIntervalMs(): number {
+	return parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS, CODEX_WEBSOCKET_PING_INTERVAL_MS);
+}
+
+function getCodexWebSocketPongTimeoutMs(): number {
+	return parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS, CODEX_WEBSOCKET_PONG_TIMEOUT_MS);
+}
+
+function getCodexWebSocketMessageQueueCapacity(): number {
+	return parseCodexPositiveInteger(
+		$env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
+		CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
+	);
+}
+
+function getCodexWebSocketMaxIdleReuseMs(): number {
+	return parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS, CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS);
+}
+
 function createCodexProviderSessionState(): CodexProviderSessionState {
 	const state: CodexProviderSessionState = {
 		webSocketSessions: new Map(),
@@ -301,6 +356,10 @@ function isCodexWebSocketRetryableStreamError(error: unknown): boolean {
 		message.includes("websocket closed (") ||
 		message.includes("websocket closed before response completion") ||
 		message.includes("websocket connection is unavailable") ||
+		message.includes("websocket send failed") ||
+		message.includes("websocket ping failed") ||
+		message.includes("websocket pong timeout") ||
+		message.includes("websocket message queue exceeded") ||
 		message.includes("idle timeout waiting for websocket") ||
 		message.includes("timeout waiting for first websocket event") ||
 		message.includes("syntaxerror") ||
@@ -544,7 +603,7 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? getCodexWebSocketIdleTimeoutMs();
-	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getCodexWebSocketFirstEventTimeoutMs();
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,
@@ -1157,7 +1216,11 @@ function handleToolCallArgumentsDelta(
 	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
 	const delta = (rawEvent as { delta?: string }).delta || "";
 	currentBlock.partialJson += delta;
-	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+	if (throttled) {
+		currentBlock.arguments = throttled.value;
+		currentBlock.lastParseLen = throttled.parsedLen;
+	}
 	stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
 }
 
@@ -1171,6 +1234,8 @@ function handleToolCallArgumentsDone(
 	if (typeof args === "string") {
 		currentBlock.partialJson = args;
 		currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+		delete (currentBlock as { partialJson?: string }).partialJson;
+		delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 	}
 }
 
@@ -1249,6 +1314,13 @@ function handleOutputItemDone(
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
+		if (runtime.currentBlock?.type === "toolCall") {
+			// Persist the authoritative final args on the stored block; the throttled
+			// delta parser may have left currentBlock.arguments stale (often `{}`).
+			runtime.currentBlock.arguments = toolCall.arguments;
+			delete (runtime.currentBlock as { partialJson?: string }).partialJson;
+			delete (runtime.currentBlock as { lastParseLen?: number }).lastParseLen;
+		}
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 		return;
@@ -1986,6 +2058,19 @@ class CodexWebSocketConnection {
 	#connectPromise?: Promise<void>;
 	#activeRequest = false;
 	#streamObserver?: (event: RawSseEvent) => void;
+	#heartbeatInterval: NodeJS.Timeout | undefined;
+	#removePongListener?: () => void;
+	#handshakeHeaders?: Headers;
+	#debugResponseLog?: RequestDebugResponseLog;
+	/**
+	 * Wall-clock of the most recent inbound activity on this socket — any
+	 * decoded message, any pong, or the moment the handshake completed. Used
+	 * by {@link isHealthyForReuse} so we don't write a continuation frame into
+	 * a TCP-open-but-server-evicted socket whose `readyState` still says OPEN.
+	 */
+	#lastInboundAt = 0;
+	/** Wall-clock of the last heartbeat ping we issued; 0 if none yet. */
+	#lastPingAt = 0;
 
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#url = url;
@@ -1995,6 +2080,29 @@ class CodexWebSocketConnection {
 
 	isOpen(): boolean {
 		return this.#socket?.readyState === WebSocket.OPEN;
+	}
+
+	/**
+	 * Stricter variant of {@link isOpen} for the connection-pool reuse gate.
+	 * Refuses sockets that have been silent past {@link CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS}.
+	 *
+	 * Bun's `WebSocket` does not always surface server-side eviction (no
+	 * `onclose`, no `onerror`), so a socket can sit in readyState OPEN long
+	 * after the upstream has dropped it. Reusing such a socket sends the next
+	 * `response.create` into a half-open write buffer and parks the reader
+	 * until the first-event / idle timeout fires (issue #1450). Forcing a
+	 * reconnect on any suspect socket trades a sub-second handshake for a
+	 * 60–300 s stall.
+	 */
+	isHealthyForReuse(): boolean {
+		if (!this.isOpen()) return false;
+		const maxIdleMs = getCodexWebSocketMaxIdleReuseMs();
+		if (maxIdleMs <= 0) return true;
+		// Initial connect sets #lastInboundAt; any later message or pong refreshes
+		// it. A zero value means the field was never initialized, which itself is
+		// a desync — treat as unhealthy.
+		if (this.#lastInboundAt === 0) return false;
+		return Date.now() - this.#lastInboundAt <= maxIdleMs;
 	}
 
 	matchesAuth(headers: Record<string, string>): boolean {
@@ -2009,6 +2117,7 @@ class CodexWebSocketConnection {
 			this.#socket.close(1000, reason);
 		}
 		this.#socket = null;
+		this.#stopHeartbeat();
 	}
 
 	async connect(signal?: AbortSignal): Promise<void> {
@@ -2058,7 +2167,9 @@ class CodexWebSocketConnection {
 			if (!settled) {
 				settled = true;
 				clearPending();
+				this.#lastInboundAt = Date.now();
 				this.#captureHandshakeHeaders(socket, event);
+				this.#startHeartbeat(socket);
 				resolve();
 			}
 		};
@@ -2079,6 +2190,7 @@ class CodexWebSocketConnection {
 		};
 		socket.onclose = event => {
 			this.#socket = null;
+			this.#stopHeartbeat();
 			if (!settled) {
 				settled = true;
 				clearPending();
@@ -2089,6 +2201,11 @@ class CodexWebSocketConnection {
 			this.#push(null);
 		};
 		socket.onmessage = event => {
+			// Stamp inbound activity before parsing so even malformed frames refresh
+			// the liveness clock — what matters for reuse health is that the upstream
+			// is still talking to us, not that every frame is well-formed.
+			this.#lastInboundAt = Date.now();
+			this.#writeDebugWebSocketFrame(event.data);
 			try {
 				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
 				if (!text) return;
@@ -2132,6 +2249,17 @@ class CodexWebSocketConnection {
 		}
 		this.#activeRequest = true;
 		this.#streamObserver = onSseEvent;
+		// Drain any non-error frames left over from a prior request before sending.
+		// `processCodexResponseStream` breaks its `for-await` on the terminal event,
+		// which interrupts our generator at `yield next` (the post-yield `break`
+		// never runs). Any frame that landed between the consumer's break and the
+		// generator's `finally` lingers in `#queue` and would otherwise become the
+		// first frame of THIS request — a stale `response.completed` would end the
+		// turn immediately with empty output, and a stale non-progress frame would
+		// flip `sawFirstEvent` and silently downgrade the first-event timeout to
+		// the longer idle timeout. Transport errors are preserved so we surface
+		// the death signal instead of writing into a dead socket.
+		this.#dropStaleFrames();
 		const onAbort = () => {
 			this.close("aborted");
 			this.#push(createCodexWebSocketTransportError("request was aborted"));
@@ -2145,25 +2273,63 @@ class CodexWebSocketConnection {
 		}
 
 		try {
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "websocket",
+						method: "POST",
+						url: this.#url,
+						headers: this.#headers,
+						body: request,
+					})
+				: undefined;
+			this.#debugResponseLog = debugSession
+				? await debugSession.openResponseLog("WebSocket 101 Switching Protocols", this.#handshakeHeaders)
+				: undefined;
+
 			const requestPayload = JSON.stringify(request);
 			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
-			this.#socket.send(requestPayload);
+			try {
+				this.#socket.send(requestPayload);
+			} catch (error) {
+				throw createCodexWebSocketTransportError(
+					`websocket send failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
 			let sawFirstEvent = false;
 			const { idleTimeoutMs, firstEventTimeoutMs } = timeouts;
 			let lastProgressAt = Date.now();
+			let lastProgressEventType: string | undefined;
+			let lastEventAt = lastProgressAt;
+			let lastEventType: string | undefined;
 			while (true) {
 				let timeoutMs: number | undefined;
 				let timeoutReason: string;
 				if (sawFirstEvent) {
-					timeoutReason = "idle timeout waiting for websocket";
+					timeoutReason = createCodexWebSocketTimeoutMessage("idle timeout waiting for websocket", {
+						lastEventAt,
+						lastEventType,
+						lastProgressAt,
+						lastProgressEventType,
+					});
 					if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
 						timeoutMs = idleTimeoutMs - (Date.now() - lastProgressAt);
 						if (timeoutMs <= 0) {
+							logCodexDebug("codex websocket idle timeout", {
+								lastEventType,
+								lastProgressEventType,
+								msSinceLastEvent: Date.now() - lastEventAt,
+								msSinceLastProgress: Date.now() - lastProgressAt,
+							});
 							throw createCodexWebSocketTransportError(timeoutReason);
 						}
 					}
 				} else {
-					timeoutReason = "timeout waiting for first websocket event";
+					timeoutReason = createCodexWebSocketTimeoutMessage("timeout waiting for first websocket event", {
+						lastEventAt,
+						lastEventType,
+						lastProgressAt,
+						lastProgressEventType,
+					});
 					if (firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0) {
 						timeoutMs = firstEventTimeoutMs;
 					}
@@ -2176,11 +2342,14 @@ class CodexWebSocketConnection {
 					throw createCodexWebSocketTransportError("websocket closed before response completion");
 				}
 				sawFirstEvent = true;
+				const eventType = typeof next.type === "string" ? next.type : "";
+				lastEventAt = Date.now();
+				lastEventType = eventType || undefined;
 				if (isCodexStreamProgressEvent(next)) {
-					lastProgressAt = Date.now();
+					lastProgressAt = lastEventAt;
+					lastProgressEventType = lastEventType;
 				}
 				yield next;
-				const eventType = typeof next.type === "string" ? next.type : "";
 				if (
 					eventType === "response.completed" ||
 					eventType === "response.done" ||
@@ -2197,17 +2366,164 @@ class CodexWebSocketConnection {
 			if (signal) {
 				signal.removeEventListener("abort", onAbort);
 			}
+			const debugResponseLog = this.#debugResponseLog;
+			this.#debugResponseLog = undefined;
+			await debugResponseLog?.close();
 		}
 	}
 
 	#captureHandshakeHeaders(socket: Bun.WebSocket, openEvent?: Event): void {
-		if (!this.#onHandshakeHeaders) return;
 		const headers = extractCodexWebSocketHandshakeHeaders(socket, openEvent);
 		if (!headers) return;
-		this.#onHandshakeHeaders(headers);
+		this.#handshakeHeaders = headers;
+		this.#onHandshakeHeaders?.(headers);
+	}
+
+	#writeDebugWebSocketFrame(data: unknown): void {
+		const log = this.#debugResponseLog;
+		if (!log) return;
+		if (typeof data === "string") {
+			log.write(data);
+			return;
+		}
+		if (data instanceof Uint8Array) {
+			log.write(data);
+			return;
+		}
+		if (data instanceof ArrayBuffer) {
+			log.write(new Uint8Array(data));
+			return;
+		}
+		log.write(String(data));
+	}
+
+	#startHeartbeat(socket: Bun.WebSocket): void {
+		this.#stopHeartbeat();
+		const intervalMs = getCodexWebSocketPingIntervalMs();
+		if (intervalMs <= 0) return;
+
+		this.#lastPingAt = 0;
+		const socketEventTarget = socket as EventTarget;
+		const onPong = () => {
+			// Pongs are inbound activity — refresh the reuse-health clock so a quiet
+			// but ping-responsive socket stays trustworthy across requests.
+			this.#lastInboundAt = Date.now();
+		};
+		if (
+			typeof socketEventTarget.addEventListener === "function" &&
+			typeof socketEventTarget.removeEventListener === "function"
+		) {
+			socketEventTarget.addEventListener("pong", onPong);
+			this.#removePongListener = () => socketEventTarget.removeEventListener("pong", onPong);
+		}
+
+		this.#heartbeatInterval = setInterval(() => {
+			if (this.#socket !== socket || socket.readyState !== WebSocket.OPEN) {
+				this.#stopHeartbeat();
+				return;
+			}
+			// Fail-closed on missing pongs even when no pong has ever been observed.
+			// The previous `#observedPong &&` guard disabled the timeout entirely on
+			// runtimes where Bun does not surface a `pong` event for our outgoing
+			// pings (issue #1450) — letting truly dead sockets sail through the
+			// pool until the per-request first-event / idle timeout (60–300 s)
+			// finally fired. Instead, trigger on inbound silence: if we sent a
+			// ping at least `pongTimeoutMs` ago and have received no traffic of
+			// any kind (data frame or pong) since, the socket is unhealthy.
+			const pongTimeoutMs = getCodexWebSocketPongTimeoutMs();
+			if (
+				pongTimeoutMs > 0 &&
+				this.#lastPingAt > 0 &&
+				this.#lastPingAt > this.#lastInboundAt &&
+				Date.now() - this.#lastPingAt > pongTimeoutMs
+			) {
+				this.#failQueue(createCodexWebSocketTransportError("websocket pong timeout"), "pong-timeout");
+				return;
+			}
+			if (typeof socket.ping !== "function") {
+				this.#stopHeartbeat();
+				return;
+			}
+			try {
+				socket.ping();
+				this.#lastPingAt = Date.now();
+			} catch (error) {
+				this.#failQueue(
+					createCodexWebSocketTransportError(
+						`websocket ping failed: ${error instanceof Error ? error.message : String(error)}`,
+					),
+					"ping-failed",
+				);
+			}
+		}, intervalMs);
+		this.#heartbeatInterval.unref();
+	}
+
+	#stopHeartbeat(): void {
+		if (this.#heartbeatInterval) {
+			clearInterval(this.#heartbeatInterval);
+			this.#heartbeatInterval = undefined;
+		}
+		if (this.#removePongListener) {
+			this.#removePongListener();
+			this.#removePongListener = undefined;
+		}
+		this.#lastPingAt = 0;
+	}
+
+	#failQueue(error: Error, closeReason: string): void {
+		logCodexDebug("codex websocket transport failure", { error: error.message, closeReason });
+		this.#queue.length = 0;
+		this.#queue.push(error);
+		this.close(closeReason);
+		this.#wakeWaiters();
+	}
+
+	/**
+	 * Discard data frames from a previous request that remained in `#queue`
+	 * after the consumer broke out on the terminal event. Preserves any queued
+	 * transport error (from `onerror` / `onclose` / `#failQueue`) so the next
+	 * `#nextMessage` surfaces the death signal instead of waiting it out.
+	 *
+	 * Returns the number of frames dropped (test/debug visibility only).
+	 */
+	#dropStaleFrames(): number {
+		if (this.#queue.length === 0) return 0;
+		const surviving = this.#queue.filter(item => item instanceof Error);
+		const dropped = this.#queue.length - surviving.length;
+		if (dropped === 0) return 0;
+		this.#queue.length = 0;
+		for (const item of surviving) this.#queue.push(item);
+		logCodexDebug("codex websocket dropped stale frames before request", { dropped });
+		return dropped;
+	}
+
+	#wakeWaiters(): void {
+		for (;;) {
+			const waiter = this.#waiters.shift();
+			if (!waiter) break;
+			waiter();
+		}
 	}
 
 	#push(item: Record<string, unknown> | Error | null): void {
+		if (item instanceof Error) {
+			if (!(this.#queue[0] instanceof Error)) {
+				this.#queue.length = 0;
+			}
+			this.#queue.push(item);
+			this.#wakeWaiters();
+			return;
+		}
+		if (item !== null && this.#queue.length >= getCodexWebSocketMessageQueueCapacity()) {
+			this.#failQueue(
+				createCodexWebSocketTransportError(
+					`websocket message queue exceeded ${getCodexWebSocketMessageQueueCapacity()} items`,
+				),
+				"queue-overflow",
+			);
+			return;
+		}
 		this.#queue.push(item);
 		const waiter = this.#waiters.shift();
 		if (waiter) waiter();
@@ -2250,12 +2566,22 @@ async function getOrCreateCodexWebSocketConnection(
 ): Promise<CodexWebSocketConnection> {
 	const headerRecord = headersToRecord(headers);
 	if (state.connection?.isOpen()) {
-		if (state.connection.matchesAuth(headerRecord)) {
+		if (!state.connection.matchesAuth(headerRecord)) {
+			state.connection.close("token-refresh");
+			resetCodexWebSocketAppendState(state);
+		} else if (state.connection.isHealthyForReuse()) {
 			logger.time("codexWs:reuseOpenSocket");
 			return state.connection;
+		} else {
+			// Open in readyState but no inbound traffic recently — likely server-
+			// evicted (issue #1450). Force a fresh handshake instead of writing
+			// `response.create` into a half-open buffer and waiting out the
+			// first-event timeout. Drop append state because the new socket
+			// won't carry the prior `previous_response_id` context.
+			logCodexDebug("codex websocket reuse rejected by health check", {});
+			state.connection.close("stale-reuse");
+			resetCodexWebSocketAppendState(state);
 		}
-		state.connection.close("token-refresh");
-		resetCodexWebSocketAppendState(state);
 	}
 	state.connection?.close("reconnect");
 	resetCodexWebSocketAppendState(state);

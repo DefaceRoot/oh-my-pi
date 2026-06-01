@@ -7,9 +7,10 @@
 /// <reference types="./bun-imports.d.ts" />
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { computeFileHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
+import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
 import { formatDirectory } from "./formatter";
@@ -528,7 +529,7 @@ async function evaluateMutationIntent(
 }
 
 /**
- * Build a textual hashline patch (with `¶path#hash` section header) that
+ * Build a textual hashline patch (with `¶path#tag` section header) that
  * transforms `actual` into `expected`. Returns null when no changes are
  * needed or the diff isn't expressible as straight insert/replace/delete ops.
  */
@@ -602,7 +603,10 @@ function buildGuidedHashlinePatch(file: string, actual: string, expected: string
 	flush();
 
 	if (ops.length === 0) return null;
-	const header = `¶${file}#${computeFileHash(actual)}`;
+	const normalizedActual = actual.replace(/\r\n?/g, "\n");
+	const snapshots = new InMemorySnapshotStore();
+	const tag = snapshots.record(file, normalizedActual);
+	const header = formatHashlineHeader(file, tag);
 	return `${header}\n${ops.join("\n")}`;
 }
 
@@ -869,6 +873,12 @@ export interface BenchmarkSummary {
 	totalTokens: TokenStats;
 	/** Average tokens per task (sum of best runs / number of tasks). */
 	avgTokensPerTask: TokenStats;
+	/** Median tokens across best runs (per-task distribution). */
+	medianTokensPerTask: TokenStats;
+	/** 1st-percentile tokens across best runs (per-task distribution). */
+	p1TokensPerTask: TokenStats;
+	/** 99th-percentile tokens across best runs (per-task distribution). */
+	p99TokensPerTask: TokenStats;
 	/** Duration summed over best runs. */
 	totalDuration: number;
 	/** Average duration of the best run per task. */
@@ -1771,6 +1781,42 @@ async function runConcurrentBenchmarkRun(
 	}
 }
 
+/**
+ * Linear-interpolated percentile (NumPy "linear" / type-7) over an ascending-sorted
+ * sample. `p` is a percentage in [0, 100]. Returns 0 for an empty sample.
+ */
+export function percentile(sortedAscending: readonly number[], p: number): number {
+	const n = sortedAscending.length;
+	if (n === 0) return 0;
+	if (n === 1) return sortedAscending[0]!;
+	const rank = (p / 100) * (n - 1);
+	const lo = Math.floor(rank);
+	const loVal = sortedAscending[lo]!;
+	const hi = Math.ceil(rank);
+	if (lo === hi) return loVal;
+	return loVal + (sortedAscending[hi]! - loVal) * (rank - lo);
+}
+
+/** Median / 1st / 99th percentile token stats over a set of runs (one sample per run). */
+export interface TokenDistribution {
+	median: TokenStats;
+	p1: TokenStats;
+	p99: TokenStats;
+}
+
+/** Compute the per-run token distribution (median, p1, p99) across the given runs. */
+export function summarizeTokenDistribution(runs: readonly TaskRunResult[]): TokenDistribution {
+	const input = runs.map(r => r.tokens.input).sort((a, b) => a - b);
+	const output = runs.map(r => r.tokens.output).sort((a, b) => a - b);
+	const total = runs.map(r => r.tokens.total).sort((a, b) => a - b);
+	const at = (p: number): TokenStats => ({
+		input: Math.round(percentile(input, p)),
+		output: Math.round(percentile(output, p)),
+		total: Math.round(percentile(total, p)),
+	});
+	return { median: at(50), p1: at(1), p99: at(99) };
+}
+
 export function buildBenchmarkResult(params: {
 	tasks: EditTask[];
 	config: BenchmarkConfig;
@@ -1831,6 +1877,7 @@ export function buildBenchmarkResult(params: {
 		output: bestRuns.reduce((sum, r) => sum + r.tokens.output, 0),
 		total: bestRuns.reduce((sum, r) => sum + r.tokens.total, 0),
 	};
+	const tokenDistribution = summarizeTokenDistribution(bestRuns);
 	const totalDuration = bestRuns.reduce((sum, r) => sum + r.duration, 0);
 	const totalToolCalls: ToolCallStats = {
 		read: bestRuns.reduce((sum, r) => sum + r.toolCalls.read, 0),
@@ -1874,6 +1921,9 @@ export function buildBenchmarkResult(params: {
 			output: Math.round(totalTokens.output / taskDenom),
 			total: Math.round(totalTokens.total / taskDenom),
 		},
+		medianTokensPerTask: tokenDistribution.median,
+		p1TokensPerTask: tokenDistribution.p1,
+		p99TokensPerTask: tokenDistribution.p99,
 		totalDuration,
 		avgDurationPerTask: Math.round(totalDuration / taskDenom),
 		avgIndentScore,
