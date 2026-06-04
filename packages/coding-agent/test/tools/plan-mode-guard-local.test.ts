@@ -10,9 +10,11 @@ interface SessionOverrides {
 	sessionId?: string | null;
 	cwd?: string;
 	planMode?: PlanModeState;
+	persistToRepo?: boolean;
 }
 
 function makeSession(overrides: SessionOverrides): ToolSession {
+	const persistToRepo = overrides.persistToRepo ?? false;
 	return {
 		cwd: overrides.cwd ?? "/repo",
 		hasUI: false,
@@ -20,6 +22,10 @@ function makeSession(overrides: SessionOverrides): ToolSession {
 		getSessionSpawns: () => "*",
 		settings: {
 			getPlansDirectory: () => "/plans",
+			get: (key: string) => {
+				if (key === "plan.persistToRepo") return persistToRepo;
+				return undefined;
+			},
 		},
 		getArtifactsDir: () => overrides.artifactsDir ?? null,
 		getSessionId: () => overrides.sessionId ?? null,
@@ -110,5 +116,79 @@ describe("enforcePlanModeWrite plan-mode redirect", () => {
 		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "delete" })).toThrow(
 			/Plan mode: deleting files is not allowed/,
 		);
+	});
+});
+
+describe("enforcePlanModeWrite repo-backed plan persistence", () => {
+	const repoPlanMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
+	const repoRoot = "/repo";
+
+	it("permits create under .plans when persistToRepo is true", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" }),
+		).not.toThrow();
+	});
+
+	it("permits update under .plans when persistToRepo is true", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "update" }),
+		).not.toThrow();
+	});
+
+	it("permits supporting artifacts under the same .plans tree", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/notes.md`, { op: "create" }),
+		).not.toThrow();
+	});
+
+	it("rejects writes outside .plans even when persistToRepo is true", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/src/foo.ts`, { op: "update" }),
+		).toThrow(/only the plan file may be modified/);
+	});
+
+	it("rejects move/rename under .plans when persistToRepo is true", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, {
+				move: `${repoRoot}/.plans/foo/plan-v2.md`,
+			}),
+		).toThrow(/Plan mode: renaming files is not allowed/);
+	});
+
+	it("rejects delete under .plans when persistToRepo is true", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "delete" }),
+		).toThrow(/Plan mode: deleting files is not allowed/);
+	});
+
+	it("rejects .plans writes when persistToRepo is false", () => {
+		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: false });
+		expect(() =>
+			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" }),
+		).toThrow(/only the plan file may be modified/);
+	});
+
+	it("still allows the active plan file when persistToRepo is false", () => {
+		const session = makeSession({
+			artifactsDir: "/tmp/agent-artifacts",
+			planMode: repoPlanMode,
+			persistToRepo: false,
+		});
+		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "update" })).not.toThrow();
+	});
+});
+
+describe("resolvePlanPath .plans regression", () => {
+	it("does not redirect .plans/foo/plan.md to the local://PLAN.md alias", () => {
+		const planMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
+		const session = makeSession({ cwd: "/repo", planMode });
+		const dotPlansPath = "/repo/.plans/foo/plan.md";
+		expect(resolvePlanPath(session, dotPlansPath)).toBe(dotPlansPath);
 	});
 });
