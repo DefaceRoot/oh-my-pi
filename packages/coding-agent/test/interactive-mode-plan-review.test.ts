@@ -857,4 +857,86 @@ describe("InteractiveMode plan review rendering", () => {
 		const rendered = renderAssistant(message);
 		expect(rendered).toContain("Operation aborted");
 	});
+
+	// ==========================================================================
+	// Repo-backed plan approval (plan.persistToRepo = true)
+	//
+	// These tests verify that when the setting is enabled, the standing resolve
+	// handler reads .plans/<title>/plan.md under the repo/cwd root, returns
+	// PlanApprovalDetails with repo-backed absolute paths, and handlePlanApproval
+	// records the absolute plan reference path without attempting local:// rename.
+	// They are expected to fail against the current implementation, which only
+	// handles local:// plan paths.
+	// ==========================================================================
+
+	it("resolve handler returns repo-backed PlanApprovalDetails with .plans/<title>/plan.md paths", async () => {
+		session.settings.set("plan.persistToRepo", true);
+		const planTitle = "my-feature";
+		const planDir = path.join(tempDir.path(), ".plans", planTitle);
+		const planFile = path.join(planDir, "plan.md");
+		await Bun.write(planFile, "# My feature\n\nImplement the thing.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+
+		const handler = session.peekStandingResolveHandler();
+		expect(handler).toBeDefined();
+
+		const result = await handler!({
+			action: "apply",
+			reason: "Plan finalized",
+			extra: { title: planTitle },
+		});
+
+		const details = (result as { details?: { sourceResultDetails?: unknown } }).details
+			?.sourceResultDetails as import("../src/plan-mode/approved-plan").PlanApprovalDetails | undefined;
+		expect(details).toBeDefined();
+		const absoluteRepoPath = path.resolve(tempDir.path(), ".plans", planTitle, "plan.md");
+		expect(details!.planFilePath).toBe(absoluteRepoPath);
+		expect(details!.finalPlanFilePath).toBe(absoluteRepoPath);
+		expect(details!.title).toBe(planTitle);
+	});
+
+	it("resolve handler rejects when .plans/<title>/plan.md is missing", async () => {
+		session.settings.set("plan.persistToRepo", true);
+		const planTitle = "nonexistent";
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+
+		const handler = session.peekStandingResolveHandler();
+		expect(handler).toBeDefined();
+
+		await expect(
+			handler!({
+				action: "apply",
+				reason: "Plan finalized",
+				extra: { title: planTitle },
+			}),
+		).rejects.toThrow(`.plans/${planTitle}/plan.md`);
+	});
+
+	it("handlePlanApproval with absolute repo plan path records reference path without local:// rename", async () => {
+		session.settings.set("plan.persistToRepo", true);
+		const planTitle = "repo-approval";
+		const planDir = path.join(tempDir.path(), ".plans", planTitle);
+		const absoluteRepoPath = path.resolve(planDir, "plan.md");
+		await Bun.write(absoluteRepoPath, "# Repo plan\n\nExecute from repo.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and keep context");
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath: absoluteRepoPath,
+			planExists: true,
+			title: planTitle,
+			finalPlanFilePath: absoluteRepoPath,
+		});
+
+		expect(session.getPlanReferencePath()).toBe(absoluteRepoPath);
+	});
 });
