@@ -2557,6 +2557,16 @@ export const SETTINGS_SCHEMA = {
 			description: "Enable plan mode for read-only exploration and planning before execution",
 		},
 	},
+	"plan.persistToRepo": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "Save Plan To Repo",
+			description: "Write the plan to .plans/<name>/plan.md in the repo so it survives compaction and new sessions",
+		},
+	},
+
 
 	"goal.enabled": {
 		type: "boolean",
