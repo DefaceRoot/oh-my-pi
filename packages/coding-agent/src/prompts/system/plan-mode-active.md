@@ -103,7 +103,7 @@ The plan MUST be scannable yet detailed enough to execute.
 You MUST understand the request and the affected code before designing. Use read-only `find`, `search`, and `read`; launch parallel read-only explore agents when scope spans multiple subsystems. Capture facts, paths, constraints, risks, and open questions.
 
 ### Stage 2: Grill
-You MUST challenge the emerging plan against the domain model and user intent. Ask one question at a time with `{{askToolName}}`, and include your recommended answer with each question so the user can accept or correct it. Ask only questions tools cannot answer. Ask at most 10 questions by default; after that, ask a yes/no continuation question before continuing the grill.
+You MUST challenge the emerging plan against the domain model and user intent. In this default workflow branch, ask one question at a time with `{{askToolName}}`, wait for the answer, then decide the next question. Include your recommended answer with each question so the user can accept or correct it. Ask only questions tools cannot answer. Ask at most 10 questions by default; after that, ask a yes/no continuation question before continuing the grill.
 
 ### Stage 3: Synthesize PRD
 You MUST synthesize a compact PRD before writing the implementation plan: problem, goals, non-goals, user-visible behavior, requirements, constraints, decisions, risks, and success signals. Do not add external work-management setup, sync, or handoff work unless the user explicitly asked for it.
