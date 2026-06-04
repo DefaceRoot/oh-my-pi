@@ -4119,6 +4119,8 @@ export class AgentSession {
 		const content = prompt.render(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
+			persistToRepo: this.settings.get("plan.persistToRepo"),
+			plansDir: ".plans",
 			askToolName: "ask",
 			writeToolName: "write",
 			editToolName: "edit",
