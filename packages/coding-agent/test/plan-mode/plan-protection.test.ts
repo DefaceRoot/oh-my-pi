@@ -76,6 +76,39 @@ describe("createPlanReadMatcher", () => {
 	});
 });
 
+// --- Repo-backed draft plan path protection ---
+
+describe("createPlanReadMatcher — repo-backed .plans/ paths", () => {
+	it("protects reads of relative .plans/foo/plan.md before getPlanReferencePath returns it", () => {
+		// The reference path hasn't been set to the repo-backed path yet,
+		// but reads targeting .plans/<name>/plan.md should still be protected.
+		const matcher = createPlanReadMatcher(() => "local://PLAN.md");
+		expect(matcher(context({ path: ".plans/my-feature/plan.md" }))).toBe(true);
+	});
+
+	it("protects reads with selector suffixes like :raw or :1-20", () => {
+		const matcher = createPlanReadMatcher(() => "local://PLAN.md");
+		expect(matcher(context({ path: ".plans/my-feature/plan.md:raw" }))).toBe(true);
+		expect(matcher(context({ path: ".plans/my-feature/plan.md:1-20" }))).toBe(true);
+		expect(matcher(context({ path: ".plans/my-feature/plan.md:50-100,200-300" }))).toBe(true);
+	});
+
+	it("protects reads of absolute paths containing /.plans/foo/plan.md", () => {
+		const matcher = createPlanReadMatcher(() => "local://PLAN.md");
+		expect(matcher(context({ path: "/home/user/project/.plans/my-feature/plan.md" }))).toBe(true);
+	});
+
+	it("does not protect .plans/foo/notes.md", () => {
+		const matcher = createPlanReadMatcher(() => "local://PLAN.md");
+		expect(matcher(context({ path: ".plans/my-feature/notes.md" }))).toBe(false);
+	});
+
+	it("does not protect .plans/foo/plan.md.bak", () => {
+		const matcher = createPlanReadMatcher(() => "local://PLAN.md");
+		expect(matcher(context({ path: ".plans/my-feature/plan.md.bak" }))).toBe(false);
+	});
+});
+
 // --- Integration: plan reads survive prune/shake, regular reads do not -------
 
 function usage(): Usage {
