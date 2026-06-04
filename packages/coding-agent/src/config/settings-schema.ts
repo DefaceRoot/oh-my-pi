@@ -2567,7 +2567,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-
 	"goal.enabled": {
 		type: "boolean",
 		default: true,

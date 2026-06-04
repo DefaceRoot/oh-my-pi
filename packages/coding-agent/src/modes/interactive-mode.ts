@@ -1471,7 +1471,8 @@ export class InteractiveMode implements InteractiveModeContext {
 						);
 					}
 					const normalized = normalizePlanTitle(suppliedTitle);
-					const repoRoot = git.repo.resolveSync(this.sessionManager.getCwd())?.repoRoot ?? this.sessionManager.getCwd();
+					const repoRoot =
+						git.repo.resolveSync(this.sessionManager.getCwd())?.repoRoot ?? this.sessionManager.getCwd();
 					const absRepoPlan = repoPlanPathForTitle(repoRoot, normalized.title);
 					const planContent = await this.#readPlanFile(absRepoPlan);
 					if (planContent === null) {

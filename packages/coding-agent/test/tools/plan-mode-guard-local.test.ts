@@ -125,30 +125,24 @@ describe("enforcePlanModeWrite repo-backed plan persistence", () => {
 
 	it("permits create under .plans when persistToRepo is true", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" }),
-		).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" })).not.toThrow();
 	});
 
 	it("permits update under .plans when persistToRepo is true", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "update" }),
-		).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "update" })).not.toThrow();
 	});
 
 	it("permits supporting artifacts under the same .plans tree", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/notes.md`, { op: "create" }),
-		).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/notes.md`, { op: "create" })).not.toThrow();
 	});
 
 	it("rejects writes outside .plans even when persistToRepo is true", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/src/foo.ts`, { op: "update" }),
-		).toThrow(/only the plan file may be modified/);
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/src/foo.ts`, { op: "update" })).toThrow(
+			/only the plan file may be modified/,
+		);
 	});
 
 	it("rejects move/rename under .plans when persistToRepo is true", () => {
@@ -162,16 +156,16 @@ describe("enforcePlanModeWrite repo-backed plan persistence", () => {
 
 	it("rejects delete under .plans when persistToRepo is true", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: true });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "delete" }),
-		).toThrow(/Plan mode: deleting files is not allowed/);
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "delete" })).toThrow(
+			/Plan mode: deleting files is not allowed/,
+		);
 	});
 
 	it("rejects .plans writes when persistToRepo is false", () => {
 		const session = makeSession({ cwd: repoRoot, planMode: repoPlanMode, persistToRepo: false });
-		expect(() =>
-			enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" }),
-		).toThrow(/only the plan file may be modified/);
+		expect(() => enforcePlanModeWrite(session, `${repoRoot}/.plans/foo/plan.md`, { op: "create" })).toThrow(
+			/only the plan file may be modified/,
+		);
 	});
 
 	it("still allows the active plan file when persistToRepo is false", () => {

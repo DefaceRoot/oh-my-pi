@@ -888,8 +888,9 @@ describe("InteractiveMode plan review rendering", () => {
 			extra: { title: planTitle },
 		});
 
-		const details = (result as { details?: { sourceResultDetails?: unknown } }).details
-			?.sourceResultDetails as import("../src/plan-mode/approved-plan").PlanApprovalDetails | undefined;
+		const details = (result as { details?: { sourceResultDetails?: unknown } }).details?.sourceResultDetails as
+			| import("../src/plan-mode/approved-plan").PlanApprovalDetails
+			| undefined;
 		expect(details).toBeDefined();
 		const absoluteRepoPath = path.resolve(tempDir.path(), ".plans", planTitle, "plan.md");
 		expect(details!.planFilePath).toBe(absoluteRepoPath);

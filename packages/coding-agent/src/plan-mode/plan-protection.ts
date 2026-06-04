@@ -95,6 +95,10 @@ export function createPlanReadMatcher(getPlanReferencePath: () => string): (cont
 	return (context: ProtectedToolContext) => {
 		const path = getReadToolPath(context);
 		if (path === undefined) return false;
-		return readTargetsPlan(path, LOCAL_PLAN_ALIAS) || readTargetsPlan(path, getPlanReferencePath()) || readTargetsRepoBackedPlan(path);
+		return (
+			readTargetsPlan(path, LOCAL_PLAN_ALIAS) ||
+			readTargetsPlan(path, getPlanReferencePath()) ||
+			readTargetsRepoBackedPlan(path)
+		);
 	};
 }
