@@ -11,6 +11,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import type { HookSelectorSlider } from "../src/modes/components/hook-selector";
+import type { PlanApprovalDetails } from "../src/plan-mode/approved-plan";
 import { InteractiveMode } from "../src/modes/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
@@ -889,7 +890,7 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 
 		const details = (result as { details?: { sourceResultDetails?: unknown } }).details?.sourceResultDetails as
-			| import("../src/plan-mode/approved-plan").PlanApprovalDetails
+			| PlanApprovalDetails
 			| undefined;
 		expect(details).toBeDefined();
 		const absoluteRepoPath = path.resolve(tempDir.path(), ".plans", planTitle, "plan.md");
