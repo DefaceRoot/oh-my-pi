@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { resolveLocalUrlToPath, resolveVaultUrlToPath } from "../internal-urls";
+import * as git from "../utils/git";
 import type { ToolSession } from ".";
 import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
@@ -8,6 +9,19 @@ const VAULT_SCHEME_PREFIX = "vault:";
 const LOCAL_SCHEME_PREFIX = "local:";
 const PLAN_ALIAS_FILE = "PLAN.md";
 const LOCAL_PLAN_ALIAS = "local://PLAN.md";
+
+function resolveRepoRoot(session: ToolSession): string {
+	return git.repo.resolveSync(session.cwd)?.repoRoot ?? session.cwd;
+}
+
+function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
+	const relative = path.relative(path.resolve(directoryPath), path.resolve(targetPath));
+	return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function isUnderRepoPlansDir(session: ToolSession, resolvedPath: string): boolean {
+	return isPathInsideDirectory(resolvedPath, path.resolve(resolveRepoRoot(session), ".plans"));
+}
 
 function resolveRawPath(session: ToolSession, targetPath: string): string {
 	const normalized = normalizeLocalScheme(targetPath);
@@ -48,6 +62,8 @@ export function resolvePlanPath(session: ToolSession, targetPath: string): strin
 	const state = session.getPlanModeState?.();
 	if (!state?.enabled) return resolved;
 
+	if (isUnderRepoPlansDir(session, resolved)) return resolved;
+
 	const planResolved = resolveRawPath(session, state.planFilePath);
 	if (resolved === planResolved) return resolved;
 	if (isPlanAliasTarget(session, targetPath, resolved)) return planResolved;
@@ -64,9 +80,6 @@ export function enforcePlanModeWrite(
 	const state = session.getPlanModeState?.();
 	if (!state?.enabled) return;
 
-	const resolvedTarget = resolvePlanPath(session, targetPath);
-	const resolvedPlan = resolvePlanPath(session, state.planFilePath);
-
 	if (options?.move) {
 		throw new ToolError("Plan mode: renaming files is not allowed.");
 	}
@@ -75,6 +88,16 @@ export function enforcePlanModeWrite(
 		throw new ToolError("Plan mode: deleting files is not allowed.");
 	}
 
+	const resolvedTarget = resolvePlanPath(session, targetPath);
+
+	if (session.settings.get("plan.persistToRepo")) {
+		const repoRoot = resolveRepoRoot(session);
+		const plansDir = path.resolve(repoRoot, ".plans");
+		if (isPathInsideDirectory(resolvedTarget, plansDir)) return;
+		throw new ToolError(`Plan mode: only the plan file may be modified (${state.planFilePath}).`);
+	}
+
+	const resolvedPlan = resolvePlanPath(session, state.planFilePath);
 	if (resolvedTarget !== resolvedPlan) {
 		throw new ToolError(`Plan mode: only the plan file may be modified (${state.planFilePath}).`);
 	}
