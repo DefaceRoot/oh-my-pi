@@ -65,8 +65,10 @@ import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import {
 	humanizePlanTitle,
+	normalizePlanTitle,
 	type PlanApprovalDetails,
 	renameApprovedPlanFile,
+	repoPlanPathForTitle,
 	resolvePlanTitle,
 } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -88,6 +90,7 @@ import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescripti
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
+import * as git from "../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -1460,6 +1463,34 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!state?.enabled) {
 					throw new ToolError("Plan mode is not active.");
 				}
+				if (this.session.settings.get("plan.persistToRepo")) {
+					const suppliedTitle = extra?.title;
+					if (typeof suppliedTitle !== "string") {
+						throw new ToolError(
+							"Repo-backed plan approval requires extra.title. Write `.plans/<title>/plan.md` first, then request approval.",
+						);
+					}
+					const normalized = normalizePlanTitle(suppliedTitle);
+					const repoRoot = git.repo.resolveSync(this.sessionManager.getCwd())?.repoRoot ?? this.sessionManager.getCwd();
+					const absRepoPlan = repoPlanPathForTitle(repoRoot, normalized.title);
+					const planContent = await this.#readPlanFile(absRepoPlan);
+					if (planContent === null) {
+						const relativeRepoPlan = `.plans/${normalized.title}/plan.md`;
+						throw new ToolError(
+							`Plan file not found at ${relativeRepoPlan}. Write \`${relativeRepoPlan}\` first before requesting approval.`,
+						);
+					}
+					const details: PlanApprovalDetails = {
+						planFilePath: absRepoPlan,
+						finalPlanFilePath: absRepoPlan,
+						title: normalized.title,
+						planExists: true,
+					};
+					return {
+						content: [{ type: "text" as const, text: "Plan ready for approval." }],
+						details,
+					};
+				}
 				const planFilePath = state.planFilePath;
 				const planContent = await this.#readPlanFile(planFilePath);
 				if (planContent === null) {
@@ -1757,12 +1788,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<void> {
-		await renameApprovedPlanFile({
-			planFilePath: options.planFilePath,
-			finalPlanFilePath: options.finalPlanFilePath,
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
+		if (options.planFilePath.startsWith("local:") && options.finalPlanFilePath.startsWith("local:")) {
+			await renameApprovedPlanFile({
+				planFilePath: options.planFilePath,
+				finalPlanFilePath: options.finalPlanFilePath,
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			});
+		}
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 
 		// Mark the pending abort caused by the plan-mode → compaction transition as
@@ -1780,13 +1813,15 @@ export class InteractiveMode implements InteractiveModeContext {
 
 			if (!options.preserveContext) {
 				await this.handleClearCommand();
-				// The new session has a fresh local:// root — persist the approved plan there
-				// so `local://<title>.md` resolves correctly in the execution session.
-				const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
-					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-					getSessionId: () => this.sessionManager.getSessionId(),
-				});
-				await Bun.write(newLocalPath, planContent);
+				if (options.finalPlanFilePath.startsWith("local:")) {
+					// The new session has a fresh local:// root — persist the approved plan there
+					// so `local://<title>.md` resolves correctly in the execution session.
+					const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+						getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+						getSessionId: () => this.sessionManager.getSessionId(),
+					});
+					await Bun.write(newLocalPath, planContent);
+				}
 			} else if (options.compactBeforeExecute) {
 				// Distill the plan-mode transcript before the execution turn is queued so
 				// the plan-approved synthetic prompt lands as a fresh cache anchor.

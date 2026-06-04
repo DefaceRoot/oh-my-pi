@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { normalizeLocalScheme } from "../tools/path-utils";
@@ -47,6 +48,10 @@ export function normalizePlanTitle(title: string): { title: string; fileName: st
 
 	const fileName = `${sanitized}.md`;
 	return { title: sanitized, fileName };
+}
+
+export function repoPlanPathForTitle(repoRoot: string, title: string): string {
+	return path.join(repoRoot, ".plans", normalizePlanTitle(title).title, "plan.md");
 }
 
 /** Best-effort derivation of a plan title from inputs the agent already produced.
