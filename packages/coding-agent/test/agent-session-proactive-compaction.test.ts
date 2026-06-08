@@ -12,7 +12,11 @@ import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensio
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { type SessionHeader, loadEntriesFromFile, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import {
+	loadEntriesFromFile,
+	type SessionHeader,
+	SessionManager,
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 
 const runtimeSignalStoreKey = "__ompProactiveCompactionSignals";
