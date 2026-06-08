@@ -839,4 +839,31 @@ describe("AgentSession handoff", () => {
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(generateHandoffSpy.mock.calls[0]?.[4]?.aborted).toBe(true);
 	});
+
+	it("appends (1) to auto-generated title with meaningful numeric parenthetical instead of incrementing", async () => {
+		// Regression: a non-handoff auto title ending in a number like "Fix cache bug (2026)"
+		// must produce "Fix cache bug (2026) (1)", NOT "Fix cache bug (2027)".
+		const originalTitle = "Fix cache bug (2026)";
+		await session.setSessionName(originalTitle, "auto");
+
+		const handoffText = "## Goal\nContinue from here";
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
+
+		await session.handoff();
+		const handoffSessionFile = session.sessionFile;
+		if (!handoffSessionFile) {
+			throw new Error("Expected handoff session file");
+		}
+
+		type HeaderEntry = { type?: string; title?: string; titleSource?: string };
+		const entries = (await Bun.file(handoffSessionFile).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as HeaderEntry);
+
+		const header = entries.find(e => e.type === "session");
+		expect(header).toBeDefined();
+		expect(header!.title).toBe("Fix cache bug (2026) (1)");
+		expect(header!.titleSource).toBe("auto");
+	});
 });
