@@ -228,6 +228,34 @@ describe("AgentSession handoff", () => {
 		expect(previousSessionText).toContain('"text":"seed"');
 	});
 
+	it("persists deterministic auto title on handoff session so lists do not show no messages", async () => {
+		const originalTitle = "Fix cache bug";
+		await session.setSessionName(originalTitle, "user");
+
+		const handoffText = "## Goal\nContinue from here";
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
+
+		await session.handoff();
+		const handoffSessionFile = session.sessionFile;
+		if (!handoffSessionFile) {
+			throw new Error("Expected handoff session file");
+		}
+
+		type HeaderEntry = { type?: string; title?: string; titleSource?: string };
+		const entries = (await Bun.file(handoffSessionFile).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as HeaderEntry);
+
+		const header = entries.find(e => e.type === "session");
+		expect(header).toBeDefined();
+		expect(header!.title).toBeDefined();
+		expect(typeof header!.title).toBe("string");
+		expect(header!.title!.length).toBeGreaterThan(0);
+		expect(header!.title).toContain(originalTitle);
+		expect(header!.titleSource).toBe("auto");
+	});
+
 	it("does not run auto maintenance when strategy is off", async () => {
 		session.settings.set("compaction.strategy", "off");
 		session.settings.set("compaction.thresholdPercent", 1);
