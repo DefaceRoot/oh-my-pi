@@ -381,6 +381,7 @@ export class InputController {
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
 				this.#showTinyTitleDownloadProgress(this.ctx.settings.get("providers.tinyModel"));
 				const titleSessionId = this.ctx.session.sessionId;
+				const titleSessionManagerId = this.ctx.sessionManager.getSessionId();
 				const registry = this.ctx.session.modelRegistry;
 				generateSessionTitle(text, registry, this.ctx.settings, titleSessionId, this.ctx.session.model, provider =>
 					this.ctx.session.agent.metadataForProvider(provider),
@@ -388,7 +389,7 @@ export class InputController {
 					.then(async title => {
 						if (
 							title &&
-							this.ctx.session.sessionId === titleSessionId &&
+							this.ctx.sessionManager.getSessionId() === titleSessionManagerId &&
 							!this.ctx.sessionManager.getSessionName()
 						) {
 							const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
