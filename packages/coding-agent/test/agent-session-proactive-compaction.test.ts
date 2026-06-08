@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -11,7 +12,7 @@ import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensio
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { type SessionHeader, loadEntriesFromFile, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 
 const runtimeSignalStoreKey = "__ompProactiveCompactionSignals";
@@ -265,5 +266,53 @@ describe("AgentSession proactive compaction", () => {
 		expect(abortSpy).not.toHaveBeenCalled();
 		expect(getRuntimeSignals()).not.toContain("compaction:start:threshold");
 		expect(promptSpy).not.toHaveBeenCalled();
+	});
+
+	it("sets auto title on new session after proactive handoff compaction", async () => {
+		await createSession({
+			"compaction.proactiveEnabled": true,
+			"compaction.strategy": "handoff",
+			"compaction.autoContinue": false,
+		});
+
+		const handoffText = "## Goal\nContinue from here";
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
+
+		await sessionManager.setSessionName("Source session title", "user");
+
+		const abortSpy = vi.spyOn(session.agent, "abort");
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = createHighUsageToolCallMessage();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "turn_end", message: assistantMsg, toolResults: [] });
+
+		await waitForAsyncHandler(() => abortSpy.mock.calls.length === 1, "Proactive abort timed out");
+		await withTimeout(compactionDone, 1000, "Proactive handoff compaction timed out");
+		await Promise.resolve();
+		vi.advanceTimersByTime(200);
+		await session.waitForIdle();
+
+		// After handoff, the new current session must have a non-empty auto title
+		const title = sessionManager.getSessionName();
+		expect(title).toBeDefined();
+		expect(title!.length).toBeGreaterThan(0);
+		expect(sessionManager.titleSource).toBe("auto");
+
+		// Verify persisted header carries the title and titleSource
+		const sessionFile = sessionManager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const entries = await loadEntriesFromFile(sessionFile!);
+		const header = entries.find(
+			(entry): entry is SessionHeader =>
+				typeof entry === "object" && entry !== null && "type" in entry && entry.type === "session",
+		);
+		expect(header?.title).toBeDefined();
+		expect(header!.title!.length).toBeGreaterThan(0);
+		expect(header?.titleSource).toBe("auto");
 	});
 });
