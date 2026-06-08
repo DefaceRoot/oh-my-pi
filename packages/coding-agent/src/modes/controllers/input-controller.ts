@@ -382,16 +382,15 @@ export class InputController {
 				this.#showTinyTitleDownloadProgress(this.ctx.settings.get("providers.tinyModel"));
 				const titleSessionId = this.ctx.session.sessionId;
 				const registry = this.ctx.session.modelRegistry;
-				generateSessionTitle(
-					text,
-					registry,
-					this.ctx.settings,
-					titleSessionId,
-					this.ctx.session.model,
-					provider => this.ctx.session.agent.metadataForProvider(provider),
+				generateSessionTitle(text, registry, this.ctx.settings, titleSessionId, this.ctx.session.model, provider =>
+					this.ctx.session.agent.metadataForProvider(provider),
 				)
 					.then(async title => {
-						if (title && this.ctx.session.sessionId === titleSessionId && !this.ctx.sessionManager.getSessionName()) {
+						if (
+							title &&
+							this.ctx.session.sessionId === titleSessionId &&
+							!this.ctx.sessionManager.getSessionName()
+						) {
 							const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
 							if (applied) {
 								setSessionTerminalTitle(

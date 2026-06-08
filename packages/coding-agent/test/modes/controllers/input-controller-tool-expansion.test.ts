@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { InputController } from "../../../src/modes/controllers/input-controller";
-import * as titleGenerator from "../../../src/utils/title-generator";
 import type { InteractiveModeContext } from "../../../src/modes/types";
+import * as titleGenerator from "../../../src/utils/title-generator";
 
 type TestEditor = {
 	onSubmit?: (text: string) => Promise<void>;
@@ -41,12 +41,14 @@ function createTitleGenerationContext() {
 		titleSource = source;
 		return true;
 	});
-	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => ({
-		text: input.text,
-		images: input.images,
-		cancelled: false,
-		started: false,
-	}));
+	const startPendingSubmission = vi.fn(
+		(input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => ({
+			text: input.text,
+			images: input.images,
+			cancelled: false,
+			started: false,
+		}),
+	);
 	const ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
 		ui: { requestRender: vi.fn() } as unknown as InteractiveModeContext["ui"],
