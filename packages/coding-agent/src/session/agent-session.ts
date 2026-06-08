@@ -230,6 +230,7 @@ import type {
 	CompactionEntry,
 	NewSessionOptions,
 	SessionContext,
+	SessionEntry,
 	SessionManager,
 } from "./session-manager";
 import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
@@ -506,6 +507,8 @@ function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): strin
 }
 
 const IRC_REPLY_MAX_BYTES = 4096;
+const HANDOFF_SESSION_FALLBACK_TITLE = "Handoff session";
+const HANDOFF_TITLE_SUFFIX = /^(.*) \((\d+)\)$/;
 export const ANTHROPIC_TOOL_CALL_BATCH_CAP = 4;
 const CLAUDE_OPUS_4_8_MODEL_ID = /(?:^|[./_-])claude-opus-4[.-]8\b/i;
 
@@ -2419,6 +2422,53 @@ export class AgentSession {
 		if (text.length > 0) return text;
 		const hasImages = content.some(c => c.type === "image");
 		return hasImages ? "[Image]" : "";
+	}
+
+	#deriveHandoffSessionTitle(
+		sourceTitle: string | undefined,
+		sourceTitleSource: "auto" | "user" | undefined,
+		entries: readonly SessionEntry[],
+	): string {
+		const normalizedSourceTitle = this.#normalizeHandoffTitleBase(sourceTitle);
+		if (normalizedSourceTitle) {
+			return this.#appendHandoffTitleCount(normalizedSourceTitle, sourceTitleSource === "auto");
+		}
+
+		const firstUserTitle = this.#findFirstUserHandoffTitleBase(entries);
+		return this.#appendHandoffTitleCount(firstUserTitle ?? HANDOFF_SESSION_FALLBACK_TITLE, false);
+	}
+
+	#appendHandoffTitleCount(base: string, allowIncrement: boolean): string {
+		if (allowIncrement) {
+			const match = HANDOFF_TITLE_SUFFIX.exec(base);
+			const baseWithoutSuffix = match?.[1];
+			const countText = match?.[2];
+			if (baseWithoutSuffix && countText) {
+				const count = Number(countText);
+				if (Number.isSafeInteger(count) && count >= 0) {
+					return `${baseWithoutSuffix} (${count + 1})`;
+				}
+			}
+		}
+
+		return `${base} (1)`;
+	}
+
+	#findFirstUserHandoffTitleBase(entries: readonly SessionEntry[]): string | undefined {
+		for (const entry of entries) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			return this.#normalizeHandoffTitleBase(this.#getUserMessageText(entry.message));
+		}
+		return undefined;
+	}
+
+	#normalizeHandoffTitleBase(value: string | undefined): string | undefined {
+		if (!value) return undefined;
+		const normalized = value
+			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+		return normalized.length > 0 ? normalized : undefined;
 	}
 
 	/** Find the last assistant message in agent state (including aborted ones) */
@@ -6089,6 +6139,8 @@ export class AgentSession {
 	 */
 	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		const entries = this.sessionManager.getBranch();
+		const sourceSessionTitle = this.sessionManager.getSessionName();
+		const sourceTitleSource = this.sessionManager.titleSource;
 		const messageCount = entries.filter(e => e.type === "message").length;
 
 		if (messageCount < 2) {
@@ -6155,11 +6207,14 @@ export class AgentSession {
 				return undefined;
 			}
 
+			const handoffSessionTitle = this.#deriveHandoffSessionTitle(sourceSessionTitle, sourceTitleSource, entries);
+
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			await this.sessionManager.setSessionName(handoffSessionTitle, "auto");
 			this.agent.reset();
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
