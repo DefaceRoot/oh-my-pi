@@ -866,4 +866,105 @@ describe("AgentSession handoff", () => {
 		expect(header!.title).toBe("Fix cache bug (2026) (1)");
 		expect(header!.titleSource).toBe("auto");
 	});
+
+	it("derives handoff title from next usable user message when first normalizes to empty", async () => {
+		// When the source session has no title and the first user message is whitespace-only,
+		// the handoff title should come from the next user message with usable text,
+		// not fall back to "Handoff session".
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		await session.dispose();
+		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+			}),
+			modelRegistry,
+		});
+
+		// Whitespace-only first user message — normalizes to empty
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "   \t  " }],
+			timestamp: Date.now() - 4,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "blank response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 16,
+				output: 8,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 24,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 3,
+		});
+		// Second user message with usable title text
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "Fix cache bug" }],
+			timestamp: Date.now() - 2,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "done" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 16,
+				output: 8,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 24,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		});
+
+		// Source session must have no title for the fallback path to be exercised
+		expect(sessionManager.getSessionName()).toBeUndefined();
+
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue("## Goal\nContinue");
+
+		await session.handoff();
+		const handoffSessionFile = session.sessionFile;
+		if (!handoffSessionFile) {
+			throw new Error("Expected handoff session file");
+		}
+
+		type HeaderEntry = { type?: string; title?: string; titleSource?: string };
+		const entries = (await Bun.file(handoffSessionFile).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as HeaderEntry);
+
+		const header = entries.find(e => e.type === "session");
+		expect(header).toBeDefined();
+		expect(header!.title).toBe("Fix cache bug (1)");
+		expect(header!.titleSource).toBe("auto");
+	});
 });
