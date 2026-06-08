@@ -20,7 +20,8 @@ async function flushMicrotasks(turns = 4): Promise<void> {
 
 function createTitleGenerationContext() {
 	let editorText = "";
-	let activeSessionId = "source-session";
+	const providerSessionId = "provider-session";
+	let persistedSessionId = "source-session";
 	let sessionName: string | undefined;
 	let titleSource: TitleSource;
 
@@ -54,7 +55,7 @@ function createTitleGenerationContext() {
 		ui: { requestRender: vi.fn() } as unknown as InteractiveModeContext["ui"],
 		session: {
 			get sessionId() {
-				return activeSessionId;
+				return providerSessionId;
 			},
 			isStreaming: false,
 			isCompacting: false,
@@ -72,7 +73,7 @@ function createTitleGenerationContext() {
 			get titleSource() {
 				return titleSource;
 			},
-			getSessionId: () => activeSessionId,
+			getSessionId: () => persistedSessionId,
 			getSessionName: () => sessionName,
 			getCwd: () => "/repo",
 			setSessionName,
@@ -97,7 +98,7 @@ function createTitleGenerationContext() {
 		setSessionName,
 		getSessionName: () => sessionName,
 		switchToHandoffSession(name: string): void {
-			activeSessionId = "handoff-session";
+			persistedSessionId = "handoff-session";
 			sessionName = name;
 			titleSource = "auto";
 		},
@@ -133,7 +134,7 @@ describe("InputController tool output expansion", () => {
 });
 
 describe("InputController title generation", () => {
-	it("ignores a late first-turn auto title after the active session changes", async () => {
+	it("ignores a late first-turn auto title after the persisted session changes while the provider id stays stable", async () => {
 		const originalNoTitle = Bun.env.PI_NO_TITLE;
 		delete Bun.env.PI_NO_TITLE;
 		const title = Promise.withResolvers<string | null>();
@@ -147,8 +148,13 @@ describe("InputController title generation", () => {
 			await submit(editor, "Please fix the cache race");
 
 			expect(generateTitle).toHaveBeenCalledTimes(1);
+			expect(generateTitle.mock.calls[0]?.[3]).toBe("provider-session");
+			expect(ctx.session.sessionId).toBe("provider-session");
+			expect(ctx.sessionManager.getSessionId()).toBe("source-session");
 
 			switchToHandoffSession("Please fix the cache race (1)");
+			expect(ctx.session.sessionId).toBe("provider-session");
+			expect(ctx.sessionManager.getSessionId()).toBe("handoff-session");
 			title.resolve("Late source title");
 			await flushMicrotasks();
 
