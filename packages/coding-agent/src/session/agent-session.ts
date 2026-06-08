@@ -2431,7 +2431,10 @@ export class AgentSession {
 	): string {
 		const normalizedSourceTitle = this.#normalizeHandoffTitleBase(sourceTitle);
 		if (normalizedSourceTitle) {
-			return this.#appendHandoffTitleCount(normalizedSourceTitle, sourceTitleSource === "auto");
+			return this.#appendHandoffTitleCount(
+				normalizedSourceTitle,
+				sourceTitleSource === "auto" && this.#hasTrustedHandoffTitleSuffix(entries),
+			);
 		}
 
 		const firstUserTitle = this.#findFirstUserHandoffTitleBase(entries);
@@ -2452,6 +2455,10 @@ export class AgentSession {
 		}
 
 		return `${base} (1)`;
+	}
+
+	#hasTrustedHandoffTitleSuffix(entries: readonly SessionEntry[]): boolean {
+		return entries.some(entry => entry.type === "custom_message" && entry.customType === "handoff");
 	}
 
 	#findFirstUserHandoffTitleBase(entries: readonly SessionEntry[]): string | undefined {
