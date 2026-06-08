@@ -2464,7 +2464,8 @@ export class AgentSession {
 	#findFirstUserHandoffTitleBase(entries: readonly SessionEntry[]): string | undefined {
 		for (const entry of entries) {
 			if (entry.type !== "message" || entry.message.role !== "user") continue;
-			return this.#normalizeHandoffTitleBase(this.#getUserMessageText(entry.message));
+			const titleBase = this.#normalizeHandoffTitleBase(this.#getUserMessageText(entry.message));
+			if (titleBase) return titleBase;
 		}
 		return undefined;
 	}
