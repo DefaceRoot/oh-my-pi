@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added background stats syncing on harness startup and shutdown so the stats dashboard can ingest new sessions without a manual sync.
+
 - Added proactive compaction setting to let automatic context compaction run mid-loop at safe turn boundaries once the configured threshold is reached.
 
 ### Fixed

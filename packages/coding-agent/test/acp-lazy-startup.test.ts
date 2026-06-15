@@ -199,6 +199,7 @@ describe("ACP lazy startup", () => {
 							};
 							throw new Error(stopMessage);
 						},
+						enableStatsAutoSync: false,
 					},
 				);
 			} catch (error) {
@@ -294,6 +295,7 @@ describe("ACP lazy startup", () => {
 							};
 							throw new Error(stopMessage);
 						},
+						enableStatsAutoSync: false,
 					},
 				);
 			} catch (error) {
@@ -431,6 +433,7 @@ describe("ACP lazy startup", () => {
 						session = await createAcpSession(cwd);
 						throw new Error("stop test ACP mode");
 					},
+					enableStatsAutoSync: false,
 				},
 			);
 			await expect(stopped).rejects.toThrow("stop test ACP mode");

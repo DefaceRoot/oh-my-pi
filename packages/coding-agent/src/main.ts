@@ -7,6 +7,7 @@
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import { createInterface } from "node:readline/promises";
+import { syncAllSessions } from "@oh-my-pi/omp-stats";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
@@ -910,12 +911,45 @@ async function buildSessionOptions(
 	return { options, titleSystemPrompt };
 }
 
+let statsAutoSyncRegistered = false;
+let statsAutoSyncPromise: Promise<void> | null = null;
+
+function registerStatsAutoSync(
+	syncStatsSessions: typeof syncAllSessions = syncAllSessions,
+	registerPostmortem: typeof postmortem.register = postmortem.register,
+): void {
+	if (statsAutoSyncRegistered) return;
+	statsAutoSyncRegistered = true;
+
+	const runStatsSync = (reason: "startup" | "shutdown", workers?: number): Promise<void> => {
+		if (statsAutoSyncPromise) return statsAutoSyncPromise;
+
+		statsAutoSyncPromise = (async () => {
+			try {
+				await syncStatsSessions(workers === undefined ? undefined : { workers });
+			} catch (err) {
+				logger.debug("Stats auto-sync failed", { reason, err });
+			} finally {
+				statsAutoSyncPromise = null;
+			}
+		})();
+
+		return statsAutoSyncPromise;
+	};
+
+	void runStatsSync("startup");
+	registerPostmortem("stats-sync", () => runStatsSync("shutdown", 1));
+}
+
 interface RunRootCommandDependencies {
 	createAgentSession?: typeof createAgentSession;
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	runAcpMode?: RunAcpMode;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
+	syncStatsSessions?: typeof syncAllSessions;
+	registerPostmortem?: typeof postmortem.register;
+	enableStatsAutoSync?: boolean;
 }
 
 export async function runRootCommand(
@@ -1132,6 +1166,10 @@ export async function runRootCommand(
 			await settingsInstance.reloadForCwd(cwd);
 		}
 		sessionManager = await SessionManager.open(selected.path);
+	}
+
+	if (deps.enableStatsAutoSync !== false) {
+		registerStatsAutoSync(deps.syncStatsSessions ?? syncAllSessions, deps.registerPostmortem ?? postmortem.register);
 	}
 
 	await pluginPreloadPromise;
