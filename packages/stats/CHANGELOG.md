@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the stats dashboard for clearer API-equivalent cost, loading, empty, error, and keyboard states.
+
 ### Fixed
 
 - Fixed zero-cost proxy/model-proxy stats rows to use bundled API-equivalent pricing when the model id resolves to a paid upstream catalog entry.

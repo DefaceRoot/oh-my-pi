@@ -26,29 +26,37 @@ export function Header({ activeTab, onTabChange, onSync, syncing, timeRange, onT
 	return (
 		<header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 mb-8 border-b border-[var(--border-subtle)]">
 			<div className="flex items-center gap-3">
-				<div className="w-10 h-10 rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--accent-pink)] to-[var(--accent-cyan)] flex items-center justify-center shadow-lg">
-					<Activity className="w-5 h-5 text-white" />
+				<div className="w-10 h-10 rounded-[var(--radius-md)] bg-[var(--bg-elevated)] border border-[var(--border-default)] flex items-center justify-center">
+					<Activity className="w-5 h-5 text-[var(--accent-primary)]" strokeWidth={1.5} />
 				</div>
 				<div>
-					<h1 className="text-xl font-semibold text-[var(--text-primary)]">AI Usage</h1>
-					<p className="text-sm text-[var(--text-muted)]">Statistics & Analytics</p>
+					<h1 className="text-xl font-semibold text-[var(--text-primary)]">AI usage</h1>
+					<p className="text-sm text-[var(--text-muted)]">Usage, cost, and session health</p>
 				</div>
 			</div>
 
 			<div className="flex items-center gap-3">
-				<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-md)] p-1 border border-[var(--border-subtle)]">
-					{tabs.map(tab => (
-						<button
-							key={tab}
-							type="button"
-							onClick={() => onTabChange(tab)}
-							className={`tab-btn capitalize ${activeTab === tab ? "active" : ""}`}
-						>
-							{tab}
-						</button>
-					))}
-				</div>
-				<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-md)] p-1 border border-[var(--border-subtle)]">
+				<nav aria-label="Dashboard sections">
+					<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-md)] p-1 border border-[var(--border-subtle)]">
+						{tabs.map(tab => (
+							<button
+								key={tab}
+								type="button"
+								onClick={() => onTabChange(tab)}
+								className={`tab-btn capitalize ${activeTab === tab ? "active" : ""}`}
+								aria-current={activeTab === tab ? "page" : undefined}
+							>
+								{tab}
+							</button>
+						))}
+					</div>
+				</nav>
+
+				<div
+					className="flex bg-[var(--bg-surface)] rounded-[var(--radius-md)] p-1 border border-[var(--border-subtle)]"
+					role="group"
+					aria-label="Time range"
+				>
 					{timeRanges.map(range => (
 						<button
 							key={range.value}
@@ -56,6 +64,7 @@ export function Header({ activeTab, onTabChange, onSync, syncing, timeRange, onT
 							onClick={() => onTimeRangeChange(range.value)}
 							className={`tab-btn ${timeRange === range.value ? "active" : ""}`}
 							title={range.value === "all" ? "All time" : `Last ${range.label}`}
+							aria-pressed={timeRange === range.value}
 						>
 							{range.label}
 						</button>
@@ -63,7 +72,7 @@ export function Header({ activeTab, onTabChange, onSync, syncing, timeRange, onT
 				</div>
 
 				<button type="button" onClick={onSync} disabled={syncing} className="btn btn-primary">
-					<RefreshCw size={16} className={syncing ? "spin" : ""} />
+					<RefreshCw size={16} className={syncing ? "spin" : ""} strokeWidth={1.5} />
 					{syncing ? "Syncing..." : "Sync"}
 				</button>
 			</div>

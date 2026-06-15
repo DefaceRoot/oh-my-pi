@@ -52,10 +52,16 @@ export async function getRequestDetails(id: number): Promise<RequestDetails> {
 	return res.json() as Promise<RequestDetails>;
 }
 
-export async function sync(): Promise<any> {
+export interface SyncResult {
+	processed: number;
+	files: number;
+	totalMessages: number;
+}
+
+export async function sync(): Promise<SyncResult> {
 	const res = await fetch(`${API_BASE}/sync`);
 	if (!res.ok) throw new Error("Failed to sync");
-	return res.json();
+	return res.json() as Promise<SyncResult>;
 }
 
 export async function getBehaviorDashboardStats(range = "24h"): Promise<BehaviorDashboardStats> {

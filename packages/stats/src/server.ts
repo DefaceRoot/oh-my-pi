@@ -20,6 +20,16 @@ import { decodeEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 
 const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
+let syncInFlight: Promise<{ processed: number; files: number }> | null = null;
+
+async function runServerSync(): Promise<{ processed: number; files: number }> {
+	if (syncInFlight) return syncInFlight;
+
+	syncInFlight = syncAllSessions().finally(() => {
+		syncInFlight = null;
+	});
+	return syncInFlight;
+}
 
 const CLIENT_DIR = path.join(import.meta.dir, "client");
 const STATIC_DIR = path.join(import.meta.dir, "..", "dist", "client");
@@ -250,7 +260,7 @@ async function handleApi(req: Request): Promise<Response> {
 	}
 
 	if (path === "/api/sync") {
-		const result = await syncAllSessions();
+		const result = await runServerSync();
 		const count = await getTotalMessageCount();
 		return Response.json({ ...result, totalMessages: count });
 	}

@@ -7,15 +7,7 @@
 
 import { format } from "date-fns";
 
-export const MODEL_COLORS = [
-	"#a78bfa", // violet
-	"#22d3ee", // cyan
-	"#ec4899", // pink
-	"#4ade80", // green
-	"#fbbf24", // amber
-	"#f87171", // red
-	"#60a5fa", // blue
-];
+export const MODEL_COLORS = ["#2f6f68", "#5f817c", "#7a7468", "#8a7a5e", "#4f6762", "#2f7d4f", "#9a6a18", "#b0443e"];
 
 export const CHART_THEMES = {
 	dark: {

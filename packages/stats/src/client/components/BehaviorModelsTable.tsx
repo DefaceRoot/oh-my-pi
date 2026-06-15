@@ -185,25 +185,25 @@ export function BehaviorModelsTable({ models, behaviorSeries }: BehaviorModelsTa
 											label="Anguish (!!!, nooo, dude, ..)"
 											total={model.totalAnguish}
 											messages={model.totalMessages}
-											valueClass="text-[var(--accent-violet,#a78bfa)]"
+											valueClass="text-[var(--accent-primary)]"
 										/>
 										<DetailRow
 											label="Negation (no/nope/wrong)"
 											total={model.totalNegation}
 											messages={model.totalMessages}
-											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+											valueClass="text-[var(--accent-primary)]"
 										/>
 										<DetailRow
 											label="Repetition (i meant, still doesnt)"
 											total={model.totalRepetition}
 											messages={model.totalMessages}
-											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+											valueClass="text-[var(--accent-primary)]"
 										/>
 										<DetailRow
 											label="Blame (you didnt, stop X-ing)"
 											total={model.totalBlame}
 											messages={model.totalMessages}
-											valueClass="text-[var(--accent-cyan,#22d3ee)]"
+											valueClass="text-[var(--accent-primary)]"
 										/>
 										<DetailRow
 											label="Avg chars / msg"

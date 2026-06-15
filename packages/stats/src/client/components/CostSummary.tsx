@@ -5,7 +5,9 @@ interface CostSummaryProps {
 }
 
 function formatCost(value: number): string {
-	return `$${Math.round(value)}`;
+	if (value < 0.01) return `$${value.toFixed(4)}`;
+	if (value < 1) return `$${value.toFixed(3)}`;
+	return `$${value.toFixed(2)}`;
 }
 
 export function CostSummary({ costSeries }: CostSummaryProps) {
@@ -28,12 +30,13 @@ export function CostSummary({ costSeries }: CostSummaryProps) {
 	}
 
 	const cards = [
-		{ label: "Total", value: formatCost(totalCost) },
-		{ label: "Avg / day", value: formatCost(avgDaily) },
+		{ label: "API-equivalent total", value: formatCost(totalCost), numeric: true },
+		{ label: "Average per day", value: formatCost(avgDaily), numeric: true },
 		{
 			label: "Top model",
 			value: topModel || "—",
 			sub: topModel ? formatCost(topModelCost) : undefined,
+			numeric: false,
 		},
 	];
 
@@ -42,10 +45,13 @@ export function CostSummary({ costSeries }: CostSummaryProps) {
 			{cards.map(card => (
 				<div key={card.label} className="surface px-4 py-3">
 					<p className="text-xs text-[var(--text-muted)] mb-1">{card.label}</p>
-					<p className="text-lg font-semibold text-[var(--text-primary)] truncate" title={card.value}>
+					<p
+						className={`text-lg font-semibold text-[var(--text-primary)] truncate ${card.numeric ? "metric-number" : ""}`}
+						title={card.value}
+					>
 						{card.value}
 					</p>
-					{card.sub && <p className="text-xs text-[var(--text-muted)] mt-0.5">{card.sub}</p>}
+					{card.sub && <p className="text-xs text-[var(--text-muted)] mt-0.5 metric-number">{card.sub}</p>}
 				</div>
 			))}
 		</div>

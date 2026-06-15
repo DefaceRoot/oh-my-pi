@@ -142,7 +142,7 @@ export function ModelsTable({ models, performanceSeries, timeRange }: ModelsTabl
 												</div>
 												<div className="flex items-center justify-between">
 													<span>Cache rate</span>
-													<span className="text-[var(--accent-cyan)]">
+													<span className="text-[var(--accent-primary)]">
 														{(model.cacheRate * 100).toFixed(1)}%
 													</span>
 												</div>
