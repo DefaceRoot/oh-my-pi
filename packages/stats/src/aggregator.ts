@@ -32,14 +32,17 @@ import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetai
 
 /**
  * Apply a freshly parsed result to the database. Runs entirely on the
- * main thread so the single SQLite handle owns every write.
+ * main thread so the single SQLite handle owns every write. Returns the
+ * number of stats records actually inserted or updated, so mirrored files
+ * that parse successfully but dedupe away do not inflate sync progress.
  */
 function applyParseResult(sessionFile: string, lastModified: number, result: ParseSessionResult): number {
-	if (result.stats.length > 0) insertMessageStats(result.stats);
-	if (result.userStats.length > 0) insertUserMessageStats(result.userStats);
+	let changed = 0;
+	if (result.stats.length > 0) changed += insertMessageStats(result.stats);
+	if (result.userStats.length > 0) changed += insertUserMessageStats(result.userStats);
 	if (result.userLinks.length > 0) updateUserMessageLinks(result.userLinks);
 	setFileOffset(sessionFile, result.newOffset, lastModified);
-	return result.stats.length + result.userStats.length;
+	return changed;
 }
 
 /**

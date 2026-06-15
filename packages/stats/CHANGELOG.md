@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed mirrored session files from alternate agent roots being ingested as duplicate requests; database init now repairs existing mirrored message and behavior rows.
+
 - Fixed zero-cost proxy/model-proxy stats rows to use bundled API-equivalent pricing when the model id resolves to a paid upstream catalog entry.
 
 ## [15.13.3] - 2026-06-15

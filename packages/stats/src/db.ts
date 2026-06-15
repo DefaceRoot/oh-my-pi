@@ -4,7 +4,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
 import type { GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {
 	AggregatedStats,
 	BehaviorModelStats,
@@ -42,8 +42,89 @@ const BACKFILL_PENDING = "pending";
 const USER_MESSAGES_BACKFILL_KEY = "user_messages_v6";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
 const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
+const POSIX_SESSIONS_MARKER = "/sessions/";
+const WINDOWS_SESSIONS_MARKER = "\\sessions\\";
+
+interface SessionKeyRow {
+	id: number;
+	session_file: string;
+	session_key: string | null;
+}
+
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
+}
+
+function getSessionKey(sessionFile: string): string {
+	const posixIndex = sessionFile.lastIndexOf(POSIX_SESSIONS_MARKER);
+	const windowsIndex = sessionFile.lastIndexOf(WINDOWS_SESSIONS_MARKER);
+	let markerIndex = posixIndex;
+	let markerLength = POSIX_SESSIONS_MARKER.length;
+	if (windowsIndex > markerIndex) {
+		markerIndex = windowsIndex;
+		markerLength = WINDOWS_SESSIONS_MARKER.length;
+	}
+
+	const rawKey = markerIndex >= 0 ? sessionFile.slice(markerIndex + markerLength) : sessionFile;
+	return rawKey.includes("\\") ? rawKey.replaceAll("\\", "/") : rawKey;
+}
+
+function escapeSqlLikePattern(value: string): string {
+	let escaped = "";
+	for (const char of value) {
+		if (char === "\\" || char === "%" || char === "_") {
+			escaped += `\\${char}`;
+		} else {
+			escaped += char;
+		}
+	}
+	return escaped;
+}
+
+function currentSessionsLikePattern(): string {
+	let prefix = getSessionsDir();
+	if (!prefix.endsWith("/") && !prefix.endsWith("\\")) {
+		prefix = `${prefix}/`;
+	}
+	return `${escapeSqlLikePattern(prefix)}%`;
+}
+
+function ensureSessionKeys(database: Database, tableName: "messages" | "user_messages"): void {
+	const columns = database.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
+	if (!columns.some(column => column.name === "session_key")) {
+		database.exec(`ALTER TABLE ${tableName} ADD COLUMN session_key TEXT`);
+	}
+
+	const indexName =
+		tableName === "messages" ? "idx_messages_session_key_entry" : "idx_user_messages_session_key_entry";
+	database.exec(`DROP INDEX IF EXISTS ${indexName}`);
+	const select = database.prepare(`SELECT id, session_file, session_key FROM ${tableName}`);
+	const update = database.prepare(`UPDATE ${tableName} SET session_key = ? WHERE id = ?`);
+	const backfill = database.transaction(() => {
+		for (const row of select.iterate() as Iterable<SessionKeyRow>) {
+			const sessionKey = getSessionKey(row.session_file);
+			if (row.session_key !== sessionKey) {
+				update.run(sessionKey, row.id);
+			}
+		}
+	});
+	backfill();
+
+	database
+		.prepare(`
+			DELETE FROM ${tableName}
+			WHERE id NOT IN (
+				SELECT COALESCE(
+					MIN(CASE WHEN session_file LIKE ? ESCAPE '\\' THEN id END),
+					MIN(id)
+				)
+				FROM ${tableName}
+				GROUP BY session_key, entry_id
+			)
+		`)
+		.run(currentSessionsLikePattern());
+
+	database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(session_key, entry_id)`);
 }
 /**
  * Initialize the database and create tables.
@@ -65,6 +146,7 @@ export async function initDb(): Promise<Database> {
 		CREATE TABLE IF NOT EXISTS messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_file TEXT NOT NULL,
+			session_key TEXT,
 			entry_id TEXT NOT NULL,
 			folder TEXT NOT NULL,
 			model TEXT NOT NULL,
@@ -106,6 +188,7 @@ export async function initDb(): Promise<Database> {
 		CREATE TABLE IF NOT EXISTS user_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_file TEXT NOT NULL,
+			session_key TEXT,
 			entry_id TEXT NOT NULL,
 			folder TEXT NOT NULL,
 			timestamp INTEGER NOT NULL,
@@ -136,6 +219,7 @@ export async function initDb(): Promise<Database> {
 		db.exec("ALTER TABLE messages ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0");
 	}
 	db.exec("UPDATE messages SET premium_requests = 0 WHERE premium_requests IS NULL");
+	ensureSessionKeys(db, "messages");
 	// Each behavior-metric bump invalidates previously-ingested rows. We detect
 	// the stale schema by column name and drop the table; `IF NOT EXISTS` above
 	// already produced the new schema, but we want a clean wipe + re-ingest.
@@ -165,6 +249,7 @@ export async function initDb(): Promise<Database> {
 			CREATE TABLE user_messages (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				session_file TEXT NOT NULL,
+				session_key TEXT,
 				entry_id TEXT NOT NULL,
 				folder TEXT NOT NULL,
 				timestamp INTEGER NOT NULL,
@@ -184,6 +269,7 @@ export async function initDb(): Promise<Database> {
 			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
 		`);
 	}
+	ensureSessionKeys(db, "user_messages");
 	backfillUserMessages(db);
 	repairUserMessageLinks(db);
 	backfillPriorityPremiumRequests(db);
@@ -320,12 +406,12 @@ export function insertMessageStats(stats: MessageStats[]): number {
 	// later parse drops back to 0 for the same row).
 	const stmt = db.prepare(`
 		INSERT INTO messages (
-			session_file, entry_id, folder, model, provider, api, timestamp,
+			session_file, session_key, entry_id, folder, model, provider, api, timestamp,
 			duration, ttft, stop_reason, error_message,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, premium_requests,
 			cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(session_file, entry_id) DO UPDATE SET
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_key, entry_id) DO UPDATE SET
 			premium_requests = excluded.premium_requests
 		WHERE messages.premium_requests < excluded.premium_requests
 	`);
@@ -336,6 +422,7 @@ export function insertMessageStats(stats: MessageStats[]): number {
 			const cost = resolveStoredCost(s);
 			const result = stmt.run(
 				s.sessionFile,
+				getSessionKey(s.sessionFile),
 				s.entryId,
 				s.folder,
 				s.model,
@@ -867,17 +954,21 @@ export function markUserMessageLinksRepairComplete(): void {
 }
 
 /**
- * Insert user-message stats. Idempotent via UNIQUE(session_file, entry_id).
+ * Insert user-message stats. Idempotent via logical session key + entry ID.
  */
 export function insertUserMessageStats(stats: UserMessageStats[]): number {
 	if (!db || stats.length === 0) return 0;
 
 	const stmt = db.prepare(`
-		INSERT OR IGNORE INTO user_messages (
-			session_file, entry_id, folder, timestamp, model, provider,
+		INSERT INTO user_messages (
+			session_file, session_key, entry_id, folder, timestamp, model, provider,
 			chars, words, yelling, profanity, anguish,
 			negation, repetition, blame
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_key, entry_id) DO UPDATE SET
+			model = excluded.model,
+			provider = excluded.provider
+		WHERE user_messages.model IS NULL AND excluded.model IS NOT NULL
 	`);
 
 	let inserted = 0;
@@ -885,6 +976,7 @@ export function insertUserMessageStats(stats: UserMessageStats[]): number {
 		for (const s of stats) {
 			const result = stmt.run(
 				s.sessionFile,
+				getSessionKey(s.sessionFile),
 				s.entryId,
 				s.folder,
 				s.timestamp,
@@ -921,13 +1013,13 @@ export function updateUserMessageLinks(links: UserMessageLink[]): number {
 	const stmt = db.prepare(`
 		UPDATE user_messages
 		   SET model = ?, provider = ?
-		 WHERE session_file = ? AND entry_id = ? AND model IS NULL
+		 WHERE session_key = ? AND entry_id = ? AND model IS NULL
 	`);
 
 	let updated = 0;
 	const apply = db.transaction(() => {
 		for (const link of links) {
-			const result = stmt.run(link.model, link.provider, link.sessionFile, link.entryId);
+			const result = stmt.run(link.model, link.provider, getSessionKey(link.sessionFile), link.entryId);
 			if (result.changes > 0) updated++;
 		}
 	});
