@@ -8,7 +8,8 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd } from "../../tools/path-utils";
-import type { TodoStatus } from "../../tools/todo-write";
+import type { TodoStatus } from "../../tools/todo";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 
 interface MessageProgress {
 	textEmitted: boolean;
@@ -148,7 +149,7 @@ export function mapToolKind(toolName: string): ToolKind {
 			return "search";
 		case "web_search":
 			return "fetch";
-		case "todo_write":
+		case "todo":
 			return "think";
 		default:
 			return "other";
@@ -215,7 +216,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 				update.locations = locations;
 			}
 			const notifications = [toSessionNotification(sessionId, update)];
-			const planUpdate = mapTodoWriteResultToPlanUpdate(event);
+			const planUpdate = mapTodoResultToPlanUpdate(event);
 			if (planUpdate) {
 				notifications.push(toSessionNotification(sessionId, planUpdate));
 			}
@@ -256,13 +257,16 @@ function mapAssistantMessageUpdate(
 				progress.textEmitted = true;
 			}
 			break;
-		case "thinking_delta":
+		case "thinking_delta": {
+			const block = event.assistantMessageEvent.partial?.content?.[event.assistantMessageEvent.contentIndex];
+			if (block?.type === "thinking" && !canonicalizeMessage(block.thinking)) return [];
 			sessionUpdate = "agent_thought_chunk";
 			text = event.assistantMessageEvent.delta;
 			if (text.length > 0 && progress) {
 				progress.thoughtEmitted = true;
 			}
 			break;
+		}
 		case "done":
 			if (progress?.textEmitted) {
 				return [];
@@ -336,13 +340,13 @@ function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "complet
 	return todoStatusMap[status];
 }
 
-function mapTodoWriteResultToPlanUpdate(
+function mapTodoResultToPlanUpdate(
 	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 ): SessionUpdate | undefined {
-	if (event.toolName !== "todo_write" || event.isError) {
+	if (event.toolName !== "todo" || event.isError) {
 		return undefined;
 	}
-	const phases = extractTodoWritePhases(event.result);
+	const phases = extractTodoPhases(event.result);
 	if (!Array.isArray(phases)) {
 		return undefined;
 	}
@@ -356,7 +360,7 @@ function mapTodoWriteResultToPlanUpdate(
 	};
 }
 
-function extractTodoWritePhases(result: unknown): unknown {
+function extractTodoPhases(result: unknown): unknown {
 	if (typeof result !== "object" || result === null || !("details" in result)) {
 		return undefined;
 	}

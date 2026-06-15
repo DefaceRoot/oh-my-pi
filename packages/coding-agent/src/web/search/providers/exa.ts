@@ -6,9 +6,10 @@
  * Requests per-result summaries via `contents.summary` and synthesizes
  * them into a combined `answer` string on the SearchResponse.
  */
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import { settings } from "../../../config/settings";
-
+import { findApiKey, isSearchResponse } from "../../../exa/mcp-client";
+import { parseSSE } from "../../../mcp/json-rpc";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
@@ -31,6 +32,7 @@ export interface ExaSearchParams {
 	start_published_date?: string;
 	end_published_date?: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 	/**
 	 * Credential source. Resolved before falling back to `EXA_API_KEY` so
 	 * Exa works when the key is stored via the broker/auth pipeline.
@@ -55,6 +57,113 @@ interface ExaSearchResponse {
 	results?: ExaSearchResult[];
 	costDollars?: { total: number };
 	searchTime?: number;
+}
+function asRecord(value: unknown): Record<string, unknown> | null {
+	if (typeof value !== "object" || value === null) return null;
+	return value as Record<string, unknown>;
+}
+
+function parseJsonContent(text: string): unknown | null {
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return null;
+	}
+}
+
+function normalizeExaMcpPayload(payload: unknown): unknown {
+	const candidates: unknown[] = [];
+	const root = asRecord(payload);
+
+	if (root) {
+		if (root.structuredContent !== undefined) candidates.push(root.structuredContent);
+		if (root.data !== undefined) candidates.push(root.data);
+		if (root.result !== undefined) candidates.push(root.result);
+		candidates.push(root);
+
+		const content = root.content;
+		if (Array.isArray(content)) {
+			for (const item of content) {
+				const part = asRecord(item);
+				if (!part) continue;
+				const text = part.text;
+				if (typeof text !== "string" || text.trim().length === 0) continue;
+				const parsed = parseJsonContent(text);
+				if (parsed !== null) candidates.push(parsed);
+			}
+		}
+	} else {
+		candidates.push(payload);
+	}
+
+	for (const candidate of candidates) {
+		if (isSearchResponse(candidate)) {
+			return candidate;
+		}
+	}
+
+	return payload;
+}
+
+function parseOptionalField(section: string, label: string): string | null | undefined {
+	const regex = new RegExp(`(?:^|\\n)${label}:\\s*([^\\n]*)`);
+	const match = section.match(regex);
+	if (!match) return undefined;
+	const value = match[1].trim();
+	return value.length > 0 ? value : null;
+}
+
+function parseTextField(section: string): string | null | undefined {
+	const match = section.match(/(?:^|\n)Text:\s*([\s\S]*)$/);
+	if (!match) return undefined;
+	const value = match[1].trim();
+	return value.length > 0 ? value : null;
+}
+
+function parseExaMcpTextPayload(payload: unknown): ExaSearchResponse | null {
+	const root = asRecord(payload);
+	if (!root) return null;
+
+	const content = root.content;
+	if (!Array.isArray(content)) return null;
+
+	const textBlocks = content
+		.map(item => {
+			const part = asRecord(item);
+			const text = typeof part?.text === "string" ? part.text : "";
+			return text.replace(/\r\n?/g, "\n").trim();
+		})
+		.filter(text => text.length > 0);
+
+	if (textBlocks.length === 0) return null;
+
+	const sections = textBlocks
+		.join("\n\n")
+		.split(/\n{2,}(?=Title:\s*[^\n]*(?:\n(?:URL|Author|Published Date|Text):))/)
+		.map(section => section.trim())
+		.filter(section => section.startsWith("Title:"));
+
+	const results: ExaSearchResult[] = [];
+	for (const section of sections) {
+		const title = parseOptionalField(section, "Title");
+		const url = parseOptionalField(section, "URL");
+		const author = parseOptionalField(section, "Author");
+		const publishedDate = parseOptionalField(section, "Published Date");
+		const text = parseTextField(section);
+
+		if (!title && !url && !text) continue;
+
+		results.push({
+			title: title ?? undefined,
+			url: url ?? undefined,
+			author: author ?? undefined,
+			publishedDate: publishedDate ?? undefined,
+			text: text ?? undefined,
+		});
+	}
+
+	if (results.length === 0) return null;
+	return { results };
 }
 
 export function normalizeSearchType(type: ExaSearchParamType | undefined): ExaSearchType {
@@ -114,7 +223,8 @@ export function buildExaRequestBody(params: ExaSearchParams): Record<string, unk
 async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<ExaSearchResponse> {
 	const body = buildExaRequestBody(params);
 
-	const response = await fetch(EXA_API_URL, {
+	const fetchImpl = params.fetch ?? fetch;
+	const response = await fetchImpl(EXA_API_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -133,18 +243,86 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 
 	return response.json() as Promise<ExaSearchResponse>;
 }
+function buildExaMcpArgs(params: ExaSearchParams): Record<string, unknown> {
+	const args: Record<string, unknown> = { query: params.query };
+	if (params.num_results !== undefined) args.num_results = params.num_results;
+	if (params.type !== undefined) args.type = params.type;
+	if (params.include_domains !== undefined) args.include_domains = params.include_domains;
+	if (params.exclude_domains !== undefined) args.exclude_domains = params.exclude_domains;
+	if (params.start_published_date !== undefined) args.start_published_date = params.start_published_date;
+	if (params.end_published_date !== undefined) args.end_published_date = params.end_published_date;
+	return args;
+}
+
+async function callExaMcpSearch(params: ExaSearchParams): Promise<ExaSearchResponse> {
+	const query = new URLSearchParams();
+	const apiKey = findApiKey();
+	if (apiKey) query.set("exaApiKey", apiKey);
+	query.set("tools", "web_search_exa");
+	const fetchImpl = params.fetch ?? fetch;
+	const response = await fetchImpl(`https://mcp.exa.ai/mcp?${query.toString()}`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Accept: "application/json, text/event-stream",
+		},
+		body: JSON.stringify({
+			jsonrpc: "2.0",
+			id: Math.random().toString(36).slice(2),
+			method: "tools/call",
+			params: {
+				name: "web_search_exa",
+				arguments: buildExaMcpArgs(params),
+			},
+		}),
+		signal: withHardTimeout(params.signal),
+	});
+	if (!response.ok) {
+		throw new Error(`MCP request failed: ${response.status} ${response.statusText}`);
+	}
+	const mcpResponse = parseSSE(await response.text()) as {
+		result?: {
+			content?: Array<{ type: string; text?: string }>;
+		};
+		error?: {
+			code: number;
+			message: string;
+		};
+	} | null;
+	if (!mcpResponse) {
+		throw new Error("Failed to parse MCP response");
+	}
+	if (mcpResponse.error) {
+		throw new Error(`MCP error: ${mcpResponse.error.message}`);
+	}
+	const responsePayload = normalizeExaMcpPayload(mcpResponse.result);
+	if (isSearchResponse(responsePayload)) {
+		return responsePayload as ExaSearchResponse;
+	}
+
+	const parsed = parseExaMcpTextPayload(responsePayload);
+	if (parsed) {
+		return parsed;
+	}
+
+	throw new Error("Exa MCP search returned unexpected response shape.");
+}
 
 /** Execute Exa web search */
 export async function searchExa(params: ExaSearchParams): Promise<SearchResponse> {
+	// AuthStorage-backed key takes precedence (existing behavior); probe it once
+	// so the env-key and keyless-MCP fallbacks below stay intact, then drive the
+	// authStorage path through the central force-refresh/rotate retry policy.
 	const storedKey = params.authStorage
 		? await params.authStorage.getApiKey("exa", params.sessionId, { signal: params.signal })
 		: undefined;
-	const apiKey = storedKey ?? getEnvApiKey("exa");
-	if (!apiKey) {
-		throw new Error("Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.");
-	}
-
-	const response = await callExaSearch(apiKey, params);
+	const keyOrResolver: ApiKey | undefined =
+		storedKey && params.authStorage
+			? params.authStorage.resolver("exa", { sessionId: params.sessionId })
+			: getEnvApiKey("exa");
+	const response = keyOrResolver
+		? await withAuth(keyOrResolver, key => callExaSearch(key, params), { signal: params.signal })
+		: await callExaMcpSearch(params);
 
 	// Convert to unified SearchResponse
 	const sources: SearchSource[] = [];
@@ -183,14 +361,30 @@ export class ExaProvider extends SearchProvider {
 	readonly label = "Exa";
 
 	isAvailable(authStorage: AuthStorage): boolean {
+		if (!this.#settingsAllowSearch()) return false;
+		return !!getEnvApiKey("exa") || authStorage.hasAuth("exa");
+	}
+
+	/**
+	 * Exa ships an unauthenticated public MCP fallback, so an explicit
+	 * selection (programmatic or via `providers.webSearch: exa`) routes
+	 * through MCP even when no credential is configured. The auto chain
+	 * still uses {@link isAvailable} so an unrelated configured provider
+	 * keeps priority over the public fallback.
+	 */
+	isExplicitlyAvailable(_authStorage: AuthStorage): boolean {
+		return this.#settingsAllowSearch();
+	}
+
+	#settingsAllowSearch(): boolean {
 		try {
 			if (settings.get("exa.enabled") === false || settings.get("exa.enableSearch") === false) {
 				return false;
 			}
 		} catch {
-			// Settings may be unavailable before CLI initialization; credential availability is still authoritative.
+			// Settings may be unavailable before CLI initialization; assume not disabled.
 		}
-		return authStorage.hasAuth("exa");
+		return true;
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -200,6 +394,7 @@ export class ExaProvider extends SearchProvider {
 			signal: params.signal,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,
+			fetch: params.fetch,
 		});
 	}
 }

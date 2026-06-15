@@ -1,7 +1,8 @@
 import { normalizedRecallWeights, temporalHalflifeHours } from "../../config";
+import { embedQuery } from "../embeddings";
 import { mmrRerank } from "../mmr";
 import { adjustWeights, classifyIntent } from "../query-intent";
-import { getSynonyms, normalizeQuery } from "../synonyms";
+import { getSynonyms, normalizeQuery, STOP_WORDS as QUERY_STOP_WORDS } from "../synonyms";
 import { extractTemporal } from "../temporal-parser";
 import { cosineSimilarity } from "../vector-math";
 import type { BeamMemoryState, RecallEnhancedOptions, RecallOptions, RecallResult } from "./types";
@@ -100,6 +101,31 @@ const STOP_WORDS = new Set([
 	"with",
 ]);
 
+const FACT_QUERY_FILLER_WORDS = new Set([
+	...QUERY_STOP_WORDS,
+	"active",
+	"current",
+	"currently",
+	"d",
+	"know",
+	"latest",
+	"ll",
+	"m",
+	"please",
+	"present",
+	"re",
+	"recent",
+	"remind",
+	"remember",
+	"s",
+	"t",
+	"tell",
+	"today",
+	"ve",
+]);
+
+const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
+
 function nowIso(): string {
 	return new Date().toISOString();
 }
@@ -173,6 +199,35 @@ function expandedTokenGroups(query: string, useSynonyms = true): string[][] {
 		if (seen.size > 0) groups.push([...seen]);
 	}
 	return groups;
+}
+
+function factExpandedTokenGroups(query: string, content: string): string[][] {
+	const contentLower = content.toLowerCase();
+	const contentTokens = new Set(tokenize(contentLower));
+	const groups: string[][] = [];
+	for (const token of tokenize(query)) {
+		if (FACT_QUERY_FILLER_WORDS.has(token) && (FACT_CLITIC_FRAGMENTS.has(token) || !contentTokens.has(token))) {
+			continue;
+		}
+		const seen = new Set<string>();
+		for (const variant of recallSynonyms(token, true)) {
+			for (const part of tokenize(variant)) {
+				if (!FACT_QUERY_FILLER_WORDS.has(part) || (!FACT_CLITIC_FRAGMENTS.has(part) && contentTokens.has(part))) {
+					seen.add(part);
+				}
+			}
+		}
+		if (seen.size > 0) groups.push([...seen]);
+	}
+	return groups;
+}
+
+function tokensFromGroups(groups: readonly (readonly string[])[]): string[] {
+	const seen = new Set<string>();
+	for (const group of groups) {
+		for (const token of group) seen.add(token);
+	}
+	return [...seen];
 }
 
 function contentMatchesToken(contentLower: string, contentTokens: ReadonlySet<string>, token: string): boolean {
@@ -857,18 +912,26 @@ function collectMemoryCandidates(
 	return candidates;
 }
 
-export function recall(
+export async function recall(
 	beam: BeamMemoryState,
 	query: string,
 	topK = 40,
 	options: RecallOptionsInternal = {},
-): RecallResult[] {
+): Promise<RecallResult[]> {
 	if (topK <= 0) return [];
 	const temporalOptions = inferTemporalOptions(query, options);
 	if (queryAsksCurrent(query)) {
 		temporalOptions.queryTime ??= options.queryTime ?? new Date();
 		temporalOptions.temporalWeight ??= 0.45;
 		temporalOptions.currentSensitive = true;
+	}
+	if (temporalOptions.queryEmbedding === undefined) {
+		// Honour `null` (explicit "no embedding"); `undefined` means "derive from query text".
+		// `embedQuery()` returns null when embeddings are disabled or no provider is configured,
+		// so this is a no-op when the user has not wired one up. Float32Array → number[]
+		// because RecallOptions exposes the narrower public shape.
+		const derived = query.length > 0 ? await embedQuery(query) : null;
+		temporalOptions.queryEmbedding = derived === null ? null : Array.from(derived);
 	}
 	let weights = normalizedRecallWeights(
 		options.vecWeight ?? beam.config.vecWeight,
@@ -935,12 +998,12 @@ function diversifyByCoverage(
 	return selected;
 }
 
-export function recallEnhanced(
+export async function recallEnhanced(
 	beam: BeamMemoryState,
 	query: string,
 	topK = 40,
 	options: RecallEnhancedOptions & RecallOptionsInternal = {},
-): RecallResult[] {
+): Promise<RecallResult[]> {
 	const useSynonyms = options.useSynonyms !== false;
 	const enhancedOptions: RecallOptionsInternal = {
 		...options,
@@ -948,7 +1011,7 @@ export function recallEnhanced(
 		useIntent: options.useIntent !== false,
 		useMmr: options.useMmr !== false,
 	};
-	const results = recall(beam, query, Math.max(topK * 2, topK), {
+	const results = await recall(beam, query, Math.max(topK * 2, topK), {
 		...enhancedOptions,
 		updateRecallCounts: false,
 	});
@@ -1053,13 +1116,11 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		}
 	}
 	if (matched.length === 0) return [];
-	const rowids = matched
-		.slice(0, topK)
-		.map(row => asNumber(row.rowid))
-		.filter(rowid => rowid > 0);
+	const rowids = matched.map(row => asNumber(row.rowid)).filter(rowid => rowid > 0);
 	if (rowids.length === 0) return [];
 	const visibility = factVisibilityWhere(beam, "");
 	const ranks = normalizeRanks(matched, "rowid");
+	const normalized = normalizeQuery(query).toLowerCase();
 	const rows = queryAll(
 		beam,
 		`SELECT rowid, fact_id, subject, predicate, object, timestamp, confidence
@@ -1067,25 +1128,46 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		 WHERE rowid IN (${placeholders(rowids.length)}) AND ${visibility.where}
 		 ORDER BY confidence DESC
 		 LIMIT ?`,
-		[...rowids, ...visibility.params, topK],
+		[...rowids, ...visibility.params, rowids.length],
 	);
-	return rows.map(row => {
-		const subject = asString(row.subject);
-		const predicate = asString(row.predicate);
-		const object = asString(row.object);
-		const confidence = asNumber(row.confidence, 0.5);
-		const result: FactRecallResult = {
-			id: asString(row.fact_id),
-			content: object.length > 0 ? object : `${subject} ${predicate}`.trim(),
-			score: round4(confidence * 0.8 + (ranks.get(asNumber(row.rowid)) ?? 0) * 0.2),
-			fact_id: asString(row.fact_id),
-			subject,
-			predicate,
-			timestamp: asNullableString(row.timestamp),
-			tier_label: "fact",
-			tier: "fact",
-			source: "facts",
-		};
-		return result;
-	});
+	return rows
+		.map(row => {
+			const subject = asString(row.subject);
+			const predicate = asString(row.predicate);
+			const object = asString(row.object);
+			const confidence = asNumber(row.confidence, 0.5);
+			const content = object.length > 0 ? object : `${subject} ${predicate}`.trim();
+			const searchable = `${subject} ${predicate} ${object}`.trim();
+			const queryGroups = factExpandedTokenGroups(query, searchable);
+			const queryTokens = tokensFromGroups(queryGroups);
+			const lexical =
+				queryGroups.length > 0
+					? lexicalGroupRelevance(queryGroups, searchable, normalized)
+					: lexicalRelevance(queryTokens, searchable, normalized);
+			const rank = ranks.get(asNumber(row.rowid)) ?? 0;
+			const result: FactRecallResult = {
+				id: asString(row.fact_id),
+				content,
+				score: round4(lexical * (0.7 + confidence * 0.2 + rank * 0.1)),
+				fact_id: asString(row.fact_id),
+				subject,
+				predicate,
+				timestamp: asNullableString(row.timestamp),
+				tier_label: "fact",
+				tier: "fact",
+				source: "facts",
+				keyword_score: round4(lexical),
+				fts_score: round4(rank),
+				importance_score: round4(confidence),
+				explanation: `fact keyword=${round4(lexical)}`,
+				voice_scores: {
+					keyword: round4(lexical),
+					fts: round4(rank),
+					importance: round4(confidence),
+				},
+			};
+			return result;
+		})
+		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
+		.slice(0, topK);
 }

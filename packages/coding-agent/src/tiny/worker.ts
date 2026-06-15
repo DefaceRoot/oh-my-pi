@@ -1,4 +1,3 @@
-import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import type {
@@ -7,7 +6,14 @@ import type {
 	TextGenerationStringOutput,
 	StoppingCriteria as TransformersStoppingCriteria,
 } from "@huggingface/transformers";
-import { getTinyModelsCacheDir, isCompiledBinary, prompt } from "@oh-my-pi/pi-utils";
+import {
+	ensureRuntimeInstalled,
+	getTinyModelsCacheDir,
+	installRuntimeModuleResolver,
+	isCompiledBinary,
+	prompt,
+	resolveRuntimeModule,
+} from "@oh-my-pi/pi-utils";
 import packageJson from "../../package.json" with { type: "json" };
 import tinyTitleSystemPrompt from "../prompts/system/tiny-title-system.md" with { type: "text" };
 import { resolveTinyModelDevicePreference, type TinyModelDevice, tinyModelDeviceLoadOrder } from "./device";
@@ -28,9 +34,8 @@ const STOP_DECODE_WINDOW_TOKENS = 32;
 const MEMORY_COMPLETION_MAX_NEW_TOKENS = 256;
 const TINY_TITLE_SYSTEM_PROMPT = prompt.render(tinyTitleSystemPrompt);
 const TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+const COMPILED_TRANSFORMERS_VERSION = process.env.PI_TINY_TRANSFORMERS_VERSION;
 const sourceRequire = createRequire(import.meta.url);
-const INSTALL_LOCK_ATTEMPTS = 240;
-const INSTALL_LOCK_SLEEP_MS = 250;
 
 const tinyModelDevicePreference = resolveTinyModelDevicePreference();
 const tinyModelDtypeOverride = resolveTinyModelDtypeOverride();
@@ -67,6 +72,7 @@ function resolveTransformersVersionSpec(): string {
 		manifest.optionalDependencies?.[TRANSFORMERS_PACKAGE] ?? manifest.dependencies?.[TRANSFORMERS_PACKAGE];
 	if (!versionSpec) throw new Error(`${TRANSFORMERS_PACKAGE} is missing from package.json optionalDependencies`);
 	if (!versionSpec.startsWith("catalog:")) return versionSpec;
+	if (COMPILED_TRANSFORMERS_VERSION) return COMPILED_TRANSFORMERS_VERSION;
 	const installed = sourceRequire(`${TRANSFORMERS_PACKAGE}/package.json`) as { version: string };
 	return installed.version;
 }
@@ -94,10 +100,6 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
-function isErrnoCode(error: unknown, code: string): boolean {
-	return typeof error === "object" && error !== null && "code" in error && error.code === code;
-}
-
 function sendLog(
 	transport: TinyTitleTransport,
 	level: "debug" | "warn" | "error",
@@ -112,68 +114,6 @@ function getTinyTitleRuntimeDir(): string {
 		path.dirname(getTinyModelsCacheDir()),
 		"tiny-title-runtime",
 		`transformers-${getTransformersRuntimeKey()}`,
-	);
-}
-
-async function acquireInstallLock(runtimeDir: string): Promise<() => Promise<void>> {
-	const lockDir = `${runtimeDir}.lock`;
-	for (let attempt = 0; attempt < INSTALL_LOCK_ATTEMPTS; attempt++) {
-		try {
-			await fs.mkdir(lockDir);
-			return async () => {
-				await fs.rm(lockDir, { recursive: true, force: true });
-			};
-		} catch (error) {
-			if (!isErrnoCode(error, "EEXIST")) throw error;
-			await Bun.sleep(INSTALL_LOCK_SLEEP_MS);
-		}
-	}
-	throw new Error(`Timed out waiting for tiny title runtime install lock: ${lockDir}`);
-}
-
-async function isCompiledRuntimeInstalled(runtimeDir: string): Promise<boolean> {
-	return Bun.file(path.join(runtimeDir, "node_modules", "@huggingface", "transformers", "package.json")).exists();
-}
-
-async function writeRuntimeManifest(runtimeDir: string): Promise<void> {
-	await fs.mkdir(runtimeDir, { recursive: true });
-	await Bun.write(
-		path.join(runtimeDir, "package.json"),
-		`${JSON.stringify(
-			{
-				private: true,
-				type: "module",
-				dependencies: {
-					[TRANSFORMERS_PACKAGE]: getTransformersVersionSpec(),
-				},
-				trustedDependencies: ["onnxruntime-node"],
-			},
-			null,
-			"\t",
-		)}\n`,
-	);
-}
-
-async function readPipe(stream: ReadableStream<Uint8Array> | null): Promise<string> {
-	if (!stream) return "";
-	return new Response(stream).text();
-}
-
-async function runRuntimeInstall(runtimeDir: string): Promise<void> {
-	const proc = Bun.spawn([process.execPath, "install", "--cwd", runtimeDir, "--production"], {
-		env: { ...Bun.env, BUN_BE_BUN: "1" },
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [stdout, stderr, exitCode] = await Promise.all([
-		readPipe(proc.stdout as ReadableStream<Uint8Array> | null),
-		readPipe(proc.stderr as ReadableStream<Uint8Array> | null),
-		proc.exited,
-	]);
-	if (exitCode === 0) return;
-	const output = `${stdout}\n${stderr}`.trim();
-	throw new Error(
-		`Failed to install tiny title runtime with ${process.execPath} install (exit ${exitCode}): ${output}`,
 	);
 }
 
@@ -194,26 +134,21 @@ function sendRuntimeInstallProgress(
 	});
 }
 
-async function ensureCompiledTransformersRuntime(
-	transport: TinyTitleTransport,
-	requestId: string,
-	modelKey: TinyLocalModelKey,
-): Promise<string> {
-	const runtimeDir = getTinyTitleRuntimeDir();
-	if (await isCompiledRuntimeInstalled(runtimeDir)) return runtimeDir;
-
-	sendRuntimeInstallProgress(transport, requestId, modelKey, "initiate");
-	const releaseLock = await acquireInstallLock(runtimeDir);
-	try {
-		if (await isCompiledRuntimeInstalled(runtimeDir)) return runtimeDir;
-		await writeRuntimeManifest(runtimeDir);
-		sendRuntimeInstallProgress(transport, requestId, modelKey, "download");
-		await runRuntimeInstall(runtimeDir);
-		sendRuntimeInstallProgress(transport, requestId, modelKey, "done");
-		return runtimeDir;
-	} finally {
-		await releaseLock();
-	}
+/**
+ * Prepare the freshly-installed compiled runtime for loading: stub `sharp`
+ * (the tiny models are text-generation only, so the native image pipeline is
+ * dead weight) and patch the module resolver so Transformers.js's bare requires
+ * (`onnxruntime-node`, `onnxruntime-common`) resolve against the cache. Returns
+ * the absolute Transformers.js entrypoint to `require`.
+ */
+async function prepareCompiledRuntime(runtimeDir: string): Promise<string> {
+	const nodeModules = path.join(runtimeDir, "node_modules");
+	const sharpStub = path.join(runtimeDir, "omp-sharp-stub.cjs");
+	await Bun.write(sharpStub, "module.exports = {};\n");
+	installRuntimeModuleResolver({ runtimeNodeModules: nodeModules, stubs: { sharp: sharpStub } });
+	const entry = resolveRuntimeModule(nodeModules, TRANSFORMERS_PACKAGE);
+	if (!entry) throw new Error(`Unable to resolve ${TRANSFORMERS_PACKAGE} in compiled runtime at ${nodeModules}`);
+	return entry;
 }
 
 function configureTransformers(transformers: TransformersRuntime): TransformersRuntime {
@@ -231,9 +166,18 @@ async function loadTransformers(
 	if (transformersRuntime) return transformersRuntime;
 	transformersRuntime = (async () => {
 		if (!isCompiledBinary()) return configureTransformers(sourceRequire(TRANSFORMERS_PACKAGE) as TransformersRuntime);
-		const runtimeDir = await ensureCompiledTransformersRuntime(transport, requestId, modelKey);
-		const require_ = createRequire(path.join(runtimeDir, "package.json"));
-		return configureTransformers(require_(TRANSFORMERS_PACKAGE) as TransformersRuntime);
+		const runtimeDir = await ensureRuntimeInstalled({
+			runtimeDir: getTinyTitleRuntimeDir(),
+			install: {
+				dependencies: { [TRANSFORMERS_PACKAGE]: getTransformersVersionSpec() },
+				trustedDependencies: ["onnxruntime-node"],
+			},
+			probePackage: TRANSFORMERS_PACKAGE,
+			onPhase: phase => sendRuntimeInstallProgress(transport, requestId, modelKey, phase),
+		});
+		const entry = await prepareCompiledRuntime(runtimeDir);
+		const require_ = createRequire(entry);
+		return configureTransformers(require_(entry) as TransformersRuntime);
 	})().catch(error => {
 		transformersRuntime = null;
 		throw error;
@@ -414,9 +358,10 @@ async function loadPipeline(
 	return loaded;
 }
 
-function buildPrompt(generator: TextGenerationPipeline, message: string): string {
+function buildPrompt(generator: TextGenerationPipeline, message: string, systemPrompt?: string): string {
+	const selectedSystemPrompt = systemPrompt?.trim() || TINY_TITLE_SYSTEM_PROMPT;
 	const chat = [
-		{ role: "system", content: TINY_TITLE_SYSTEM_PROMPT },
+		{ role: "system", content: selectedSystemPrompt },
 		{ role: "user", content: formatTitleUserMessage(message) },
 	];
 	const chatTemplateOptions = {
@@ -442,9 +387,10 @@ async function generateTitle(
 	requestId: string,
 	modelKey: TinyTitleLocalModelKey,
 	message: string,
+	systemPrompt?: string,
 ): Promise<string | null> {
 	const generator = await loadPipeline(modelKey, transport, requestId);
-	const promptText = buildPrompt(generator, message);
+	const promptText = buildPrompt(generator, message, systemPrompt);
 	const transformers = await loadTransformers(transport, requestId, modelKey);
 	const output = (await generator(promptText, {
 		max_new_tokens: TITLE_MAX_NEW_TOKENS,
@@ -526,7 +472,7 @@ async function handleQueuedRequest(
 			transport.send({ type: "completion", id: request.id, text });
 			return;
 		}
-		const title = await generateTitle(transport, request.id, request.modelKey, request.message);
+		const title = await generateTitle(transport, request.id, request.modelKey, request.message, request.systemPrompt);
 		transport.send({ type: "title", id: request.id, title });
 	} catch (error) {
 		transport.send({ type: "error", id: request.id, error: errorText(error) });

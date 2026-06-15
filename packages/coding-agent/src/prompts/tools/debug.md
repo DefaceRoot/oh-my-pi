@@ -2,7 +2,7 @@ Provides debugger access through the Debug Adapter Protocol (DAP).
 Use for launching or attaching debuggers, setting breakpoints, stepping through execution, inspecting threads/stack/variables, evaluating expressions, capturing output, and interrupting hung programs.
 
 <instruction>
-- Prefer over bash for program state, breakpoints, stepping, thread inspection, or interrupting a running process.
+- You SHOULD prefer this tool over bash for program state, breakpoints, stepping, thread inspection, or interrupting a running process.
 - `action: "launch"` starts a session; `program` is required, `adapter` optional (auto-selected from target path and workspace).
   For Python, set `adapter: "debugpy"` and `program` to the target `.py` file; put interpreter/script flags in `args`.
 - `action: "attach"` connects to an existing process: `pid` for local attach, `port` for remote attach (where the adapter supports it), `adapter` to force a specific debugger.
@@ -19,16 +19,3 @@ Use for launching or attaching debuggers, setting breakpoints, stepping through 
 - `program` must be an executable file or debug target, not a directory or interpreter name that resolves to a workspace directory.
 - Python debugging requires `debugpy`; install with `pip install debugpy` if the adapter is unavailable.
 </caution>
-
-<examples>
-# Launch and inspect hang
-1. `debug(action: "launch", program: "./my_app")`
-2. `debug(action: "set_breakpoint", file: "src/main.c", line: 42)`
-3. `debug(action: "continue")`
-4. If the program appears hung: `debug(action: "pause")`
-5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`
-# Launch a Python script with debugpy
-`debug(action: "launch", adapter: "debugpy", program: "scripts/job.py", args: ["--flag"])`
-# Raw debugger command through repl
-`debug(action: "evaluate", expression: "info registers", context: "repl")`
-</examples>

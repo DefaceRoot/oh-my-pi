@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { UsageFetchContext } from "../src/usage";
-import { claudeUsageProvider } from "../src/usage/claude";
+import { claudeCodeVersion } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
+import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
 
 function getHeaderCaseInsensitive(
 	headers: Headers | Record<string, string | ReadonlyArray<string>> | string[][] | undefined,
@@ -75,14 +76,13 @@ describe("claude usage request headers", () => {
 
 		const headers = calls[0]?.init?.headers;
 		expect(getHeaderCaseInsensitive(headers, "authorization")).toBe(`Bearer ${token}`);
-		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe("claude-cli/2.1.160 (external, cli)");
+		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe(`claude-cli/${claudeCodeVersion} (external, cli)`);
 
 		const beta = getHeaderCaseInsensitive(headers, "anthropic-beta");
 		expect(beta).toBeDefined();
 		const betaTokens = beta?.split(",").map(tokenValue => tokenValue.trim()) ?? [];
 		expect(betaTokens).toContain("claude-code-20250219");
 		expect(betaTokens).toContain("oauth-2025-04-20");
-		expect(betaTokens).toContain("context-1m-2025-08-07");
 		expect(betaTokens).toContain("interleaved-thinking-2025-05-14");
 		expect(betaTokens).toContain("redact-thinking-2026-02-12");
 		expect(betaTokens).toContain("context-management-2025-06-27");

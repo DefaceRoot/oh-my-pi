@@ -28,10 +28,16 @@ Does not cover `/tree` UI rendering behavior beyond semantics that affect sessio
 Default session file location:
 
 ```text
-~/.omp/agent/sessions/--<cwd-encoded>--/<timestamp>_<sessionId>.jsonl
+~/.omp/agent/sessions/<dir-encoded>/<timestamp>_<sessionId>.jsonl
 ```
 
-`<cwd-encoded>` is derived from the working directory by stripping leading slash and replacing `/`, `\\`, and `:` with `-`.
+`<dir-encoded>` depends on where the canonicalized cwd lives:
+
+- inside the home directory: `-<relative-path>` with `/`, `\\`, and `:` replaced by `-` (bare `-` for home itself)
+- inside the OS temp root: `-tmp-<relative-path>` with the same replacement
+- anywhere else: legacy absolute form `--<cwd-without-leading-slash-with-same-replacement>--`
+
+Old `--<home-encoded>-*--` directories are migrated to the new home-relative names once per sessions root on first access (best-effort).
 
 Blob store location:
 
@@ -370,7 +376,7 @@ The underlying model is append-only tree + mutable leaf pointer:
 
 ## Context Reconstruction (`buildSessionContext`)
 
-`buildSessionContext(entries, leafId, byId?)` resolves what is sent to the model.
+`buildSessionContext(entries, leafId?, byId?, options?)` resolves what is sent to the model. Passing `options.transcript: true` instead builds the full-history display transcript (compactions emitted inline at the position they fired) — display-only, never sent to a provider.
 
 Algorithm:
 
@@ -421,7 +427,7 @@ Rationale in code: avoid persisting sessions that never produced an assistant re
 
 - `flush()` flushes writer and calls `fsync()`.
 - Atomic full rewrites (`#rewriteFile`) write to temp file, flush+fsync, close, then rename over target.
-- Used for migrations, `setSessionName`, `rewriteEntries`, move operations, and tool-call arg rewrites.
+- Used for migrations, `setSessionName`, `rewriteEntries` (tool-output pruning/supersede passes), and move/fork operations.
 
 ### Error behavior
 
@@ -448,14 +454,14 @@ On load, blob refs are resolved back to base64 for message/custom_message image 
 `SessionStorage` interface provides all filesystem operations used by `SessionManager`:
 
 - sync: `ensureDirSync`, `existsSync`, `writeTextSync`, `statSync`, `listFilesSync`
-- async: `exists`, `readText`, `readTextPrefix`, `writeText`, `rename`, `unlink`, `openWriter`
+- async: `exists`, `readText`, `readTextSlices`, `writeText`, `rename`, `unlink`, `deleteSessionWithArtifacts`, `openWriter`
 
 Implementations:
 
 - `FileSessionStorage`: real filesystem (Bun + node fs)
 - `MemorySessionStorage`: map-backed in-memory implementation for tests/non-persistent sessions
 
-`SessionStorageWriter` exposes `writeLine`, `flush`, `fsync`, `close`, `getError`.
+`SessionStorageWriter` exposes `writeLine`, `writeLineSync`, `flush`, `fsync`, `close`, `getError`.
 
 ## Session Discovery Utilities
 
@@ -467,16 +473,16 @@ Defined in `session-manager.ts`:
 - `listAll()` -> sessions across all project scopes under `~/.omp/agent/sessions`
 - `resolveResumableSession(sessionArg, cwd, sessionDir?)` -> local then global resume/fork target lookup
 
-Metadata extraction for `list`/`listAll` and `getRecentSessions` reads only a prefix (`readTextPrefix(..., 4096)` or an equivalent direct 4KB read for file storage). Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
+Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(..., 4096, 0)`. `list`/`listAll` read a 4KB prefix plus a bounded 32 KiB tail through one `readTextSlices(...)` call per file, using the prefix for metadata and the tail for lifecycle status. Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
 
 ## Related but Distinct: Prompt History Storage
 
 `HistoryStorage` (`history-storage.ts`) is a separate SQLite subsystem for prompt recall/search, not session replay.
 
 - DB: `~/.omp/agent/history.db`
-- Table: `history(id, prompt, created_at, cwd)`
+- Table: `history(id, prompt, created_at, cwd, session_id)`
 - FTS5 index: `history_fts` with trigger-maintained sync
 - Deduplicates consecutive identical prompts using in-memory last-prompt cache
-- Async insertion (`setImmediate`) so prompt capture does not block turn execution
+- Inserts are batched through an async drain queue (~100 ms delay) so prompt capture does not block turn execution
 
 Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.

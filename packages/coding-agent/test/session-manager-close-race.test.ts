@@ -24,7 +24,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	MemorySessionStorage,
@@ -40,17 +40,14 @@ class CloseHoldingStorage implements SessionStorage {
 		const inner = this.#inner.openWriter(path, options);
 		const gates = this.#closeGates;
 		return {
-			writeLine(line) {
-				return inner.writeLine(line);
-			},
-			writeLineSync(line) {
-				inner.writeLineSync(line);
+			append(line) {
+				return inner.append(line);
 			},
 			flush() {
 				return inner.flush();
 			},
-			fsync() {
-				return inner.fsync();
+			isOpen() {
+				return inner.isOpen();
 			},
 			async close() {
 				const gate = Promise.withResolvers<void>();
@@ -85,9 +82,6 @@ class CloseHoldingStorage implements SessionStorage {
 	writeTextSync(p: string, content: string): void {
 		this.#inner.writeTextSync(p, content);
 	}
-	readTextSync(p: string): string {
-		return this.#inner.readTextSync(p);
-	}
 	statSync(p: string) {
 		return this.#inner.statSync(p);
 	}
@@ -100,11 +94,14 @@ class CloseHoldingStorage implements SessionStorage {
 	readText(p: string): Promise<string> {
 		return this.#inner.readText(p);
 	}
-	readTextPrefix(p: string, maxBytes: number): Promise<string> {
-		return this.#inner.readTextPrefix(p, maxBytes);
+	readTextSlices(p: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		return this.#inner.readTextSlices(p, prefixBytes, suffixBytes);
 	}
 	writeText(p: string, content: string): Promise<void> {
 		return this.#inner.writeText(p, content);
+	}
+	writeTextAtomic(p: string, content: string): Promise<void> {
+		return this.#inner.writeTextAtomic(p, content);
 	}
 	rename(p: string, nextPath: string): Promise<void> {
 		return this.#inner.rename(p, nextPath);
@@ -206,6 +203,11 @@ describe("SessionManager close/appendMessage race", () => {
 				timestamp: Date.now(),
 			});
 		}).not.toThrow();
+
+		const sessionFile = sm.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const duringCloseContent = await storage.readText(sessionFile);
+		expect(duringCloseContent).toContain('"content":"during-close"');
 
 		// Drain everything.
 		await settle(closePromise, storage);

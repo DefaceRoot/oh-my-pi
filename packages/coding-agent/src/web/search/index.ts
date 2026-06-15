@@ -7,7 +7,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
@@ -115,6 +115,15 @@ function formatForLLM(response: SearchResponse): string {
 	return parts.join("\n");
 }
 
+function hasRenderableSearchContent(response: SearchResponse): boolean {
+	if (response.answer?.trim()) return true;
+	if (response.sources.length > 0) return true;
+	if (response.citations?.length) return true;
+	if (response.relatedQuestions?.some(question => question.trim())) return true;
+	if (response.searchQueries?.some(query => query.trim())) return true;
+	return false;
+}
+
 interface ExecuteSearchOptions {
 	authStorage: AuthStorage;
 	sessionId?: string;
@@ -131,7 +140,9 @@ async function executeSearch(
 	const providers =
 		params.provider && params.provider !== "auto"
 			? await getSearchProvider(params.provider).then(async provider =>
-					(await provider.isAvailable(authStorage)) ? [provider] : resolveProviderChain(authStorage, "auto"),
+					(await provider.isExplicitlyAvailable(authStorage))
+						? [provider]
+						: resolveProviderChain(authStorage, "auto"),
 				)
 			: await resolveProviderChain(authStorage);
 	if (providers.length === 0) {
@@ -148,7 +159,7 @@ async function executeSearch(
 		lastProvider = provider;
 		try {
 			const response = await provider.search({
-				query: params.query.replace(/202\d/g, String(new Date().getFullYear())), // LUL
+				query: params.query,
 				limit: params.limit,
 				recency: params.recency,
 				systemPrompt: webSearchSystemPrompt,
@@ -159,6 +170,10 @@ async function executeSearch(
 				authStorage,
 				sessionId,
 			});
+
+			if (!hasRenderableSearchContent(response)) {
+				throw new SearchProviderError(provider.id, `${provider.label} returned no renderable search content.`, 204);
+			}
 
 			const text = formatForLLM(response);
 
@@ -220,7 +235,7 @@ export async function runSearchQuery(
 /**
  * Web search tool implementation.
  *
- * Supports Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Z.AI, SearXNG, and Synthetic providers with automatic fallback.
+ * Supports the configured web-search provider chain with automatic fallback.
  */
 export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
 	readonly name = "web_search";
@@ -276,8 +291,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		return renderSearchCall(args, options, theme);
 	},
 
-	renderResult(result, options: RenderResultOptions, theme: Theme) {
-		return renderSearchResult(result, options, theme);
+	renderResult(result, options: RenderResultOptions, theme: Theme, args) {
+		return renderSearchResult(result, options, theme, args);
 	},
 };
 

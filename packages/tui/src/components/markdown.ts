@@ -3,9 +3,28 @@ import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
-import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+import {
+	applyBackgroundToLine,
+	encodeTextSized,
+	getSegmenter,
+	padding,
+	replaceTabs,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../utils";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+// OSC 66 (Kitty text-sizing) heading spans are emitted as a single indivisible
+// unit by the H1 render path. Like image-protocol lines, they must bypass
+// ANSI wrapping and width padding: re-wrapping splits/normalizes the sized span
+// (recomputing the explicit `w=` cell count and hoisting SGR out of the OSC
+// payload), and padding would append trailing cells past the doubled glyph.
+const OSC66_LINE_PREFIX = "\x1b]66;";
+
+function isOsc66Line(line: string): boolean {
+	return line.includes(OSC66_LINE_PREFIX);
+}
 
 class StrictStrikethroughTokenizer extends Tokenizer {
 	override del(src: string): Tokens.Del | undefined {
@@ -39,7 +58,15 @@ markdownParser.setOptions({
 // (Rust FFI) work for content/layout combinations already seen this session.
 
 const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
-const renderCache = new LRUCache<string, string[]>({ max: RENDER_CACHE_MAX });
+const EMPTY_RENDER_LINES: readonly string[] = [];
+const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_MAX });
+
+// A reference-link definition (`[label]: dest`) resolves across the whole
+// document, so a split lex cannot reproduce it — disable the streaming fast path
+// when one is present (rare in streamed output). The label may contain
+// backslash-escaped characters (`[a\]b]: x`), so escapes are matched explicitly;
+// over-matching is safe (it only costs the fast path), under-matching is not.
+const HAS_REF_DEF = /^ {0,3}\[(?:\\.|[^\]\\])+\]:/m;
 
 /** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
 export function clearRenderCache(): void {
@@ -130,6 +157,59 @@ function formatHyperlink(text: string, target: string): string {
 	return `\x1b]8;;${safeTarget}\x07${text}\x1b]8;;\x07`;
 }
 
+function isAsciiTextSizingPayload(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code < 0x20 || code > 0x7e) return false;
+	}
+	return true;
+}
+
+function encodeTextSizedHeading(text: string, scale: 1 | 2 | 3): string {
+	let out = "";
+	let asciiRun = "";
+	const flushAscii = () => {
+		if (asciiRun === "") return;
+		out += encodeTextSized(asciiRun, { scale });
+		asciiRun = "";
+	};
+
+	for (const { segment } of getSegmenter().segment(text)) {
+		if (isAsciiTextSizingPayload(segment)) {
+			asciiRun += segment;
+			continue;
+		}
+		flushAscii();
+		out += encodeTextSized(segment, { scale, widthCells: visibleWidth(segment) });
+	}
+	flushAscii();
+	return out;
+}
+
+function plainInlineTokens(tokens: Token[]): string {
+	let result = "";
+	for (const token of tokens) {
+		switch (token.type) {
+			case "text":
+				result += token.tokens && token.tokens.length > 0 ? plainInlineTokens(token.tokens) : token.text;
+				break;
+			case "strong":
+			case "em":
+			case "del":
+			case "link":
+				result += plainInlineTokens(token.tokens || []);
+				break;
+			case "codespan":
+				result += token.text;
+				break;
+			default:
+				if ("text" in token && typeof token.text === "string") result += token.text;
+				break;
+		}
+	}
+	return result;
+}
+
 // ---------------------------------------------------------------------------
 // Inline hex-color swatches
 // ---------------------------------------------------------------------------
@@ -216,10 +296,23 @@ export class Markdown implements Component {
 	/** Number of spaces used to indent code block content. */
 	#codeBlockIndent: number;
 
-	// Cache for rendered output
+	// Cache for rendered output. Cached arrays are shared and returned by
+	// reference (render contract: results are component-owned and immutable to
+	// callers); the L2 LRU may hand the same array to multiple instances.
 	#cachedText?: string;
 	#cachedWidth?: number;
-	#cachedLines?: string[];
+	#cachedLines?: readonly string[];
+	#transientRenderCache = false;
+
+	// Streaming-lex cache: the largest blank-line-bounded prefix of #text whose
+	// block tokens are frozen, plus those tokens. marked has no resumable lexer,
+	// but block tokenization is local across a "\n\n" boundary with balanced
+	// fences, so lex(prefix) ++ lex(tail) === lex(prefix+tail). On append-only
+	// growth (the streaming path) this re-lexes only the grown tail instead of the
+	// whole buffer, turning O(N^2) reveal cost into O(N). Width/theme do not affect
+	// tokenization, so this cache is independent of the render caches above.
+	#streamPrefixText?: string;
+	#streamPrefixTokens?: Token[];
 
 	constructor(
 		text: string,
@@ -239,6 +332,13 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.#text = text;
+		if (!text.trim()) {
+			// Blank replacement: render() early-returns before #lexTokens can see
+			// the non-append edit, so drop the frozen stream state here or it
+			// outlives the content it indexed.
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+		}
 		this.invalidate();
 	}
 
@@ -247,10 +347,92 @@ export class Markdown implements Component {
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
 	}
+	get transientRenderCache(): boolean {
+		return this.#transientRenderCache;
+	}
 
-	render(width: number): string[] {
+	set transientRenderCache(value: boolean) {
+		const next = value === true;
+		if (this.#transientRenderCache === next) return;
+		this.#transientRenderCache = next;
+		this.invalidate();
+	}
+
+	// Lex `text` into block tokens, reusing the frozen stable prefix when the text
+	// only grew (the streaming path). Falls back to a full lex whenever the prefix
+	// is no longer a prefix (non-append edit), the text carries reference-link
+	// definitions, or it contains CR (marked normalizes CRLF, which would desync
+	// raw-span offsets). Every fallback is correctness-preserving — only speed
+	// differs; the render loop sees the identical token list either way.
+	#lexTokens(text: string): Token[] {
+		const canStream = !HAS_REF_DEF.test(text) && !text.includes("\r");
+		const prefix = this.#streamPrefixText;
+		const prefixTokens = this.#streamPrefixTokens;
+		if (
+			canStream &&
+			prefix !== undefined &&
+			prefixTokens !== undefined &&
+			text.length > prefix.length &&
+			text.startsWith(prefix)
+		) {
+			const tailTokens = markdownParser.lexer(text.slice(prefix.length));
+			const tokens = [...prefixTokens, ...tailTokens];
+			this.#freezeStablePrefix(text, tokens);
+			return tokens;
+		}
+		const tokens = markdownParser.lexer(text);
+		if (canStream) {
+			this.#freezeStablePrefix(text, tokens);
+		} else {
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+		}
+		return tokens;
+	}
+
+	// Freeze the largest run of leading blocks that end on a hard "\n\n" boundary
+	// (complete and immutable under append-only growth) so the next streaming
+	// render re-lexes only the unfrozen tail. Caller guarantees no CR / no
+	// reference definitions, so each token's `raw` is a verbatim slice of `text`
+	// and the summed offsets address `text` exactly.
+	#freezeStablePrefix(text: string, tokens: Token[]): void {
+		let pos = 0;
+		let frozenEnd = 0;
+		let frozenCount = 0;
+		for (let i = 0; i < tokens.length; i++) {
+			const raw = tokens[i].raw;
+			const end = pos + raw.length;
+			// A `space` token ending in "\n\n" closes the preceding block, but a
+			// `list` before it can still be extended by a following same-marker
+			// item across the blank line (CommonMark loose-list continuation),
+			// which marked merges into one renumbered loose list. Freezing across
+			// such a cut would keep the lists separate. Never freeze right after a
+			// list — it stays in the re-lexed tail.
+			if (raw.endsWith("\n\n") && tokens[i - 1]?.type !== "list") {
+				frozenEnd = end;
+				frozenCount = i + 1;
+			}
+			pos = end;
+		}
+		// Freeze only when the tail begins with real block content. If the next
+		// char is whitespace (an extra blank line, or an indented continuation),
+		// the block separator straddles the cut and lex(prefix)++lex(tail) would
+		// desync from a full lex — e.g. a fence followed by "\n\n\n- list". When
+		// frozenEnd is at end-of-text the next char is unknown, so defer.
+		if (frozenCount > 0 && frozenEnd < text.length) {
+			const next = text.charCodeAt(frozenEnd);
+			if (next !== 0x20 /* space */ && next !== 0x0a /* \n */) {
+				this.#streamPrefixText = text.slice(0, frozenEnd);
+				this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+			}
+		}
+	}
+
+	render(width: number): readonly string[] {
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
+		// Returning the cached reference is load-bearing: parents memoize their
+		// concatenation on reference equality.
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
@@ -260,12 +442,10 @@ export class Markdown implements Component {
 
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
-			const result: string[] = [];
-			// Update per-instance cache
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
-			this.#cachedLines = result;
-			return result;
+			this.#cachedLines = EMPTY_RENDER_LINES;
+			return EMPTY_RENDER_LINES;
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
@@ -283,20 +463,23 @@ export class Markdown implements Component {
 		// risk of clashing with a function that returns text verbatim.
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
-		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
-		const headingProbe = this.#theme.heading("");
-		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
-		const cached = renderCache.get(cacheKey);
-		if (cached !== undefined) {
-			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
-			this.#cachedText = this.#text;
-			this.#cachedWidth = width;
-			this.#cachedLines = cached;
-			return cached;
+		let cacheKey: string | undefined;
+		if (!this.transientRenderCache) {
+			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+			const headingProbe = this.#theme.heading("");
+			cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			const cached = renderCache.get(cacheKey);
+			if (cached !== undefined) {
+				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
+				this.#cachedText = this.#text;
+				this.#cachedWidth = width;
+				this.#cachedLines = cached;
+				return cached;
+			}
 		}
 
 		// Parse markdown to HTML-like tokens
-		const tokens = markdownParser.lexer(normalizedText);
+		const tokens = this.#lexTokens(normalizedText);
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
@@ -311,8 +494,9 @@ export class Markdown implements Component {
 		// Wrap lines (NO padding, NO background yet)
 		const wrappedLines: string[] = [];
 		for (const line of renderedLines) {
-			// Skip wrapping for image protocol lines (would corrupt escape sequences)
-			if (TERMINAL.isImageLine(line)) {
+			// Skip wrapping for image protocol lines and OSC 66 sized headings
+			// (would corrupt escape sequences / split the indivisible sized span).
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
 				wrappedLines.push(line);
 			} else {
 				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
@@ -325,12 +509,28 @@ export class Markdown implements Component {
 		const bgFn = this.#defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 
+		let previousLineWasOsc66 = false;
+
 		for (const line of wrappedLines) {
-			// Image lines must be output raw - no margins or background
-			if (TERMINAL.isImageLine(line)) {
-				contentLines.push(line);
+			// The first empty row after a scale>1 OSC 66 heading is structural:
+			// it reserves the lower cells occupied by the multicell glyphs. Do
+			// not pad or background-fill it, because real spaces on that row can
+			// interact with Kitty's multicell overwrite rules during the first
+			// paint. Leave it as a cursor-only newline.
+			if (previousLineWasOsc66 && line === "") {
+				contentLines.push("");
+				previousLineWasOsc66 = false;
 				continue;
 			}
+
+			// Image lines and OSC 66 sized headings must be output raw - no margins or background
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				contentLines.push(line);
+				previousLineWasOsc66 = isOsc66Line(line);
+				continue;
+			}
+
+			previousLineWasOsc66 = false;
 
 			const lineWithMargins = leftMargin + line + rightMargin;
 
@@ -356,14 +556,18 @@ export class Markdown implements Component {
 		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
 		const result = rawResult.length > 0 ? rawResult : [""];
 
-		// Update L1 per-instance cache
+		// Update caches and hand the array out by reference. Callers must not
+		// mutate it (Component render contract); the L2 entry is shared across
+		// instances keyed on identical inputs.
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
 		this.#cachedLines = result;
 
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		renderCache.set(cacheKey, result);
+		if (cacheKey !== undefined) {
+			renderCache.set(cacheKey, result);
+		}
 
 		return result;
 	}
@@ -459,7 +663,20 @@ export class Markdown implements Component {
 				const headingLevel = token.depth;
 				const headingPrefix = `${"#".repeat(headingLevel)} `;
 				const headingText = this.#renderInlineTokens(token.tokens || [], styleContext);
+				const headingPlainText = plainInlineTokens(token.tokens || []);
 				let styledHeading: string;
+				if (headingLevel === 1 && TERMINAL.textSizing) {
+					const plainWidth = visibleWidth(headingPlainText);
+					if (plainWidth > 0 && 2 * plainWidth <= width) {
+						const sizedHeading = encodeTextSizedHeading(headingPlainText, 2);
+						lines.push(this.#theme.heading(this.#theme.bold(this.#theme.underline(sizedHeading))));
+						lines.push(""); // reserve the heading's second visual row
+						if (nextTokenType && nextTokenType !== "space") {
+							lines.push(""); // Add spacing after headings (unless space token follows)
+						}
+						break;
+					}
+				}
 				if (headingLevel === 1) {
 					styledHeading = this.#theme.heading(this.#theme.bold(this.#theme.underline(headingText)));
 				} else if (headingLevel === 2) {
@@ -502,7 +719,7 @@ export class Markdown implements Component {
 
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.#theme.highlightCode) {
+				if (this.#theme.highlightCode && !this.transientRenderCache) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						lines.push(`${codeIndent}${hlLine}`);
@@ -720,35 +937,33 @@ export class Markdown implements Component {
 		for (let i = 0; i < token.items.length; i++) {
 			const item = token.items[i];
 			const bullet = token.ordered ? `${startNumber + i}. ` : "- ";
+			// Continuation rows align under the item text, so the hang matches the
+			// actual bullet width (`10. ` is 4 cells, not 2).
+			const continuationIndent = indent + padding(bullet.length);
 
-			// Process item tokens to handle nested lists
+			// Process item tokens; nested-list lines arrive structurally tagged and
+			// already carry their own full indent.
 			const itemLines = this.#renderListItem(item.tokens || [], depth, styleContext);
 
 			if (itemLines.length > 0) {
-				// First line - check if it's a nested list
-				// A nested list will start with indent (spaces) followed by cyan bullet
-				const firstLine = itemLines[0];
-				const isNestedList = /^\s+\x1b\[36m[-\d]/.test(firstLine); // starts with spaces + cyan + bullet char
-
-				if (isNestedList) {
-					// This is a nested list, just add it as-is (already has full indent)
-					lines.push(firstLine);
+				const firstLine = itemLines[0]!;
+				if (firstLine.nested) {
+					// Nested list first - keep as-is (already has full indent)
+					lines.push(firstLine.text);
 				} else {
 					// Regular text content - add indent and bullet
-					lines.push(indent + this.#theme.listBullet(bullet) + firstLine);
+					lines.push(indent + this.#theme.listBullet(bullet) + firstLine.text);
 				}
 
 				// Rest of the lines
 				for (let j = 1; j < itemLines.length; j++) {
-					const line = itemLines[j];
-					const isNestedListLine = /^\s+\x1b\[36m[-\d]/.test(line); // starts with spaces + cyan + bullet char
-
-					if (isNestedListLine) {
+					const line = itemLines[j]!;
+					if (line.nested) {
 						// Nested list line - already has full indent
-						lines.push(line);
+						lines.push(line.text);
 					} else {
-						// Regular content - add parent indent + 2 spaces for continuation
-						lines.push(`${indent}  ${line}`);
+						// Regular content - hang under the item text
+						lines.push(continuationIndent + line.text);
 					}
 				}
 			} else {
@@ -760,50 +975,58 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Render list item tokens, handling nested lists
-	 * Returns lines WITHOUT the parent indent (renderList will add it)
+	 * Render list item tokens, handling nested lists.
+	 * Returns lines WITHOUT the parent indent (renderList adds it); lines that
+	 * belong to a nested list are tagged `nested` so the caller never has to
+	 * sniff theme-dependent ANSI bytes to recognize them.
 	 */
-	#renderListItem(tokens: Token[], parentDepth: number, styleContext?: InlineStyleContext): string[] {
-		const lines: string[] = [];
+	#renderListItem(
+		tokens: Token[],
+		parentDepth: number,
+		styleContext?: InlineStyleContext,
+	): Array<{ text: string; nested: boolean }> {
+		const lines: Array<{ text: string; nested: boolean }> = [];
 
 		for (const token of tokens) {
 			if (token.type === "list") {
 				// Nested list - render with one additional indent level
-				// These lines will have their own indent, so we just add them as-is
+				// These lines carry their own indent, so tag them for pass-through
 				const nestedLines = this.#renderList(token as ListToken, parentDepth + 1, styleContext);
-				lines.push(...nestedLines);
+				for (const nestedLine of nestedLines) {
+					lines.push({ text: nestedLine, nested: true });
+				}
 			} else if (token.type === "text") {
 				// Text content (may have inline tokens)
 				const text =
 					token.tokens && token.tokens.length > 0
 						? this.#renderInlineTokens(token.tokens, styleContext)
 						: token.text || "";
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
 				const text = this.#renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "code") {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
-				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.#theme.highlightCode) {
+				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
+				if (this.#theme.highlightCode && !this.transientRenderCache) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
-						lines.push(`${codeIndent}${hlLine}`);
+						lines.push({ text: `${codeIndent}${hlLine}`, nested: false });
 					}
 				} else {
 					const codeLines = token.text.split("\n");
 					for (const codeLine of codeLines) {
-						lines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+						lines.push({ text: `${codeIndent}${this.#theme.codeBlock(codeLine)}`, nested: false });
 					}
 				}
-				lines.push(this.#theme.codeBlockBorder("```"));
+				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.#renderInlineTokens([token], styleContext);
 				if (text) {
-					lines.push(text);
+					lines.push({ text, nested: false });
 				}
 			}
 		}

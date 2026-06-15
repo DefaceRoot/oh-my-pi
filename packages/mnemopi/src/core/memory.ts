@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 
 import { dbPath as configuredDbPath } from "../config";
 import { closeQuietly } from "../db";
@@ -7,6 +7,7 @@ import type { MemoryInput, Metadata } from "../types";
 import { AnnotationStore } from "./annotations";
 import { BankManager } from "./banks";
 import { BeamMemory, initBeam } from "./beam/index";
+import { reconcileEmbeddingModel } from "./beam/store";
 import type { RecallEnhancedOptions, RecallOptions, RecallResult, SleepResult } from "./beam/types";
 import { EpisodicGraph } from "./episodic-graph";
 import {
@@ -35,13 +36,22 @@ export interface MnemopiOptions {
 	readonly noEmbeddings?: boolean;
 	readonly embeddingModel?: string;
 	readonly embeddingApiUrl?: string;
-	readonly embeddingApiKey?: string;
+	readonly embeddingApiKey?: ApiKey;
 	readonly embeddings?: false | MnemopiEmbeddingRuntimeOptions;
 	readonly llmEnabled?: boolean;
 	readonly llmBaseUrl?: string;
-	readonly llmApiKey?: string;
+	readonly llmApiKey?: ApiKey;
 	readonly llmModel?: string | Model<Api>;
 	readonly llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Escalate best-effort failure logs (embedding pipeline) from debug to warn. */
+	readonly debug?: boolean;
+	/**
+	 * When `false`, skip the embedding-model reconcile (wipe-and-rebuild) on open.
+	 * Read-only / ephemeral consumers (e.g. a stats snapshot) set this so an open
+	 * never triggers a destructive migration whose background rebuild the process
+	 * would exit before completing. Defaults to `true`.
+	 */
+	readonly reconcile?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -219,10 +229,11 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		}
 	}
 
-	if (embeddings === undefined && llm === undefined) {
+	const debug = options.debug ? true : undefined;
+	if (embeddings === undefined && llm === undefined && debug === undefined) {
 		return undefined;
 	}
-	return { embeddings, llm };
+	return { embeddings, llm, debug };
 }
 
 let defaultInstance: Mnemopi | null = null;
@@ -266,7 +277,7 @@ function toRememberOptions(input: string | RememberInput, options: RememberFacad
 }
 
 function toRecallOptions(options: RecallFacadeOptions): BeamRecallFacadeOptions {
-	return {
+	const beamOptions: BeamRecallFacadeOptions = {
 		fromDate: options.fromDate ?? options.from_date ?? null,
 		toDate: options.toDate ?? options.to_date ?? null,
 		authorId: options.authorId ?? null,
@@ -282,6 +293,11 @@ function toRecallOptions(options: RecallFacadeOptions): BeamRecallFacadeOptions 
 		ftsWeight: options.ftsWeight ?? options.fts_weight ?? undefined,
 		importanceWeight: options.importanceWeight ?? options.importance_weight ?? undefined,
 	};
+	// Preserve the three-state semantics (`undefined` = auto-derive, `null` = explicitly
+	// FTS-only, `number[]` = caller-supplied) so callers can opt out of `recall()`'s
+	// auto-embed without being forced into it.
+	if ("queryEmbedding" in options) beamOptions.queryEmbedding = options.queryEmbedding;
+	return beamOptions;
 }
 
 function countRows(db: Database, sql: string, ...params: (string | number | null)[]): number {
@@ -380,6 +396,15 @@ export class Mnemopi {
 		}
 		this.conn = this.beam.db;
 		this.db = this.beam.db;
+		// Wipe-and-rebuild stale embeddings when the configured model changed since
+		// the vectors were written. Runs inside the runtime scope so
+		// `currentEmbeddingModel()` reflects this instance's configured model.
+		// Skipped for read-only opens (`reconcile: false`) so an ephemeral stats
+		// reader never triggers a destructive migration whose async rebuild it would
+		// exit before completing — which would otherwise lose the embeddings.
+		if (options.reconcile !== false) {
+			this.#withRuntimeOptions(() => reconcileEmbeddingModel(this.beam));
+		}
 	}
 
 	close(): void {
@@ -397,11 +422,15 @@ export class Mnemopi {
 		return this.#withRuntimeOptions(() => this.beam.remember(content, toRememberOptions(memory, options)));
 	}
 
-	recall(query: string, topK = 5, options: RecallFacadeOptions = {}): RecallResult[] {
+	recall(query: string, topK = 5, options: RecallFacadeOptions = {}): Promise<RecallResult[]> {
 		return this.#withRuntimeOptions(() => this.beam.recall(query, topK, toRecallOptions(options)));
 	}
 
-	recallEnhanced(query: string, topK = 5, options: RecallFacadeOptions & RecallEnhancedOptions = {}): RecallResult[] {
+	recallEnhanced(
+		query: string,
+		topK = 5,
+		options: RecallFacadeOptions & RecallEnhancedOptions = {},
+	): Promise<RecallResult[]> {
 		return this.#withRuntimeOptions(() =>
 			this.beam.recallEnhanced(query, topK, {
 				...toRecallOptions(options),
@@ -489,11 +518,11 @@ export class Mnemopi {
 		return this.remember(memory, options);
 	}
 
-	search(query: string, topK = 5, options: RecallFacadeOptions = {}): RecallResult[] {
+	search(query: string, topK = 5, options: RecallFacadeOptions = {}): Promise<RecallResult[]> {
 		return this.recall(query, topK, options);
 	}
 
-	query(query: string, topK = 5, options: RecallFacadeOptions = {}): RecallResult[] {
+	query(query: string, topK = 5, options: RecallFacadeOptions = {}): Promise<RecallResult[]> {
 		return this.recall(query, topK, options);
 	}
 
@@ -523,11 +552,15 @@ export function remember(content: string | RememberInput, options: ModuleRemembe
 	return defaultFor(options.bank).remember(content, options);
 }
 
-export function recall(query: string, topK = 5, options: ModuleRecallOptions = {}): RecallResult[] {
+export function recall(query: string, topK = 5, options: ModuleRecallOptions = {}): Promise<RecallResult[]> {
 	return defaultFor(options.bank).recall(query, topK, options);
 }
 
-export function recallEnhanced(query: string, topK = 5, options: ModuleRecallEnhancedOptions = {}): RecallResult[] {
+export function recallEnhanced(
+	query: string,
+	topK = 5,
+	options: ModuleRecallEnhancedOptions = {},
+): Promise<RecallResult[]> {
 	return defaultFor(options.bank).recallEnhanced(query, topK, options);
 }
 
@@ -591,11 +624,11 @@ export function storeMemory(memory: string | RememberInput, options: ModuleRemem
 	return remember(memory, options);
 }
 
-export function search(query: string, topK = 5, options: ModuleRecallOptions = {}): RecallResult[] {
+export function search(query: string, topK = 5, options: ModuleRecallOptions = {}): Promise<RecallResult[]> {
 	return recall(query, topK, options);
 }
 
-export function query(query: string, topK = 5, options: ModuleRecallOptions = {}): RecallResult[] {
+export function query(query: string, topK = 5, options: ModuleRecallOptions = {}): Promise<RecallResult[]> {
 	return recall(query, topK, options);
 }
 

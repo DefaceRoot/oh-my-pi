@@ -44,6 +44,48 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths cross-tree degeneracy", (
 	});
 });
 
+describe.skipIf(isWindows)("search with omitted paths", () => {
+	let cwd: string;
+
+	beforeEach(async () => {
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-search-default-cwd-"));
+		await Bun.write(path.join(cwd, "rooted.txt"), "default-needle here\n");
+	});
+
+	afterEach(async () => {
+		await fs.rm(cwd, { recursive: true, force: true });
+	});
+
+	it("defaults to the workspace root when paths is omitted", async () => {
+		const tools = await createTools(createTestSession(cwd));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		// Callers that omit `paths` would otherwise be rejected at schema
+		// validation with `paths: Invalid input` and never run. Omission must
+		// degrade to a workspace-root scan rather than fail the tool call.
+		const result = await tool.execute("search-default-paths", { pattern: "default-needle" });
+
+		const text = getText(result);
+		const details = result.details as { fileCount?: number } | undefined;
+		expect(text).toContain("default-needle here");
+		expect(details?.fileCount).toBe(1);
+	});
+
+	it("defaults to the workspace root when paths is an empty array", async () => {
+		const tools = await createTools(createTestSession(cwd));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-empty-paths", {
+			pattern: "default-needle",
+			paths: [],
+		});
+
+		expect(getText(result)).toContain("default-needle here");
+	});
+});
+
 describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 	let dirA: string;
 	let dirB: string;
@@ -91,5 +133,104 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 		// takes seconds. Two-fixture targeted scans complete in well under a
 		// second on every supported platform.
 		expect(durationMs).toBeLessThan(5000);
+	});
+});
+
+describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor", () => {
+	let parent: string;
+	let repo: string;
+	let cousinFile: string;
+
+	beforeEach(async () => {
+		parent = await fs.mkdtemp(path.join(os.tmpdir(), "pi-search-ancestor-"));
+		repo = path.join(parent, "repo");
+		await fs.mkdir(path.join(repo, "src"), { recursive: true });
+		await Bun.write(path.join(repo, "src", "a.ts"), "alpha\n");
+		cousinFile = path.join(parent, "homeish", ".gitconfig");
+		await Bun.write(cousinFile, "[push]\n\tfollowTags = true\n");
+	});
+
+	afterEach(async () => {
+		await fs.rm(parent, { recursive: true, force: true });
+	});
+
+	it("fans out per-path targets instead of walking the unrequested ancestor", async () => {
+		// `.` (the repo) and a file in a cousin tree only share `parent`, which the
+		// caller never asked to search. Collapsing to a single walk rooted there
+		// scans every unrelated sibling (the real-world case: `.` + `~/.gitconfig`
+		// walks all of `$HOME` until the grep timeout). The resolver must surface
+		// per-path targets so each scan stays bounded to a requested path.
+		const resolved = await resolveExplicitSearchPaths([".", cousinFile], repo);
+		expect(resolved).toBeDefined();
+		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
+		const targetBases = (resolved.targets ?? []).map(target => target.basePath).sort();
+		expect(targetBases).toEqual([repo, cousinFile].sort());
+	});
+
+	it("keeps a single collapsed walk when the common ancestor is a requested scope", async () => {
+		// `ast_edit` consumes the same targets and applies rewrites once per
+		// target; a dir + nested-file input must stay a single walk by default or
+		// overlapping targets would double-apply rewrites to the nested file.
+		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo);
+		expect(resolved).toBeDefined();
+		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
+		expect(resolved.targets).toBeUndefined();
+		expect(resolved.basePath).toBe(repo);
+	});
+
+	it("fans out nested plain files when the caller opts in via fanOutFileItems", async () => {
+		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo, undefined, true);
+		expect(resolved).toBeDefined();
+		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
+		const targetBases = (resolved.targets ?? []).map(target => target.basePath).sort();
+		expect(targetBases).toEqual([repo, path.join(repo, "src", "a.ts")].sort());
+	});
+});
+
+describe.skipIf(isWindows)("search with explicit walker-pruned file targets", () => {
+	let repo: string;
+
+	beforeEach(async () => {
+		repo = await fs.mkdtemp(path.join(os.tmpdir(), "pi-search-pruned-"));
+		await fs.mkdir(path.join(repo, ".git"), { recursive: true });
+		await Bun.write(path.join(repo, ".git", "config"), "[push]\n\tfollowTags = true\n");
+		await Bun.write(path.join(repo, "readme.txt"), "no needle here\n");
+	});
+
+	afterEach(async () => {
+		await fs.rm(repo, { recursive: true, force: true });
+	});
+
+	it("matches inside an explicit .git/config target alongside a directory scope", async () => {
+		// The directory walker prunes `.git` unconditionally, so folding the
+		// explicit file into the walk's glob union silently returned 0 matches.
+		// The file must be read directly as its own target.
+		const tools = await createTools(createTestSession(repo));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-git-config", {
+			pattern: "followTags",
+			paths: [".", ".git/config"],
+		});
+		const details = result.details as { matchCount?: number; files?: string[] } | undefined;
+		expect(getText(result)).toContain("followTags = true");
+		expect(details?.matchCount).toBe(1);
+		expect(details?.files).toEqual([".git/config"]);
+	});
+
+	it("dedupes matches when a file target overlaps a directory target", async () => {
+		await fs.mkdir(path.join(repo, "src"), { recursive: true });
+		await Bun.write(path.join(repo, "src", "a.ts"), "needle-dup\n");
+		const tools = await createTools(createTestSession(repo));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-overlap", {
+			pattern: "needle-dup",
+			paths: [".", "src/a.ts"],
+		});
+		const details = result.details as { matchCount?: number } | undefined;
+		expect(details?.matchCount).toBe(1);
 	});
 });

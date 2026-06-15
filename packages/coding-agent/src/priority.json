@@ -10,6 +10,7 @@
 		"mini"
 	],
 	"slow": [
+		"gpt-5.5",
 		"gpt-5.4",
 		"gpt-5.3-codex",
 		"gpt-5.3",
@@ -18,6 +19,10 @@
 		"gpt-5.1-codex",
 		"gpt-5.1",
 		"codex",
+		"opus-4.8",
+		"opus-4-8",
+		"opus-4.7",
+		"opus-4-7",
 		"opus-4.6",
 		"opus-4-6",
 		"opus-4.5",
@@ -32,6 +37,9 @@
 		"gemini-3.1-pro",
 		"gemini-3-1-pro",
 		"gemini-3-pro",
-		"gemini-3"
+		"gemini-3",
+		"google-gemini-cli/gemini-3.5-flash",
+		"gemini-3.5-flash",
+		"gemini-3-5-flash"
 	]
 }

@@ -7,10 +7,12 @@ import { ToolError } from "../tools/tool-errors";
 
 /** Shape forwarded from the plan-mode resolve handler to InteractiveMode's
  *  approval popup. Populated by the standing handler that the resolve tool
- *  dispatches to when the agent submits `resolve { action: "apply" }`. */
+ *  dispatches to when the agent submits `resolve { action: "apply" }`.
+ *  `planFilePath` is where the agent drafted the plan; `finalPlanFilePath`
+ *  is where the approved plan is referenced after local plans are finalized. */
 export interface PlanApprovalDetails {
 	planFilePath: string;
-	finalPlanFilePath: string;
+	finalPlanFilePath?: string;
 	title: string;
 	planExists: boolean;
 }
@@ -115,6 +117,89 @@ export function humanizePlanTitle(title: string): string {
 	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+/** The `local://` URL a plan slug maps to while drafting. The agent writes the
+ *  draft here and passes the slug to `resolve`; approval may finalize it to the
+ *  title URL (`local://<title>.md`) while preserving this lookup path. */
+export function planFileUrlForSlug(slug: string): string {
+	return `local://${slug}-plan.md`;
+}
+
+/** Derive a `<slug>` from an agent-supplied `extra.title`, or `undefined` when
+ *  the title is missing/non-string/unsanitizable. A trailing `-plan` is stripped
+ *  so a supplied "auth-plan" maps to `auth-plan.md`, not `auth-plan-plan.md`. */
+function planSlugFromSupplied(suppliedTitle: unknown): string | undefined {
+	if (typeof suppliedTitle !== "string" || !suppliedTitle.trim()) return undefined;
+	try {
+		const { title } = normalizePlanTitle(suppliedTitle);
+		const slug = title.replace(/-plan$/i, "");
+		return slug || title;
+	} catch {
+		return undefined;
+	}
+}
+
+export interface ResolveApprovedPlanInput {
+	/** The agent's `extra.title` from the `resolve` call, if any. */
+	suppliedTitle?: unknown;
+	/** The plan path recorded in plan-mode state (the entry default or a prior plan). */
+	statePlanFilePath: string;
+	/** Read a plan `local://` URL, returning null when the file does not exist. */
+	readPlan: (planUrl: string) => Promise<string | null>;
+	/** Optional fallback: list candidate plan `local://` URLs (newest first) so a
+	 *  plan whose name can't be reconstructed (e.g. a dropped `extra.title`) is
+	 *  still found. */
+	listPlanFiles?: () => Promise<string[]>;
+}
+
+export interface ResolvedApprovedPlan {
+	planFilePath: string;
+	finalPlanFilePath: string;
+	planContent: string;
+	title: string;
+}
+
+/** Locate the plan file the agent wrote and finalize its approved title. Tries,
+ *  in order: the slug derived from `extra.title` (`local://<slug>-plan.md`), the
+ *  plan path from plan-mode state, then a scan of recent plan files. Throws a
+ *  `ToolError` guiding the agent when none exist. */
+export async function resolveApprovedPlan(input: ResolveApprovedPlanInput): Promise<ResolvedApprovedPlan> {
+	const ordered: string[] = [];
+	const consider = (url: string | undefined): void => {
+		if (url && !ordered.includes(url)) ordered.push(url);
+	};
+
+	const slug = planSlugFromSupplied(input.suppliedTitle);
+	consider(slug ? planFileUrlForSlug(slug) : undefined);
+	consider(input.statePlanFilePath);
+
+	for (const url of ordered) {
+		const content = await input.readPlan(url);
+		if (content !== null) return finalizeApprovedPlan(url, content, input.suppliedTitle);
+	}
+
+	if (input.listPlanFiles) {
+		for (const url of await input.listPlanFiles()) {
+			if (ordered.includes(url)) continue;
+			const content = await input.readPlan(url);
+			if (content !== null) return finalizeApprovedPlan(url, content, input.suppliedTitle);
+		}
+	}
+
+	const target = ordered[0] ?? input.statePlanFilePath;
+	throw new ToolError(
+		`Plan file not found at ${target}. Write the finalized plan to ${target} before requesting approval.`,
+	);
+}
+
+function approvedPlanUrlForTitle(title: string): string {
+	return `local://${normalizePlanTitle(title).fileName}`;
+}
+
+function finalizeApprovedPlan(planFilePath: string, planContent: string, suppliedTitle: unknown): ResolvedApprovedPlan {
+	const { title } = resolvePlanTitle({ suppliedTitle, planContent, planFilePath });
+	return { planFilePath, finalPlanFilePath: approvedPlanUrlForTitle(title), planContent, title };
+}
+
 interface RenameApprovedPlanFileOptions {
 	planFilePath: string;
 	finalPlanFilePath: string;
@@ -122,9 +207,9 @@ interface RenameApprovedPlanFileOptions {
 	getSessionId: () => string | null;
 }
 
-function assertLocalUrl(path: string, label: "source" | "destination"): void {
-	if (!path.startsWith("local:/") && !path.startsWith("local://")) {
-		throw new Error(`Approved plan ${label} path must use local: scheme with / or // (received ${path}).`);
+function assertLocalUrl(planPath: string, label: "source" | "destination"): void {
+	if (!planPath.startsWith("local:/") && !planPath.startsWith("local://")) {
+		throw new Error(`Approved plan ${label} path must use local: scheme with / or // (received ${planPath}).`);
 	}
 }
 

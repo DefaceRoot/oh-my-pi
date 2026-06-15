@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, peekFile, toError } from "@oh-my-pi/pi-utils";
+import { hasFsCode, isEnoent, logger, peekFileEnds, Snowflake, toError } from "@oh-my-pi/pi-utils";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -12,17 +12,17 @@ export interface SessionStorageStat {
 }
 
 export interface SessionStorageWriter {
-	writeLine(line: string): Promise<void>;
 	/**
-	 * Synchronously append a single line. Returns once the bytes are handed to the kernel
-	 * (page cache), so the data survives a non-graceful process death (OOM, SIGKILL, etc.)
-	 * even though it has not yet been fsynced to the underlying disk.
+	 * Append one newline-terminated line. File and memory storage perform the
+	 * write synchronously in-body; indexed backends queue in call order.
 	 *
-	 * `line` MUST already include the trailing newline. Throws synchronously on I/O error.
+	 * `line` MUST include the trailing newline.
 	 */
-	writeLineSync(line: string): void;
+	append(line: string): Promise<void>;
+	/** Resolve once all queued appends complete. No fsync. */
 	flush(): Promise<void>;
-	fsync(): Promise<void>;
+	/** False once close() has begun/finished. */
+	isOpen(): boolean;
 	close(): Promise<void>;
 	getError(): Error | undefined;
 }
@@ -31,14 +31,15 @@ export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
 	writeTextSync(path: string, content: string): void;
-	readTextSync(path: string): string;
 	statSync(path: string): SessionStorageStat;
 	listFilesSync(dir: string, pattern: string): string[];
 
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
-	readTextPrefix(path: string, maxBytes: number): Promise<string>;
+	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
+	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
 	writeText(path: string, content: string): Promise<void>;
+	writeTextAtomic(path: string, content: string): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
 	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
@@ -81,7 +82,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	writeLineSync(line: string): void {
+	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
@@ -99,23 +100,12 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		}
 	}
 
-	async writeLine(line: string): Promise<void> {
-		this.writeLineSync(line);
-	}
-
 	async flush(): Promise<void> {
 		if (this.#error) throw this.#error;
-		// OS buffers are flushed on fsync, nothing to do here
 	}
 
-	async fsync(): Promise<void> {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		try {
-			fs.fsyncSync(this.#fd);
-		} catch (err) {
-			throw this.#recordError(err);
-		}
+	isOpen(): boolean {
+		return !this.#closed;
 	}
 
 	async close(): Promise<void> {
@@ -151,10 +141,6 @@ export class FileSessionStorage implements SessionStorage {
 		fs.writeFileSync(fpath, content);
 	}
 
-	readTextSync(fpath: string): string {
-		return fs.readFileSync(fpath, "utf-8");
-	}
-
 	statSync(path: string): SessionStorageStat {
 		const stats = fs.statSync(path);
 		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime };
@@ -182,12 +168,86 @@ export class FileSessionStorage implements SessionStorage {
 		return Bun.file(path).text();
 	}
 
-	async readTextPrefix(path: string, maxBytes: number): Promise<string> {
-		return peekFile(path, maxBytes, header => utf8Decoder.decode(header));
+	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		return peekFileEnds(path, prefixBytes, suffixBytes, (head, tail) => [
+			utf8Decoder.decode(head),
+			utf8Decoder.decode(tail),
+		]);
 	}
 
 	async writeText(path: string, content: string): Promise<void> {
 		await Bun.write(path, content, { createPath: true });
+	}
+
+	async writeTextAtomic(fpath: string, content: string): Promise<void> {
+		const dir = path.resolve(fpath, "..");
+		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		await fs.promises.mkdir(dir, { recursive: true });
+		try {
+			await fs.promises.writeFile(tempPath, content);
+			try {
+				await this.rename(tempPath, fpath);
+				return;
+			} catch (err) {
+				if (!hasFsCode(err, "EPERM")) throw toError(err);
+				await this.#replaceSessionFileAfterEperm(tempPath, fpath, err);
+				return;
+			}
+		} catch (err) {
+			try {
+				await this.unlink(tempPath);
+			} catch (cleanupErr) {
+				if (!isEnoent(cleanupErr)) {
+					logger.warn("Failed to remove session rewrite temp file", {
+						sessionFile: fpath,
+						tempPath,
+						error: toError(cleanupErr).message,
+					});
+				}
+			}
+			throw toError(err);
+		}
+	}
+
+	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
+		const dir = path.resolve(targetPath, "..");
+		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
+		try {
+			await this.rename(targetPath, backupPath);
+		} catch (moveAsideError) {
+			if (isEnoent(moveAsideError)) {
+				await this.rename(tempPath, targetPath);
+				return;
+			}
+			throw toError(renameError);
+		}
+		try {
+			await this.rename(tempPath, targetPath);
+		} catch (replaceError) {
+			try {
+				await this.rename(backupPath, targetPath);
+			} catch (rollbackErr) {
+				const rollbackError = toError(rollbackErr);
+				throw new Error(
+					`Failed to replace session file after EPERM (original: ${toError(renameError).message}; retry: ${
+						toError(replaceError).message
+					}; rollback: ${rollbackError.message})`,
+					{ cause: toError(renameError) },
+				);
+			}
+			throw toError(replaceError);
+		}
+		try {
+			await this.unlink(backupPath);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to remove session rewrite backup", {
+					sessionFile: targetPath,
+					backupPath,
+					error: toError(err).message,
+				});
+			}
+		}
 	}
 
 	async rename(path: string, nextPath: string): Promise<void> {
@@ -268,28 +328,23 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	writeLineSync(line: string): void {
+	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
-			// O(1) chunked append — see MemorySessionStorage.appendChunkSync.
-			this.#storage.appendChunkSync(this.#path, line);
+			// O(1) append — push onto the path's indexed in-memory entry.
+			this.#storage.appendSync(this.#path, line);
 		} catch (err) {
 			throw this.#recordError(err);
 		}
-	}
-
-	async writeLine(line: string): Promise<void> {
-		this.writeLineSync(line);
 	}
 
 	async flush(): Promise<void> {
 		if (this.#error) throw this.#error;
 	}
 
-	async fsync(): Promise<void> {
-		// No-op for in-memory storage
-		if (this.#error) throw this.#error;
+	isOpen(): boolean {
+		return !this.#closed;
 	}
 
 	async close(): Promise<void> {
@@ -302,26 +357,140 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 	}
 }
 
-/**
- * Mirror entry stored per path. Chunks accumulate via O(1) `push` on
- * `appendChunkSync`; readers materialise into a single string lazily.
- * `byteLen` is kept in sync so `statSync` is O(1) (and returns true UTF-8
- * bytes, not character count).
- */
-interface MirrorEntry {
+interface MemoryFileEntry {
 	chunks: string[];
-	byteLen: number;
+	cumulativeBytes: number[];
+	size: number;
 	mtimeMs: number;
 }
 
-function materialiseMirror(entry: MirrorEntry): string {
-	if (entry.chunks.length === 0) return "";
-	if (entry.chunks.length === 1) return entry.chunks[0];
-	return entry.chunks.join("");
+function createMemoryFileEntry(content: string, mtimeMs: number): MemoryFileEntry {
+	const size = Buffer.byteLength(content, "utf-8");
+	return {
+		chunks: size === 0 ? [] : [content],
+		cumulativeBytes: size === 0 ? [] : [size],
+		size,
+		mtimeMs,
+	};
+}
+
+function appendMemoryChunk(entry: MemoryFileEntry, chunk: string): void {
+	const chunkSize = Buffer.byteLength(chunk, "utf-8");
+	if (chunkSize === 0) return;
+	entry.size += chunkSize;
+	entry.chunks.push(chunk);
+	entry.cumulativeBytes.push(entry.size);
+}
+
+function normalizeByteLimit(maxBytes: number, size: number): number {
+	if (!(maxBytes > 0) || size === 0) return 0;
+	return Math.min(Math.trunc(maxBytes), size);
+}
+
+function lowerBound(values: readonly number[], target: number): number {
+	let lo = 0;
+	let hi = values.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		if (values[mid] < target) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	return lo;
+}
+
+function upperBound(values: readonly number[], target: number): number {
+	let lo = 0;
+	let hi = values.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		if (values[mid] <= target) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	return lo;
+}
+
+function joinChunkRange(chunks: readonly string[], start: number, end: number): string {
+	const count = end - start;
+	if (count <= 0) return "";
+	if (count === 1) return chunks[start] ?? "";
+
+	let content = "";
+	for (let i = start; i < end; i++) {
+		content += chunks[i];
+	}
+	return content;
+}
+
+function decodeChunkByteRange(chunk: string, startByte: number, endByte: number, chunkSize: number): string {
+	if (startByte >= endByte) return "";
+	if (startByte === 0 && endByte === chunkSize) return chunk;
+	if (chunk.length === chunkSize) return chunk.slice(startByte, endByte);
+	const bytes = Buffer.from(chunk, "utf-8");
+	return utf8Decoder.decode(bytes.subarray(startByte, endByte));
+}
+
+function materializeMemoryEntry(entry: MemoryFileEntry): string {
+	const { chunks } = entry;
+	if (chunks.length === 0) return "";
+	if (chunks.length === 1) return chunks[0];
+
+	const content = chunks.join("");
+	entry.chunks = [content];
+	entry.cumulativeBytes = [entry.size];
+	return content;
+}
+
+function sliceChunksHead(entry: MemoryFileEntry, maxBytes: number): string {
+	const limit = normalizeByteLimit(maxBytes, entry.size);
+	if (limit === 0) return "";
+	if (limit >= entry.size) return materializeMemoryEntry(entry);
+
+	const boundaryIndex = lowerBound(entry.cumulativeBytes, limit);
+	const chunkStart = boundaryIndex === 0 ? 0 : entry.cumulativeBytes[boundaryIndex - 1];
+	const chunkEnd = entry.cumulativeBytes[boundaryIndex];
+	if (chunkEnd === limit) return joinChunkRange(entry.chunks, 0, boundaryIndex + 1);
+
+	const chunk = entry.chunks[boundaryIndex];
+	const chunkPrefix = decodeChunkByteRange(chunk, 0, limit - chunkStart, chunkEnd - chunkStart);
+	return joinChunkRange(entry.chunks, 0, boundaryIndex) + chunkPrefix;
+}
+
+function sliceChunksTail(entry: MemoryFileEntry, maxBytes: number): string {
+	const limit = normalizeByteLimit(maxBytes, entry.size);
+	if (limit === 0) return "";
+	if (limit >= entry.size) return materializeMemoryEntry(entry);
+
+	const startByte = entry.size - limit;
+	const boundaryIndex = upperBound(entry.cumulativeBytes, startByte);
+	const chunkStart = boundaryIndex === 0 ? 0 : entry.cumulativeBytes[boundaryIndex - 1];
+	const chunkEnd = entry.cumulativeBytes[boundaryIndex];
+	const chunkOffset = startByte - chunkStart;
+	if (chunkOffset === 0) return joinChunkRange(entry.chunks, boundaryIndex, entry.chunks.length);
+
+	const chunk = entry.chunks[boundaryIndex];
+	const chunkSuffix = decodeChunkByteRange(chunk, chunkOffset, chunkEnd - chunkStart, chunkEnd - chunkStart);
+	return chunkSuffix + joinChunkRange(entry.chunks, boundaryIndex + 1, entry.chunks.length);
 }
 
 export class MemorySessionStorage implements SessionStorage {
-	#files = new Map<string, MirrorEntry>();
+	// Each path keeps appended string chunks plus cumulative UTF-8 byte offsets.
+	// Full reads materialize the chunks into one string chunk, so repeated reads
+	// do not re-join stale history. Later appends still stay O(1) by pushing
+	// after that materialized chunk. Prefix/suffix reads binary-search byte
+	// offsets and join only the requested window.
+	#files = new Map<string, MemoryFileEntry>();
+
+	#requireEntry(path: string): MemoryFileEntry {
+		const entry = this.#files.get(path);
+		if (!entry) throw new Error(`File not found: ${path}`);
+		return entry;
+	}
 
 	ensureDirSync(_dir: string): void {
 		// No-op for in-memory storage.
@@ -332,11 +501,7 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	writeTextSync(path: string, content: string): void {
-		this.#files.set(path, {
-			chunks: content.length === 0 ? [] : [content],
-			byteLen: Buffer.byteLength(content, "utf-8"),
-			mtimeMs: Date.now(),
-		});
+		this.#files.set(path, createMemoryFileEntry(content, Date.now()));
 	}
 
 	/**
@@ -344,28 +509,21 @@ export class MemorySessionStorage implements SessionStorage {
 	 * creates the entry. External callers should go through `openWriter()`
 	 * rather than touching the mirror directly.
 	 */
-	appendChunkSync(path: string, chunk: string): void {
+	appendSync(path: string, chunk: string): void {
+		const mtimeMs = Date.now();
 		let entry = this.#files.get(path);
 		if (!entry) {
-			entry = { chunks: [], byteLen: 0, mtimeMs: Date.now() };
+			entry = createMemoryFileEntry("", mtimeMs);
 			this.#files.set(path, entry);
 		}
-		entry.chunks.push(chunk);
-		entry.byteLen += Buffer.byteLength(chunk, "utf-8");
-		entry.mtimeMs = Date.now();
-	}
-
-	readTextSync(path: string): string {
-		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
-		return materialiseMirror(entry);
+		appendMemoryChunk(entry, chunk);
+		entry.mtimeMs = mtimeMs;
 	}
 
 	statSync(path: string): SessionStorageStat {
-		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
+		const entry = this.#requireEntry(path);
 		return {
-			size: entry.byteLen,
+			size: entry.size,
 			mtimeMs: entry.mtimeMs,
 			mtime: new Date(entry.mtimeMs),
 		};
@@ -391,38 +549,21 @@ export class MemorySessionStorage implements SessionStorage {
 	readText(path: string): Promise<string> {
 		const entry = this.#files.get(path);
 		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		return Promise.resolve(materialiseMirror(entry));
+		return Promise.resolve(materializeMemoryEntry(entry));
 	}
 
-	readTextPrefix(path: string, maxBytes: number): Promise<string> {
+	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		const entry = this.#files.get(path);
 		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		if (entry.chunks.length === 0 || maxBytes <= 0) return Promise.resolve("");
-
-		// Walk chunks until the byte budget is exhausted. Avoids materialising
-		// the full mirror just to slice a prefix — bounded work for big files.
-		let accumulatedBytes = 0;
-		const out: string[] = [];
-		for (const chunk of entry.chunks) {
-			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-			if (accumulatedBytes + chunkBytes <= maxBytes) {
-				out.push(chunk);
-				accumulatedBytes += chunkBytes;
-				if (accumulatedBytes === maxBytes) break;
-				continue;
-			}
-			// Boundary chunk: slice in byte space and decode. Result MAY be
-			// shorter than the budget if a multi-byte codepoint straddles the
-			// boundary — matches `peekFile` semantics (partial decode at cap).
-			const remainingBytes = maxBytes - accumulatedBytes;
-			const utf8 = Buffer.from(chunk, "utf-8");
-			out.push(utf8Decoder.decode(utf8.subarray(0, remainingBytes)));
-			break;
-		}
-		return Promise.resolve(out.join(""));
+		return Promise.resolve([sliceChunksHead(entry, prefixBytes), sliceChunksTail(entry, suffixBytes)]);
 	}
 
 	writeText(path: string, content: string): Promise<void> {
+		this.writeTextSync(path, content);
+		return Promise.resolve();
+	}
+
+	writeTextAtomic(path: string, content: string): Promise<void> {
 		this.writeTextSync(path, content);
 		return Promise.resolve();
 	}
