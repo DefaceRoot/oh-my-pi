@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import type { Usage } from "@oh-my-pi/pi-ai";
+import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
 import type { GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
@@ -210,6 +211,11 @@ function getCatalogCost(provider: string, modelId: string): ModelCost | null {
 		if (openAICost && hasBillableCost(openAICost)) {
 			return openAICost;
 		}
+	}
+
+	const reference = resolveModelReference(modelId, getBundledModelReferenceIndex());
+	if (reference && hasBillableCost(reference.cost)) {
+		return reference.cost;
 	}
 
 	return null;

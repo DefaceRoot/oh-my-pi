@@ -54,6 +54,33 @@ function createCodexGptStats(entryId: string): MessageStats {
 	};
 }
 
+function createProxyClaudeStats(
+	entryId: string,
+	cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+): MessageStats {
+	return {
+		sessionFile: "/tmp/session.jsonl",
+		entryId,
+		folder: "/tmp/project",
+		model: "vendor/claude-opus-4-8",
+		provider: "cliproxy-openai",
+		api: "anthropic-messages",
+		timestamp: Date.now(),
+		duration: 1000,
+		ttft: 100,
+		stopReason: "stop",
+		errorMessage: null,
+		usage: {
+			input: 1000,
+			output: 500,
+			cacheRead: 200,
+			cacheWrite: 100,
+			totalTokens: 1800,
+			cost,
+		},
+	};
+}
+
 function expectedCodexGptCost() {
 	const cost = getBundledModel("openai-codex", "gpt-5.4").cost;
 	const input = (cost.input / 1_000_000) * 1000;
@@ -64,6 +91,21 @@ function expectedCodexGptCost() {
 		output,
 		cacheRead,
 		total: input + output + cacheRead,
+	};
+}
+
+function expectedClaudeOpusCost() {
+	const cost = getBundledModel("anthropic", "claude-opus-4-8").cost;
+	const input = (cost.input / 1_000_000) * 1000;
+	const output = (cost.output / 1_000_000) * 500;
+	const cacheRead = (cost.cacheRead / 1_000_000) * 200;
+	const cacheWrite = (cost.cacheWrite / 1_000_000) * 100;
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		total: input + output + cacheRead + cacheWrite,
 	};
 }
 
@@ -126,5 +168,85 @@ describe("stats GPT cost correction", () => {
 
 		const request = getRecentRequests(1)[0];
 		expect(request?.usage.cost.total).toBeCloseTo(expectedCodexGptCost().total, 8);
+	});
+
+	it("stores API-equivalent cost when proxy Claude usage has zero cost", async () => {
+		await initDb();
+
+		insertMessageStats([createProxyClaudeStats("proxy-inserted")]);
+
+		const expected = expectedClaudeOpusCost();
+		const request = getRecentRequests(1)[0];
+		expect(expected.total).toBeGreaterThan(0);
+		expect(request?.usage.cost.input).toBeCloseTo(expected.input, 8);
+		expect(request?.usage.cost.output).toBeCloseTo(expected.output, 8);
+		expect(request?.usage.cost.cacheRead).toBeCloseTo(expected.cacheRead, 8);
+		expect(request?.usage.cost.cacheWrite).toBeCloseTo(expected.cacheWrite, 8);
+		expect(request?.usage.cost.total).toBeCloseTo(expected.total, 8);
+	});
+
+	it("backfills existing zero-cost proxy Claude rows on database init", async () => {
+		await initDb();
+		closeDb();
+
+		const database = new Database(getStatsDbPath());
+		database
+			.prepare(`
+				INSERT INTO messages (
+					session_file, entry_id, folder, model, provider, api, timestamp,
+					duration, ttft, stop_reason, error_message,
+					input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, premium_requests,
+					cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`)
+			.run(
+				"/tmp/session.jsonl",
+				"proxy-backfilled",
+				"/tmp/project",
+				"vendor/claude-opus-4-8",
+				"cliproxy-openai",
+				"anthropic-messages",
+				Date.now(),
+				1000,
+				100,
+				"stop",
+				null,
+				1000,
+				500,
+				200,
+				100,
+				1800,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+			);
+		database.close();
+
+		await initDb();
+
+		const request = getRecentRequests(1)[0];
+		expect(request?.usage.cost.total).toBeCloseTo(expectedClaudeOpusCost().total, 8);
+	});
+
+	it("preserves provider-reported nonzero proxy cost", async () => {
+		await initDb();
+
+		insertMessageStats([
+			createProxyClaudeStats("proxy-reported", {
+				input: 0.01,
+				output: 0.02,
+				cacheRead: 0.03,
+				cacheWrite: 0.04,
+				total: 0.1,
+			}),
+		]);
+
+		const request = getRecentRequests(1)[0];
+		const expected = expectedClaudeOpusCost();
+		expect(request?.usage.cost.total).toBe(0.1);
+		expect(request?.usage.cost.total).not.toBeCloseTo(expected.total, 8);
 	});
 });
