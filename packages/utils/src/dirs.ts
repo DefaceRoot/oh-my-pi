@@ -683,6 +683,14 @@ export function getTinyModelsCacheDir(agentDir?: string): string {
 export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
 }
+/** Get the default sessions directory, ignoring PI_CODING_AGENT_DIR overrides. */
+export function getDefaultSessionsDir(): string {
+	if (resolveActiveAgentDirOverride() === undefined) {
+		return getSessionsDir();
+	}
+	const defaultDirs = new DirResolver({ profile: activeProfile });
+	return defaultDirs.agentSubdir(undefined, "sessions", "data");
+}
 
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */
 export function getBlobsDir(agentDir?: string): string {

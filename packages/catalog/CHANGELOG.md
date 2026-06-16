@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `resolveBillableModelReference(modelId, index)` and `referenceHasBillableCost(model)` to `@oh-my-pi/pi-catalog/identity`. The resolver walks the same candidate ids as `resolveModelReference` but skips zero-cost shadow matches so a later candidate with real pricing wins (e.g. a reseller `Codex/gpt-5.2-high` whose only exact match is a $0 alias resolves to the billable `gpt-5.2`), falling back to the first match when no candidate is billable.
+
+### Fixed
+
+- Fixed `buildModelReferenceIndex` letting zero-cost catalog entries with oversized context windows outrank paid entries for the same id: reference selection now prefers billable references first, so resolving an id like `claude-sonnet-4-6` returns the priced upstream entry instead of a $0 reseller/subscription shadow.
+
 ## [16.0.0] - 2026-06-15
 
 ### Breaking Changes

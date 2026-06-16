@@ -2,7 +2,14 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeDb, getRecentRequests, initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
+import {
+	closeDb,
+	getKnownSessionRoots,
+	getRecentRequests,
+	initDb,
+	insertMessageStats,
+	setFileOffset,
+} from "@oh-my-pi/omp-stats/db";
 import type { MessageStats } from "@oh-my-pi/omp-stats/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getAgentDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -77,6 +84,30 @@ function createProxyClaudeStats(
 			cacheWrite: 100,
 			totalTokens: 1800,
 			cost,
+		},
+	};
+}
+
+function createProxyModelStats(provider: string, model: string, entryId: string): MessageStats {
+	return {
+		sessionFile: "/tmp/session.jsonl",
+		entryId,
+		folder: "/tmp/project",
+		model,
+		provider,
+		api: "cliproxy",
+		timestamp: Date.now(),
+		duration: 1000,
+		ttft: 100,
+		stopReason: "stop",
+		errorMessage: null,
+		usage: {
+			input: 1000,
+			output: 500,
+			cacheRead: 200,
+			cacheWrite: 100,
+			totalTokens: 1800,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 	};
 }
@@ -229,6 +260,46 @@ describe("stats GPT cost correction", () => {
 
 		const request = getRecentRequests(1)[0];
 		expect(request?.usage.cost.total).toBeCloseTo(expectedClaudeOpusCost().total, 8);
+	});
+
+	it("stores billable base-model cost for effort-suffixed CLIProxy Codex models", async () => {
+		await initDb();
+
+		insertMessageStats([createProxyModelStats("cliproxy-openai", "Codex/gpt-5.2-high", "proxy-codex-effort")]);
+
+		const request = getRecentRequests(1)[0];
+		expect(request?.usage.cost.total).toBeGreaterThan(0);
+	});
+
+	it("stores billable referenced cost for zero-shadowed CLIProxy models", async () => {
+		await initDb();
+
+		insertMessageStats([createProxyModelStats("cliproxy", "CC/claude-sonnet-4-6", "proxy-zero-shadow")]);
+
+		const request = getRecentRequests(1)[0];
+		expect(request?.usage.cost.total).toBeGreaterThan(0);
+	});
+
+	it("keeps unknown CLIProxy models at zero catalog cost", async () => {
+		await initDb();
+
+		insertMessageStats([createProxyModelStats("cliproxy", "Totally/made-up-model-xyz", "proxy-unknown")]);
+
+		const request = getRecentRequests(1)[0];
+		expect(request?.usage.cost.total).toBe(0);
+	});
+
+	it("returns distinct known session roots from file offsets", async () => {
+		await initDb();
+
+		setFileOffset("/tmp/one/sessions/project-a/session.jsonl", 10, 100);
+		setFileOffset("/tmp/one/sessions/project-b/session.jsonl", 20, 200);
+		setFileOffset("C:\\Users\\me\\.omp\\agent\\sessions\\project-c\\session.jsonl", 30, 300);
+		setFileOffset("/tmp/no-session-marker/session.jsonl", 40, 400);
+
+		expect(getKnownSessionRoots().sort()).toEqual(
+			["/tmp/one/sessions", "C:\\Users\\me\\.omp\\agent\\sessions"].sort(),
+		);
 	});
 
 	it("preserves provider-reported nonzero proxy cost", async () => {

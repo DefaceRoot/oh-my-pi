@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
+import { getBundledModelReferenceIndex, resolveBillableModelReference } from "@oh-my-pi/pi-catalog/identity";
 import type { GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
@@ -67,6 +67,19 @@ function getSessionKey(sessionFile: string): string {
 
 	const rawKey = markerIndex >= 0 ? sessionFile.slice(markerIndex + markerLength) : sessionFile;
 	return rawKey.includes("\\") ? rawKey.replaceAll("\\", "/") : rawKey;
+}
+
+function getSessionRoot(sessionFile: string): string | null {
+	const posixIndex = sessionFile.lastIndexOf(POSIX_SESSIONS_MARKER);
+	const windowsIndex = sessionFile.lastIndexOf(WINDOWS_SESSIONS_MARKER);
+	let markerIndex = posixIndex;
+	let markerLength = POSIX_SESSIONS_MARKER.length;
+	if (windowsIndex > markerIndex) {
+		markerIndex = windowsIndex;
+		markerLength = WINDOWS_SESSIONS_MARKER.length;
+	}
+
+	return markerIndex >= 0 ? sessionFile.slice(0, markerIndex + markerLength - 1) : null;
 }
 
 function escapeSqlLikePattern(value: string): string {
@@ -299,7 +312,7 @@ function getCatalogCost(provider: string, modelId: string): ModelCost | null {
 		}
 	}
 
-	const reference = resolveModelReference(modelId, getBundledModelReferenceIndex());
+	const reference = resolveBillableModelReference(modelId, getBundledModelReferenceIndex());
 	if (reference && hasBillableCost(reference.cost)) {
 		return reference.cost;
 	}
@@ -378,6 +391,22 @@ export function getFileOffset(sessionFile: string): { offset: number; lastModifi
 	const row = stmt.get(sessionFile) as { offset: number; last_modified: number } | undefined;
 
 	return row ? { offset: row.offset, lastModified: row.last_modified } : null;
+}
+
+/**
+ * Get known session root directories from stored file offsets.
+ */
+export function getKnownSessionRoots(): string[] {
+	if (!db) return [];
+
+	const stmt = db.prepare("SELECT DISTINCT session_file FROM file_offsets");
+	const roots = new Set<string>();
+	for (const row of stmt.iterate() as Iterable<{ session_file: string }>) {
+		const root = getSessionRoot(row.session_file);
+		if (root) roots.add(root);
+	}
+
+	return Array.from(roots);
 }
 
 /**

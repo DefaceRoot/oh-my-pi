@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type AssistantMessage, getPriorityPremiumRequests, type ServiceTier } from "@oh-my-pi/pi-ai";
-import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getDefaultSessionsDir, getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
 import type {
 	MessageStats,
 	SessionEntry,
@@ -12,15 +12,31 @@ import type {
 } from "./types";
 import { computeUserMessageMetrics } from "./user-metrics";
 
+const POSIX_SESSIONS_MARKER = "/sessions/";
+const WINDOWS_SESSIONS_MARKER = "\\sessions\\";
+
 /**
  * Extract folder name from session filename.
  * Session files are named like: --work--pi--/timestamp_uuid.jsonl
  * The folder part uses -- as path separator.
  */
 function extractFolderFromPath(sessionPath: string): string {
-	const sessionsDir = getSessionsDir();
-	const rel = path.relative(sessionsDir, sessionPath);
-	const projectDir = rel.split(path.sep)[0];
+	const posixMarkerIndex = sessionPath.lastIndexOf(POSIX_SESSIONS_MARKER);
+	const windowsMarkerIndex = sessionPath.lastIndexOf(WINDOWS_SESSIONS_MARKER);
+	const markerIndex = Math.max(posixMarkerIndex, windowsMarkerIndex);
+	let projectDir: string;
+
+	if (markerIndex >= 0) {
+		const markerLength =
+			markerIndex === windowsMarkerIndex ? WINDOWS_SESSIONS_MARKER.length : POSIX_SESSIONS_MARKER.length;
+		const rel = sessionPath.slice(markerIndex + markerLength).replace(/\\/g, "/");
+		projectDir = rel.split("/")[0];
+	} else {
+		const sessionsDir = getSessionsDir();
+		const rel = path.relative(sessionsDir, sessionPath);
+		projectDir = rel.split(path.sep)[0];
+	}
+
 	// Convert --work--pi-- to /work/pi
 	return projectDir.replace(/^--/, "/").replace(/--/g, "/");
 }
@@ -275,9 +291,8 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 /**
  * List all session directories (folders).
  */
-export async function listSessionFolders(): Promise<string[]> {
+export async function listSessionFolders(sessionsDir: string = getSessionsDir()): Promise<string[]> {
 	try {
-		const sessionsDir = getSessionsDir();
 		const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
 		return entries.filter(e => e.isDirectory()).map(e => path.join(sessionsDir, e.name));
 	} catch {
@@ -300,13 +315,31 @@ export async function listSessionFiles(folderPath: string): Promise<string[]> {
 /**
  * List all session files across all folders.
  */
-export async function listAllSessionFiles(): Promise<string[]> {
-	const folders = await listSessionFolders();
-	const allFiles: string[] = [];
+export async function listAllSessionFiles(extraRoots: string[] = []): Promise<string[]> {
+	const roots = new Set<string>();
+	for (const root of [getSessionsDir(), getDefaultSessionsDir(), ...extraRoots]) roots.add(path.resolve(root));
 
-	for (const folder of folders) {
-		const files = await listSessionFiles(folder);
-		allFiles.push(...files);
+	const allFiles: string[] = [];
+	const seenFiles = new Set<string>();
+
+	for (const root of roots) {
+		try {
+			const stat = await fs.stat(root);
+			if (!stat.isDirectory()) continue;
+		} catch {
+			continue;
+		}
+
+		const folders = await listSessionFolders(root);
+		for (const folder of folders) {
+			const files = await listSessionFiles(folder);
+			for (const file of files) {
+				const resolvedFile = path.resolve(file);
+				if (seenFiles.has(resolvedFile)) continue;
+				seenFiles.add(resolvedFile);
+				allFiles.push(resolvedFile);
+			}
+		}
 	}
 
 	return allFiles;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `getDefaultSessionsDir()` to the `dirs` module, resolving the omp default sessions directory independent of any `PI_CODING_AGENT_DIR` override (still honoring the active profile and XDG redirection). Equals `getSessionsDir()` when no override is active.
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

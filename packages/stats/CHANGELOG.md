@@ -12,6 +12,10 @@
 
 - Fixed zero-cost proxy/model-proxy stats rows to use bundled API-equivalent pricing when the model id resolves to a paid upstream catalog entry.
 
+- Fixed CLIProxy proxied models showing $0 cost: effort-suffixed ids whose only exact catalog match is a free alias (e.g. `Codex/gpt-5.2-high`, `Codex/gpt-5.3-codex-high`) and ids shadowed by a zero-cost catalog entry (e.g. `CC/claude-sonnet-4-6`) now resolve to their billable upstream API-equivalent pricing. Existing zero-cost rows are re-priced on the next database init.
+
+- Fixed session discovery only scanning the session directory of the active `PI_CODING_AGENT_DIR`. The sync now also scans the override-independent default sessions directory and every session root previously recorded in the database, so sessions written under a different agent directory (e.g. an unset `PI_CODING_AGENT_DIR` run) are no longer missed. Folder attribution is derived from the `sessions/` path marker so sessions under any root report the correct project.
+
 ## [15.13.3] - 2026-06-15
 
 ### Changed

@@ -8,6 +8,7 @@ import {
 	getBehaviorTimeSeries,
 	getCostTimeSeries,
 	getFileOffset,
+	getKnownSessionRoots,
 	getMessageById,
 	getMessageCount,
 	getModelPerformanceSeries,
@@ -194,7 +195,7 @@ export async function smokeTestSyncWorker({ timeoutMs = 5_000 }: { timeoutMs?: n
 export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: number; files: number }> {
 	await initDb();
 
-	const files = await listAllSessionFiles();
+	const files = await listAllSessionFiles(getKnownSessionRoots());
 	if (files.length === 0) return { processed: 0, files: 0 };
 
 	let totalProcessed = 0;

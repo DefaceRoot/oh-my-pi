@@ -29,10 +29,23 @@ export function isZeroCostXaiOAuthReference(candidate: Model<Api>): boolean {
 	);
 }
 
-// Prefer the reference with the largest limits and complete cache pricing, then
+/** A reference is useful for pricing/limits only when it carries real cost. */
+export function referenceHasBillableCost(candidate: Model<Api>): boolean {
+	const cost = candidate.cost;
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+// Prefer billable references over zero-cost shadows (resellers and subscription
+// catalogs publish $0 entries with oversized limits that would otherwise win),
+// then the reference with the largest limits and complete cache pricing, then
 // first-party OpenAI entries.
 function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
 	if (!existing) return true;
+	const existingBillable = referenceHasBillableCost(existing);
+	const candidateBillable = referenceHasBillableCost(candidate);
+	if (candidateBillable !== existingBillable) {
+		return candidateBillable;
+	}
 	if (candidate.contextWindow !== existing.contextWindow) {
 		return (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0);
 	}
@@ -137,12 +150,43 @@ function getReferenceCandidateIds(modelId: string): string[] {
 	return [...candidates];
 }
 
+function lookupReference(index: ModelReferenceIndex, candidate: string): Model<Api> | undefined {
+	const key = normalizeReferenceKey(candidate);
+	return index.exact.get(key) ?? index.suffixAlias.get(key);
+}
+
 /** Resolve a (possibly proxied/affixed) model id to its bundled upstream reference. */
 export function resolveModelReference(modelId: string, index: ModelReferenceIndex): Model<Api> | undefined {
 	for (const candidate of getReferenceCandidateIds(modelId)) {
-		const key = normalizeReferenceKey(candidate);
-		const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
+		const reference = lookupReference(index, candidate);
 		if (reference) return reference;
 	}
 	return undefined;
+}
+
+// An id whose trailing marker is `free` (`:free`, `-free`) denotes an explicit
+// free tier that prices at $0; pricing resolution must never substitute its
+// paid base model.
+const FREE_TIER_MARKER_PATTERN = /[-:]free$/i;
+
+/**
+ * Resolve to a *billable* upstream reference for pricing. Walks the same
+ * candidate ids as {@link resolveModelReference} but skips zero-cost shadows
+ * (e.g. `Codex/gpt-5.2-high` whose only exact match is a $0 Cursor alias) so a
+ * later candidate (`gpt-5.2`) with real pricing wins. Falls back to the first
+ * matched reference when none of the candidates carry cost. Explicit free-tier
+ * ids resolve to no billable reference so they stay $0.
+ */
+export function resolveBillableModelReference(modelId: string, index: ModelReferenceIndex): Model<Api> | undefined {
+	if (FREE_TIER_MARKER_PATTERN.test(modelId.trim())) {
+		return undefined;
+	}
+	let firstMatch: Model<Api> | undefined;
+	for (const candidate of getReferenceCandidateIds(modelId)) {
+		const reference = lookupReference(index, candidate);
+		if (!reference) continue;
+		if (referenceHasBillableCost(reference)) return reference;
+		firstMatch ??= reference;
+	}
+	return firstMatch;
 }
