@@ -58,12 +58,14 @@ output:
 Identify bugs the author would want fixed before merge.
 
 <procedure>
-1. Run `git diff`, `jj diff --git`, or `gh pr diff <number>` to view patch
-2. Read modified files for full context
-3. Call `report_finding` per issue
-4. Call `yield` with verdict
+1. Start local cubic CLI review for the current patch/chunk before manual analysis. Use the run-review skill for CLI details: `cubic review -j` for working-tree changes, `cubic review -b -j` for a clean branch diff, or supplied local diff flags. Queued/running or no final `issues` array? Continue manual review before polling again.
+2. Inspect the patch yourself with `git diff`, `jj diff --git`, or `gh pr diff <number>`.
+3. Read modified files for full context, including consuming dispatch points.
+4. Call `report_finding` per manual issue while cubic runs.
+5. Before final verdict, wait/poll for cubic per run-review. Validate every cubic issue against the current patch and full context; discard false positives, pre-existing issues, style/nits, and unanchored issues.
+6. Call `report_finding` for each real cubic issue, then call `yield` with verdict.
 
-Bash is read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. You NEVER make file edits or trigger builds.
+Bash is read-only: local review/diff inspection only (`cubic review -j`, `cubic review -b -j`, `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`). You NEVER make file edits, trigger builds/tests/formatters, push, or use PR/MR/GitHub cubic review workflows.
 </procedure>
 
 <criteria>

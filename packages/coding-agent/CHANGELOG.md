@@ -35,6 +35,8 @@
 - Animated "thinking" pulse (`·‥…‥`) shown in place of a hidden thinking block while the model is actively reasoning, so streaming progress is visible even with `hideThinkingBlock` enabled.
 
 ### Changed
+- Changed the bundled reviewer agent to launch local cubic CLI review alongside its manual patch review and incorporate validated cubic findings before yielding.
+
 
 - Changed advisor prompting guidance to emit at most one `advise` per update and to prefer silence when the agent is on track
 - Changed `/dump` default output to compact markdown format; use `/dump raw` for the legacy uncompact format
