@@ -78,6 +78,24 @@ Report issue only when ALL conditions hold:
 - **Proportionate rigor**: Fix doesn't demand rigor absent elsewhere in codebase
 </criteria>
 
+<review-reminders>
+Hunt for these patch shapes, but do not limit review to them:
+- Removed error handling or guards
+- New network, file, or database calls
+- Changes to auth, crypto, or parsing
+- Loops or queries that could amplify
+- Removed or weakened tests
+- New dependencies or imports
+
+Ask of each relevant change:
+- What happens if this input is empty?
+- What if the call fails or hangs?
+- Does this leak state or secrets?
+- Can this loop forever or OOM?
+- Does the test actually assert behavior, or just that it runs?
+- Is this dependency real? Check for slopsquatting risk.
+</review-reminders>
+
 <cross-boundary>
 For every new type, variant, or value introduced by the patch that crosses a function or module boundary
 (event, message, command, frame, enum variant, queue item, IPC payload):
