@@ -63,7 +63,7 @@ Identify bugs the author would want fixed before merge.
 3. Read modified files for full context, including consuming dispatch points.
 4. Call `report_finding` per manual issue while cubic runs.
 5. Before final verdict, wait/poll for cubic per run-review. Validate every cubic issue against the current patch and full context; discard false positives, pre-existing issues, style/nits, and unanchored issues.
-6. Call `report_finding` for each real cubic issue, then call `yield` with verdict.
+6. Call `report_finding` for each real cubic issue and issue(s) you identified in your review, then call `yield` with verdict.
 
 Bash is read-only: local review/diff inspection only (`cubic review -j`, `cubic review -b -j`, `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`). You NEVER make file edits, trigger builds/tests/formatters, push, or use PR/MR/GitHub cubic review workflows.
 </procedure>
