@@ -54,6 +54,12 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	nano: 2,
 };
 
+const CODEX_GPT_5_6_COST_BY_ID: Partial<Record<string, Readonly<ModelSpec<Api>["cost"]>>> = {
+	"gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+	"gpt-5.6-terra": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+	"gpt-5.6-luna": { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+};
+
 const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
 	"claude-opus-4.6": { contextWindow: 168000, maxTokens: 32000 },
 	"gpt-5.2": { contextWindow: 272000, maxTokens: 128000 },
@@ -218,6 +224,20 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 	if ((model.provider === "zai" || model.provider === "zhipu-coding-plan") && model.id === "glm-5.2") {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 131_072;
+		if (model.provider === "zai") {
+			model.cost.input = 1.4;
+			model.cost.output = 4.4;
+			model.cost.cacheRead = 0.26;
+			model.cost.cacheWrite = 0;
+		}
+	}
+
+	const codexGpt56Cost = model.provider === "openai-codex" ? CODEX_GPT_5_6_COST_BY_ID[model.id] : undefined;
+	if (codexGpt56Cost) {
+		model.cost.input = codexGpt56Cost.input;
+		model.cost.output = codexGpt56Cost.output;
+		model.cost.cacheRead = codexGpt56Cost.cacheRead;
+		model.cost.cacheWrite = codexGpt56Cost.cacheWrite;
 	}
 	// MiniMax-M3: 512K is the standard pricing tier boundary, not the
 	// model ceiling. Pin every long-context provider that serves the model

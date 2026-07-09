@@ -353,4 +353,32 @@ describe("generated model policies", () => {
 		expect(models[2]?.applyPatchToolType).toBeUndefined();
 		expect(models[3]?.applyPatchToolType).toBeUndefined();
 	});
+	it("prices every openai-codex GPT-5.6 size id at its distinct full cost", () => {
+		// The id classifier collapses all three `gpt-5.6-*` ids to the same parsed
+		// variant ("base", version 5.6), so the policy must key off the id suffix
+		// to assign each size its own rate — not a single shared Sol price.
+		const models: ModelSpec<Api>[] = [
+			createSpec({ id: "gpt-5.6-sol", api: "openai-codex-responses", provider: "openai-codex" }),
+			createSpec({ id: "gpt-5.6-terra", api: "openai-codex-responses", provider: "openai-codex" }),
+			createSpec({ id: "gpt-5.6-luna", api: "openai-codex-responses", provider: "openai-codex" }),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+		expect(models[1]?.cost).toEqual({ input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 });
+		expect(models[2]?.cost).toEqual({ input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 });
+	});
+
+	it("prices direct zai glm-5.2 but leaves zhipu-coding-plan glm-5.2 at zero subscription pricing", () => {
+		const models: ModelSpec<Api>[] = [
+			createSpec({ id: "glm-5.2", api: "anthropic-messages", provider: "zai" }),
+			createSpec({ id: "glm-5.2", api: "openai-completions", provider: "zhipu-coding-plan" }),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.cost).toEqual({ input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 });
+		expect(models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	});
 });
