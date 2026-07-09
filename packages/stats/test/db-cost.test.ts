@@ -65,12 +65,7 @@ const GLM_WORKED_COST = {
 	total: 0.003652,
 };
 
-function createPricedStats(
-	entryId: string,
-	provider: string,
-	model: string,
-	api: string,
-): MessageStats {
+function createPricedStats(entryId: string, provider: string, model: string, api: string): MessageStats {
 	return {
 		sessionFile: "/tmp/session.jsonl",
 		entryId,
